@@ -521,7 +521,12 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
         if np.isfinite(cur):
             prev = float(cur)
 
-        entry = float(series.close[i])
+        # The OI change printed at bar i opened during bar i-1, so price it there.
+        entry = float("nan")
+        if i > 0:
+            entry = float((series.high[i - 1] + series.low[i - 1] + series.close[i - 1]) / 3.0)
+            if not np.isfinite(entry) or entry <= 0:
+                entry = float(series.close[i - 1])
         if not np.isfinite(entry) or entry <= 0:
             entry = float(series.open[i])
 
