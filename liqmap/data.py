@@ -1041,7 +1041,7 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
         coin=coin,
         bar_seconds=bar_s,
         source="demo",
-        note="Synthetic series for offline use. No exchange was contacted.",
+        note="Demo prices and open interest are synthetic. No exchange was contacted.",
         warnings=["Demo prices and open interest are synthetic. No exchange was contacted."],
     )
     loaded.stale = False
