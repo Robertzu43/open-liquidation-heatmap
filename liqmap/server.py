@@ -35,6 +35,11 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 — stdlib handler name
         try:
             parsed = urlparse(self.path)
+            if parsed.path == "/favicon.ico":
+                self.send_response(204)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             if parsed.path == "/api/heatmap":
                 self._heatmap(parsed.query)
                 return

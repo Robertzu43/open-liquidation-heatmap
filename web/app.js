@@ -132,8 +132,17 @@ function fmtStamp(ms, withTime) {
   return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " COT";
 }
 
-function fmtAxis(ms, withTime) {
-  const opts = { timeZone: TZ, day: "2-digit", month: "short", hourCycle: "h23" };
+function fmtAxis(ms, withTime, narrow) {
+  const opts = { timeZone: TZ, hourCycle: "h23" };
+  if (narrow && withTime) {
+    const parts = new Intl.DateTimeFormat("en-GB", {
+      timeZone: TZ, day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(ms));
+    const pick = (type) => parts.find((part) => part.type === type).value;
+    return pick("day") + " " + pick("hour") + ":" + pick("minute");
+  }
+  opts.day = "2-digit";
+  opts.month = "short";
   if (withTime) {
     opts.hour = "2-digit";
     opts.minute = "2-digit";
@@ -149,9 +158,9 @@ function escapeHtml(text) {
 
 function layoutFor(w, h) {
   const narrow = w < 520;
-  const scaleW = narrow ? 72 : 86;
-  const priceW = narrow ? 64 : 82;
-  const liqW = state.showMap ? (narrow ? 78 : 124) : 0;
+  const scaleW = narrow ? 58 : 86;
+  const priceW = narrow ? 52 : 82;
+  const liqW = state.showMap ? (narrow ? 46 : 124) : 0;
   const timeH = 30;
   const top = 8;
   const plotX = scaleW;
@@ -688,15 +697,22 @@ function drawPriceAxis(ctx, L) {
 
 function drawTimeAxis(ctx, L, data) {
   const withTime = data.bar_seconds < 86400;
-  const count = state.cssW < 520 ? 3 : 5;
+  const narrow = L.plotW < 420;
+  const count = L.plotW < 240 ? 2 : L.plotW < 560 ? 3 : 5;
   ctx.fillStyle = "#c5cbb8";
   ctx.font = "11px ui-monospace, monospace";
   ctx.textAlign = "center";
+  let lastRight = -1e9;
   for (let k = 0; k < count; k++) {
     const index = state.view.i0 + ((k + 0.5) / count) * (state.view.i1 - state.view.i0);
     const snapped = clamp(Math.round(index), 0, data.times.length - 1);
     const x = xOf(index, L);
-    ctx.fillText(fmtAxis(data.times[snapped], withTime), x, L.plotY + L.plotH + 18);
+    const text = fmtAxis(data.times[snapped], withTime, narrow);
+    const width = ctx.measureText(text).width;
+    if (x - width / 2 < L.plotX + 2 || x + width / 2 > L.plotX + L.plotW - 2) continue;
+    if (x - width / 2 < lastRight + 8) continue;
+    ctx.fillText(text, x, L.plotY + L.plotH + 18);
+    lastRight = x + width / 2;
   }
 }
 
@@ -724,10 +740,12 @@ function drawLiqBars(ctx, L, data, half) {
     ctx.fillRect(L.liqX + 6 + longW, y1, Math.max(0, width - longW), bh);
   }
   ctx.restore();
-  ctx.fillStyle = "#8f9a84";
-  ctx.font = "10px ui-monospace, monospace";
-  ctx.textAlign = "left";
-  ctx.fillText("L / S", L.liqX + 6, L.plotY + 12);
+  if (L.liqW >= 80) {
+    ctx.fillStyle = "#8f9a84";
+    ctx.font = "10px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.fillText("L / S", L.liqX + 6, L.plotY + 12);
+  }
 }
 
 function drawFrame(ctx, L) {
