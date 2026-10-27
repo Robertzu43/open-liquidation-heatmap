@@ -70,9 +70,11 @@ async function newPage(browser, base, viewport, scale) {
       /* storage blocked */
     }
   }, [STORE]);
-  // Offline: answer every venue with the demo map.
+  // Offline: answer every venue with the demo map. Each request is recorded as the page sent it.
+  const requests = [];
   await context.route("**/api/heatmap?**", (route) => {
     const url = new URL(route.request().url());
+    requests.push(new URL(url.toString()));
     if (url.searchParams.get("exchange") !== "demo" || url.searchParams.get("mode") !== "pair") {
       url.searchParams.set("exchange", "demo");
       url.searchParams.set("mode", "pair");
@@ -88,7 +90,7 @@ async function newPage(browser, base, viewport, scale) {
   page.on("pageerror", (err) => errors.push(String(err)));
   await page.goto(base + "/");
   await waitLoaded(page);
-  return { context, page, errors };
+  return { context, page, errors, requests };
 }
 
 async function waitLoaded(page) {
@@ -109,7 +111,7 @@ async function noSideScroll(page) {
 }
 
 async function desk(browser, base) {
-  const { context, page, errors } = await newPage(browser, base, { width: 1440, height: 900 }, 1);
+  const { context, page, errors, requests } = await newPage(browser, base, { width: 1440, height: 900 }, 1);
 
   check(await page.isVisible("#toolbar"), "desk: one toolbar");
   check(await page.isVisible("#intro"), "desk: first-visit card shows on first load");
@@ -122,15 +124,58 @@ async function desk(browser, base) {
   await pickExchange(page, "binance");
   check(await page.isVisible("#player") && await page.isVisible("#bar-field") && await page.isVisible("#asof-field"),
     "desk: replay, bar and as-of visible for a Binance pair");
+  // Pick a bar and a past time on Binance; other venues must not send them.
+  await page.selectOption("#bar", "1h");
+  await waitLoaded(page);
+  await page.fill("#asof-input", "2026-10-20T12:00");
+  await waitLoaded(page);
+  const sent = (exchange, mode) => requests.filter((u) => u.searchParams.get("exchange") === exchange && u.searchParams.get("mode") === mode);
+  const binance = sent("binance", "pair");
+  check(binance.some((u) => u.searchParams.get("bar") === "1h" && u.searchParams.has("asof")),
+    "desk: Binance pair sends the chosen bar and as-of");
+  const before = requests.length;
+  await pickExchange(page, "okx");
   await pickExchange(page, "all");
+  const okx = requests.slice(before).filter((u) => u.searchParams.get("exchange") === "okx" && u.searchParams.get("mode") === "pair");
+  const all = requests.slice(before).filter((u) => u.searchParams.get("mode") === "symbol");
+  check(okx.length > 0 && okx.every((u) => !u.searchParams.has("bar") && !u.searchParams.has("asof")),
+    `desk: OKX requests carry no bar or asof (${okx.map((u) => u.search).join(" ")})`);
+  check(all.length > 0 && all.every((u) => !u.searchParams.has("bar") && !u.searchParams.has("asof")),
+    `desk: All-venues requests carry no bar or asof (${all.map((u) => u.search).join(" ")})`);
   check(!(await page.isVisible("#player")), "desk: replay hidden for All venues");
   await pickExchange(page, "demo");
   check(!(await page.isVisible("#player")), "desk: replay hidden for Demo");
 
-  // Space in a field must not reach the replay shortcuts.
+  // Replay shortcuts must not fire from a field. A stand-in replay gets the handler
+  // past its "no replay" exit; its next frame never resolves, so nothing loads.
+  await page.evaluate(() => {
+    state.replay = {
+      gen: 1, first: Date.now(), step: 300000, frames: 3, idx: 0, playing: false, speed: 2,
+      cache: new Map([[1, new Promise(() => {})]]), controller: new AbortController(), reloaded: false,
+    };
+  });
   await page.focus("#coin");
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.press("Space");
-  check(errors.length === 0, "desk: keys in a field raise nothing");
+  await page.evaluate(() => {
+    document.getElementById("auto").dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    document.getElementById("auto").dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+  });
+  const inField = await page.evaluate(() => ({ idx: state.replay.idx, playing: state.replay.playing }));
+  check(inField.idx === 0 && inField.playing === false,
+    `desk: arrow and space in an input or select leave replay alone (idx ${inField.idx}, playing ${inField.playing})`);
+  await page.evaluate(() => {
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  });
+  const outside = await page.evaluate(() => state.replay.idx);
+  check(outside === 1, `desk: the same arrow outside a field steps replay (idx ${outside})`);
+  await page.evaluate(() => stopReplay());
+  await page.fill("#coin", "BTC");
+
+  // Ratios read plainly: above 10 and below 0.1 are capped.
+  const ratios = await page.evaluate(() => ["553.84×", "2.07×", "0.02×"].map((text) => readableRatios(text)));
+  check(ratios[0] === "> 10×" && ratios[1] === "2.07×" && ratios[2] === "< 0.1×",
+    `desk: readableRatios gives > 10×, 2.07×, < 0.1× (${ratios.join(", ")})`);
 
   await page.check("#liqmap");
   await page.click("#more");
@@ -144,7 +189,6 @@ async function desk(browser, base) {
 
   const split = await page.textContent("#imbalance tbody");
   check(/Short \d+% \/ Long \d+%/.test(split), "desk: imbalance reads Short x% / Long y%");
-  check(!/\d{2,}\.\d+×/.test(await page.textContent("#panel")), "desk: no raw ratio above 10");
 
   check(errors.length === 0, "desk: no console errors" + (errors.length ? " — " + errors.join(" | ") : ""));
   await page.screenshot({ path: path.join(IMG, "hero.png") });
@@ -154,6 +198,8 @@ async function desk(browser, base) {
   await page.press("#coin", "Enter");
   await page.waitForSelector("#banner.error", { state: "visible", timeout: 15000 });
   check((await page.textContent("#title")) === good, `desk: after a bad coin the title still names "${good}"`);
+  const coinAfter = await page.inputValue("#coin");
+  check(coinAfter === "BTC", `desk: after a bad coin the coin field reverts to BTC (${coinAfter})`);
   const unexpected = errors.filter((text) => !/status of 400/.test(text));
   check(unexpected.length === 0, "desk: only the expected 400 after a bad coin");
   await context.close();

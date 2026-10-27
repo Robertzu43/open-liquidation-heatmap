@@ -136,6 +136,11 @@ function fmtUsd(value) {
   return sign + "$" + abs.toFixed(0);
 }
 
+// Like fmtUsd, without trailing zeros: "$5M", "$2.5M", "$20.88M".
+function fmtUsdShort(value) {
+  return fmtUsd(value).replace(/\.?0+([KMB])$/, "$1");
+}
+
 function fmtPx(value) {
   const v = Number(value);
   if (!Number.isFinite(v)) return "—";
@@ -186,7 +191,7 @@ function escapeHtml(text) {
 
 function layoutFor(w, h) {
   const narrow = w < 520;
-  const scaleW = narrow ? 66 : 86;
+  const scaleW = narrow ? 70 : 90;
   const priceW = narrow ? 52 : 82;
   const liqW = state.showMap ? (narrow ? 46 : 150) : 0;
   const timeH = 30;
@@ -378,6 +383,12 @@ function fail(message) {
   $("resting").textContent = "";
   $("tags").innerHTML = "";
   // The title keeps naming the last map that loaded; only success changes it.
+  // The coin field follows it, so a bad coin does not stay typed in.
+  if (state.goodCoin && state.coin !== state.goodCoin) {
+    state.coin = state.goodCoin;
+    $("coin").value = state.coin;
+    persist();
+  }
   $("asof").textContent = $("title").dataset.loaded ? "This request failed · the title names the last map that loaded" : "No map loaded";
   drawMessage(message);
 }
@@ -415,6 +426,7 @@ function applyPayload(data) {
   clampView();
   $("title").textContent = data.title;
   $("title").dataset.loaded = "1";
+  state.goodCoin = data.coin;
   document.title = data.title + " · Open Liq";
   const sourceNames = {
     okx: "OKX live",
@@ -476,12 +488,14 @@ function splitHtml(shortUsd, longUsd) {
 function fmtRatio(ratio) {
   const r = Number(ratio);
   if (!Number.isFinite(r)) return "—";
-  return r > 10 ? "> 10×" : r.toFixed(2) + "×";
+  if (r > 10) return "> 10×";
+  if (r < 0.1) return "< 0.1×";
+  return r.toFixed(2) + "×";
 }
 
-// The server writes ratios like "553.84×"; above 10 they read "> 10×".
+// The server writes ratios like "553.84×"; above 10 they read "> 10×", below 0.1 "< 0.1×".
 function readableRatios(text) {
-  return String(text).replace(/(\d+(?:\.\d+)?)×/g, (match, num) => (Number(num) > 10 ? fmtRatio(num) : match));
+  return String(text).replace(/(\d+(?:\.\d+)?)×/g, (match, num) => (Number(num) > 10 || Number(num) < 0.1 ? fmtRatio(num) : match));
 }
 
 function levelHtml(level) {
@@ -738,19 +752,33 @@ function drawScale(ctx, L) {
     ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
     ctx.fillRect(barX, L.plotY + y, barW, 1);
   }
-  // Ticks sit at 0, 0.5 and 1 of the bar; each label is the USD that shade() maps there.
-  const gamma = state.gamma || gammaOf(state.threshold);
-  const usdAt = (intensity) => (intensity <= 0 ? 0 : state.vmax * Math.pow(intensity, 1 / gamma));
+  // Round-USD ticks sit where shade() puts that value: height = (v / vmax) ** gamma.
+  // The top reads "≥" because rebuildHeat clips values above the robust max.
+  const vmax = state.vmax;
+  const narrow = L.width < 520;
+  const yAt = (usd) => L.plotY + (1 - shade(usd, vmax, state.threshold)) * L.plotH;
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  [1, 0.5, 0].forEach((intensity) => {
-    const y = L.plotY + (1 - intensity) * L.plotH;
+  const placed = [];
+  const label = (text, y, labelY) => {
+    if (placed.some((other) => Math.abs(other - labelY) < 13)) return;
+    placed.push(labelY);
     ctx.fillStyle = "#8f9a84";
-    ctx.fillRect(barX - 4, Math.round(y) - (intensity === 0 ? 1 : 0), 3, 1);
+    ctx.fillRect(barX - 4, Math.min(Math.round(y), L.plotY + L.plotH - 1), 3, 1);
     ctx.fillStyle = "#d5dccb";
-    ctx.fillText(fmtUsd(usdAt(intensity)), barX - 6, clamp(y, L.plotY + 6, L.plotY + L.plotH - 6));
-  });
+    ctx.fillText(text, barX - 6, labelY);
+  };
+  const top = narrow ? "≥" + fmtUsdShort(vmax) : "≥ " + fmtUsdShort(vmax);
+  label(top, L.plotY, L.plotY + 6);
+  label("$0", L.plotY + L.plotH, L.plotY + L.plotH - 6);
+  niceTicks(0, vmax, 4)
+    .filter((usd) => usd > 0 && usd < vmax)
+    .reverse()
+    .forEach((usd) => {
+      const y = yAt(usd);
+      label(fmtUsdShort(usd), y, clamp(y, L.plotY + 6, L.plotY + L.plotH - 6));
+    });
   ctx.textBaseline = "alphabetic";
 }
 
