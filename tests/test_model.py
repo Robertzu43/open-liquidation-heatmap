@@ -289,6 +289,25 @@ class ParserTests(unittest.TestCase):
         self.assertAlmostEqual(float(combined.long_share[-1]), 0.65)
         self.assertAlmostEqual(float(combined.volume_usd[-1]), 6.0)
 
+    def test_aggregate_note_names_the_busier_venue_on_a_tie(self):
+        from unittest import mock
+
+        from liqmap import data
+
+        grid = np.array([0, 3_600_000, 7_200_000], dtype=np.int64)
+
+        def venue(exchange, vol):
+            close = np.array([10.0, 11.0, 12.0])
+            raw = data.RawSeries(exchange, grid, close, close + 1, close - 1, close, np.full(3, vol), np.full(3, 100.0), np.full(3, 0.5))
+            return data.finalize_series(raw, exchange=exchange, symbol="BTCUSDT", coin="BTC", bar_seconds=3600, note="", warnings=[])
+
+        # Both end on the same bar. OKX comes first, so ranking by end time alone would pick it.
+        with mock.patch.object(data, "fetch_okx", return_value=venue("okx", 1.0)), \
+                mock.patch.object(data, "fetch_binance", return_value=venue("binance", 5.0)):
+            loaded = data.fetch_aggregate("BTC", "BTCUSDT", range_spec("24h"))
+        self.assertIn("Price candles are Binance;", loaded.series.note)
+        self.assertEqual(loaded.venues, ["okx", "binance"])
+
     def test_demo_payload_is_little_endian_float32(self):
         payload = load_heatmap("demo", "btc", "12h", 1, "pair")
         raw = base64.b64decode(payload["heat"])

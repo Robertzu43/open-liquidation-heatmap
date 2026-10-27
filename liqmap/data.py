@@ -414,7 +414,6 @@ def finalize_series(
     symbol: str,
     coin: str,
     bar_seconds: int,
-    source: str,
     note: str,
     warnings: list[str],
     venues: list[str] | None = None,
@@ -475,7 +474,7 @@ def finalize_series(
     )
     return LoadedSeries(
         series=series,
-        source=source,
+        source=raw.source,
         as_of=as_of,
         stale=stale,
         venues=list(venues or [exchange]),
@@ -538,7 +537,6 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
     share_out = np.full(n, np.nan)
     good = share_w > 0
     share_out[good] = share_acc[good] / share_w[good]
-    names = ", ".join(exchange_name(item) for item in used)
     return MarketSeries(
         times=grid_ms,
         open=open_,
@@ -552,7 +550,7 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
         symbol=f"{coin}USDT",
         coin=coin,
         bar_seconds=int(bar_seconds),
-        note=f"Aggregated from {names}.",
+        note=f"Price candles are {exchange_name(donor.exchange)}; open interest is the sum.",
         warnings=[],
     )
 
@@ -731,7 +729,6 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
         symbol=pair,
         coin=coin,
         bar_seconds=int(spec["bar_seconds"]),
-        source="okx",
         note="",
         warnings=[],
     )
@@ -1024,7 +1021,6 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
             symbol=pair,
             coin=coin,
             bar_seconds=int(spec["bar_seconds"]),
-            source=raw.source,
             note="",
             warnings=[],
         )
@@ -1059,7 +1055,6 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
         symbol=pair,
         coin=coin,
         bar_seconds=bar_s,
-        source=raw.source,
         note="Built from the public Binance market archive because the live futures API was unavailable.",
         warnings=[],
     )
@@ -1092,14 +1087,13 @@ def finish_history(raw: RawSeries, end_open_s: int, spec: dict, coin: str, pair:
     if int(keep.sum()) < 2:
         raise DataError(f"Binance has no {pair} bars for this window.")
     live = raw.source == "binance-live"
-    cut = RawSeries(raw.source, raw.grid[keep], raw.open[keep], raw.high[keep], raw.low[keep], raw.close[keep], raw.volume[keep], raw.oi[keep], raw.share[keep])
+    cut = RawSeries(raw.source, *(a[keep] for a in (raw.grid, raw.open, raw.high, raw.low, raw.close, raw.volume, raw.oi, raw.share)))
     loaded = finalize_series(
         cut,
         exchange="binance",
         symbol=pair,
         coin=coin,
         bar_seconds=bar_s,
-        source=raw.source,
         note="Historical view from the Binance live API." if live else "Historical view from the Binance archive.",
         warnings=[],
         now_s=int(end_open_s) + bar_s,
@@ -1236,7 +1230,6 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
         symbol=pair,
         coin=coin,
         bar_seconds=bar_s,
-        source="demo",
         note="Demo prices and open interest are synthetic. No exchange was contacted.",
         warnings=["Demo prices and open interest are synthetic. No exchange was contacted."],
     )
@@ -1281,9 +1274,9 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
         detail = " ".join(errors) or "every venue failed"
         raise DataError(f"No fresh open interest was available for {coin}. {detail}")
     # Common grid is the freshest venue's own timestamps when they share a bar size.
-    donor = max(fresh, key=lambda item: int(item.series.times[-1]))
-    grid = np.asarray(donor.series.times, dtype=np.int64)
-    # If the donor is shorter than the requested window, still use its real timestamps.
+    freshest = max(fresh, key=lambda item: int(item.series.times[-1]))
+    grid = np.asarray(freshest.series.times, dtype=np.int64)
+    # If the freshest venue is shorter than the requested window, still use its real timestamps.
     combined = combine_series([item.series for item in fresh], grid, int(spec["bar_seconds"]), coin)
     warnings = list(combined.warnings)
     for part in fresh:
@@ -1293,14 +1286,23 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
             warnings.append(message)
     venues = [item.series.exchange for item in fresh]
     names = ", ".join(exchange_name(item) for item in venues)
-    note = f"Symbol aggregate of {names}. Price candles are {exchange_name(donor.series.exchange)}; open interest is the sum."
+    note = f"Symbol aggregate of {names}. {combined.note}"
     loaded = finalize_series(
-        RawSeries("aggregate", combined.times, combined.open, combined.high, combined.low, combined.close, combined.volume_usd, combined.oi_usd, combined.long_share),
+        RawSeries(
+            "aggregate",
+            combined.times,
+            combined.open,
+            combined.high,
+            combined.low,
+            combined.close,
+            combined.volume_usd,
+            combined.oi_usd,
+            combined.long_share,
+        ),
         exchange="aggregate",
         symbol=pair,
         coin=coin,
         bar_seconds=int(spec["bar_seconds"]),
-        source="aggregate",
         note=note,
         warnings=warnings,
         venues=venues,

@@ -284,7 +284,8 @@ def levels_payload(
         raise DataError("levels needs model, t (bar open in ms) and price.") from None
     if model_id not in MODELS or not math.isfinite(price_f):
         raise DataError("levels needs a known model and a finite price.")
-    series = get_series(exchange, symbol, range_key, mode, asof, bar, replay)[0].series
+    loaded, _spec, _end = get_series(exchange, symbol, range_key, mode, asof, bar, replay)
+    series = loaded.series
     hits = np.flatnonzero(series.times == t_ms)
     if not len(hits):
         raise DataError("t is not a bar open in this map.")
