@@ -77,6 +77,7 @@ class WindowTests(unittest.TestCase):
 
 class ArchiveHistoryTests(unittest.TestCase):
     def _load(self, asof, bar="15m", kline_end_shift_ms=86_400_000, live=None):
+        """Load a past view with stubbed archive files; ``live`` is what the live fold returns."""
         def klines(symbol, interval, start_ms, end_ms):
             bar_ms = data.BAR_SECONDS[interval] * 1000
             # Hand back rows well past T: the loader must drop them.
@@ -88,7 +89,7 @@ class ArchiveHistoryTests(unittest.TestCase):
         with mock.patch.object(data, "_load_vision_klines", side_effect=klines), \
              mock.patch.object(data, "_load_vision_metrics", side_effect=metrics), \
              mock.patch.object(data, "_latest_archive_day", side_effect=AssertionError("must not probe today")), \
-             mock.patch.object(data, "_try_binance_live", return_value=live) as live_call:
+             mock.patch.object(data, "_fold_binance_live", side_effect=live) as live_call:
             loaded = load_market("binance", "BTC", "24h", "pair", asof=asof, bar=bar)
         return loaded, live_call
 
@@ -109,12 +110,17 @@ class ArchiveHistoryTests(unittest.TestCase):
 
     def test_short_archive_recent_window_uses_live(self):
         asof = int(time.time()) - 86_400
-        sentinel = mock.sentinel.live
+
+        def live(pair, bar, grid):
+            return data.RawSeries("binance-live", grid, *data.fold_candles(_klines(int(grid[0]), int(grid[-1]) + 900_000, 900_000), grid, 900_000),
+                                  *data.fold_oi(_metrics(int(grid[0]), int(grid[-1]) + 900_000), grid, 900_000))
+
         # The archive stops three hours short of the window end.
-        loaded, live_call = self._load(str(asof), kline_end_shift_ms=-3 * 3_600_000, live=sentinel)
-        self.assertIs(loaded, sentinel)
+        loaded, live_call = self._load(str(asof), kline_end_shift_ms=-3 * 3_600_000, live=live)
         live_call.assert_called_once()
-        self.assertEqual(live_call.call_args.kwargs["end_open_s"], history_end_open(asof, 900))
+        self.assertEqual(loaded.source, "binance-live")
+        self.assertFalse(loaded.stale)
+        self.assertEqual(int(loaded.series.times[-1]), history_end_open(asof, 900) * 1000)
 
     def test_short_archive_old_window_is_stale_not_live(self):
         loaded, live_call = self._load(str(T_2021), kline_end_shift_ms=-3 * 3_600_000)
@@ -139,12 +145,66 @@ class LivePagingTests(unittest.TestCase):
                 return 200, [{"timestamp": t, "sumOpenInterestValue": "1000000"} for t in stamps]
             return 200, []
 
+        grid = data.make_grid(end_open, 2016, 300)
         with mock.patch.object(data, "_get_json", side_effect=fake):
-            loaded = data._try_binance_live("BTC", "BTCUSDT", spec, end_open_s=end_open)
-        self.assertIsNotNone(loaded)
-        self.assertEqual(len(loaded.series.times), 2016)
-        self.assertEqual(int(loaded.series.times[-1]), end_open * 1000)
-        self.assertFalse(loaded.stale)
+            raw = data._fold_binance_live("BTCUSDT", "5m", grid)
+        self.assertIsNotNone(raw)
+        self.assertEqual(int(__import__("numpy").isfinite(raw.close).sum()), 2016)
+        self.assertEqual(raw.last_candle_ms, end_open * 1000)
+
+
+class ReplaySpanTests(unittest.TestCase):
+    """A frame cut from a span must equal the direct past view at the same moment."""
+
+    def _stubs(self, gaps=()):
+        def klines(symbol, interval, start_ms, end_ms):
+            bar_ms = data.BAR_SECONDS[interval] * 1000
+            rows = _klines(start_ms, end_ms, bar_ms)
+            return [(t, o + (t // bar_ms) % 7, h + (t // bar_ms) % 7, lo, c + (t // bar_ms) % 5, v) for t, o, h, lo, c, v in rows if t not in gaps]
+
+        def metrics(symbol, start_ms, end_ms):
+            return [row for row in _metrics(start_ms, end_ms) if row[0] not in gaps]
+
+        return klines, metrics
+
+    def test_frames_equal_direct_views(self):
+        bar_ms = 900_000
+        end = history_end_open(T_2021, 900)
+        # Gaps right at several window edges, so trimming and the 3-bar fill are exercised.
+        gaps = {(end - k * 900) * 1000 for k in (0, 1, 95, 96, 97, 140, 141, 142, 143)}
+        klines, metrics = self._stubs(gaps)
+        spec = range_spec("24h", "15m")
+        with mock.patch.object(data, "_load_vision_klines", side_effect=klines), \
+             mock.patch.object(data, "_load_vision_metrics", side_effect=metrics), \
+             mock.patch.object(data, "_fold_binance_live", return_value=None):
+            span = data.load_span("BTC", "BTCUSDT", spec, T_2021 - 3 * 86_400, T_2021)
+            for back in (0, 1, 2, 5, 40, 95, 96, 97, 143, 200):
+                end_open = end - back * 900
+                if not span.covers(end_open):
+                    continue
+                framed = span.frame(end_open).series
+                direct = data.fetch_binance_history("BTC", "BTCUSDT", spec, end_open).series
+                for name in ("times", "open", "high", "low", "close", "oi_usd", "long_share", "volume_usd"):
+                    a, b = getattr(framed, name), getattr(direct, name)
+                    self.assertTrue(((a == b) | (a != a) & (b != b)).all(), f"{name} differs at -{back} bars")
+                self.assertEqual(framed.note, direct.note)
+        self.assertEqual(span.last_end_open, end)
+        self.assertEqual(span.frames, (span.last_end_open - span.first_end_open) // 900 + 1)
+
+    def test_span_trims_to_first_data(self):
+        klines, metrics = self._stubs()
+        late = (T_2021 - 86_400) * 1000
+
+        def late_klines(symbol, interval, start_ms, end_ms):
+            return [row for row in klines(symbol, interval, start_ms, end_ms) if row[0] >= late]
+
+        spec = range_spec("24h", "15m")
+        with mock.patch.object(data, "_load_vision_klines", side_effect=late_klines), \
+             mock.patch.object(data, "_load_vision_metrics", side_effect=metrics), \
+             mock.patch.object(data, "_fold_binance_live", return_value=None):
+            span = data.load_span("BTC", "BTCUSDT", spec, T_2021 - 5 * 86_400, T_2021)
+        self.assertGreaterEqual(span.first_end_open * 1000, late)
+        self.assertIn("starts later", span.note)
 
 
 class CacheTests(unittest.TestCase):
