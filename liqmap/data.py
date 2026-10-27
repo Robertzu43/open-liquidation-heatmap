@@ -56,6 +56,9 @@ OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12H", "1d":
 # Bars a past Binance view may use. Open interest is published every 5 minutes.
 BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
 MAX_BARS = 3000
+# Longest replay span, counting the first frame's window: one archive file per day is downloaded.
+# 800 days keeps a 2y range replayable for about 70 days.
+MAX_SPAN_DAYS = 800
 # The live openInterestHist endpoint keeps 30 days; stay a day inside it.
 LIVE_OI_DAYS = 29
 # First day of Binance's public 5-minute metrics archive (2020-09-01 UTC).
@@ -1209,6 +1212,8 @@ def load_span(coin: str, pair: str, spec: dict, from_s: int, to_s: int | None) -
     n = int(spec["seconds"]) // bar_s
     first = history_end_open(from_s, bar_s)
     last = history_end_open(int(time.time()) if to_s is None else to_s, bar_s)
+    if (last - first) + int(spec["seconds"]) > MAX_SPAN_DAYS * 86400:
+        raise DataError(f"A replay can cover at most {MAX_SPAN_DAYS} days including its window. Pick a later start or an earlier end.")
     if last < first:
         raise DataError("Replay end must be after its start.")
     grid = make_grid(last, (last - first) // bar_s + n, bar_s)

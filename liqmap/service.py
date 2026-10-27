@@ -39,6 +39,7 @@ SERIES_TTL = {
 
 # A replay span lives this long after its last frame.
 SPAN_TTL = 1800
+MAX_SPANS = 3
 
 _cache: dict[tuple, tuple[float, object]] = {}
 _spans: dict[tuple, list] = {}
@@ -104,6 +105,9 @@ def replay_payload(symbol: str, range_key: str, bar: str, start: str, end: str =
     span = load_span(coin, pair, spec, parse_asof(start), parse_asof(end))
     with _guard:
         _spans[(coin, spec["bar"], spec["key"])] = [time.time(), span]
+        while len(_spans) > MAX_SPANS:
+            oldest = min(_spans, key=lambda key: _spans[key][0])
+            _spans.pop(oldest)
     bar_ms = int(spec["bar_seconds"]) * 1000
     return {
         "coin": coin,

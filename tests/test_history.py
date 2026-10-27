@@ -289,6 +289,19 @@ class ReplayServiceTests(unittest.TestCase):
         with self.assertRaises(DataError):
             service.replay_payload("BTC", "2y", "5m", str(T_2021), "")
 
+    def test_span_length_is_capped(self):
+        # 850 days of frames plus a 7-day window is over the cap.
+        with self.assertRaisesRegex(DataError, "800 days"):
+            service.replay_payload("BTC", "7d", "1d", str(T_2021 - 250 * 86_400), str(T_2021 + 600 * 86_400))
+        # The window counts: 200 days of frames plus a 2-year window is also over.
+        with self.assertRaisesRegex(DataError, "800 days"):
+            service.replay_payload("BTC", "2y", "1d", str(T_2021 - 200 * 86_400), str(T_2021))
+
+    def test_only_three_spans_are_kept(self):
+        for rng in ("12h", "24h", "3d", "7d"):
+            service.replay_payload("BTC", rng, "1h", str(T_2021 - 8 * 86_400), str(T_2021))
+        self.assertEqual(len(service._spans), 3)
+
 
 @unittest.skipUnless(os.environ.get("RUN_NETWORK") == "1", "network test; set RUN_NETWORK=1")
 class NetworkHistoryTests(unittest.TestCase):

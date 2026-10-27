@@ -147,15 +147,20 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def main(argv: list[str] | None = None) -> None:
+def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Serve the open liquidation heatmap")
-    parser.add_argument("--host", default="0.0.0.0")
+    # Localhost only by default. Pass --host 0.0.0.0 to share on a trusted network.
+    parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
-    print(f"Open liquidation heatmap at http://127.0.0.1:{args.port}", flush=True)
+    print(f"Open liquidation heatmap at http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -13,7 +13,7 @@ pip install -r requirements.txt
 python -m liqmap.server
 ```
 
-Open http://127.0.0.1:8765 . The page defaults to a live OKX BTC/USDT pair, 24 hour window, model 1.
+Open http://127.0.0.1:8765 . The page defaults to a live OKX BTC/USDT pair, 24 hour window, model 1. A replay downloads at most 800 days, counting the range's window, so a 2-year range can replay about 70 days.
 
 Save a still image from the command line (matplotlib Agg backend, no window required):
 
@@ -50,7 +50,7 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
 | Auto-refresh | Off, 30s, 1m, or 5m. Paused while you look at a past moment. |
 | As of / Bar | Binance pair only. Pick any past moment since 2020-09-01 (COT) and any bar from 5m to 1d, up to 3,000 bars per view. "Live" returns to now. |
-| Replay | Binance pair only. Set As of (and optionally To), then Load replay. Step, play at up to 1/2/5/10 bars per second, or scrub. Each frame is the same map the page shows for that moment. The first load of a long span downloads one archive file per day. Space plays or pauses; the arrow keys step. |
+| Replay | Binance pair only. Set As of (and optionally To), then Load replay. Step, play at up to 1/2/5/10 bars per second, or scrub. Each frame is the same map the page shows for that moment. The first load of a long span downloads one archive file per day. A replay downloads at most 800 days, counting the range's window, so a 2-year range can replay about 70 days. Space plays or pauses; the arrow keys step. |
 | Leverage | Hover any cell to see which leverage tiers make up its estimate. With Liquidation map on, the side bars stack by tier, with cumulative long and short lines from the current price. |
 
 Settings are stored in `localStorage`.
@@ -118,7 +118,7 @@ Series for the short ranges are cached briefly. Longer ranges are cached longer.
 - `GET /api/status` — models, ranges, default view.
 - `GET /api/symbols` — the coin list and venues.
 
-The server is the Python standard library `ThreadingHTTPServer` on `0.0.0.0:8765`. JSON responses are gzip-compressed when the client asks.
+The server is the Python standard library `ThreadingHTTPServer` on `127.0.0.1:8765` by default; `--host 0.0.0.0` shares it on your network. JSON responses are gzip-compressed when the client asks.
 
 ## Tests
 
