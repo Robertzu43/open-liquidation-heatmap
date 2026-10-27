@@ -266,14 +266,13 @@ def test_legacy_helpers_return_non_finite_values() -> None:
         pytest.skip("liq_price is bound; non-finite input must raise ValueError")
     import importlib
     import math
+    from typing import Any, cast
 
-    heatmap = importlib.import_module("heatmap")
-    long_price = getattr(heatmap, "liq_price_long")
-    short_price = getattr(heatmap, "liq_price_short")
-    assert math.isnan(long_price(float("nan"), 10, 0.005))
-    assert math.isinf(long_price(float("inf"), 10, 0.005))
-    assert math.isnan(short_price(float("nan"), 10, 0.005))
-    assert math.isinf(short_price(float("inf"), 10, 0.005))
+    heatmap = cast(Any, importlib.import_module("heatmap"))
+    assert math.isnan(heatmap.liq_price_long(float("nan"), 10, 0.005))
+    assert math.isinf(heatmap.liq_price_long(float("inf"), 10, 0.005))
+    assert math.isnan(heatmap.liq_price_short(float("nan"), 10, 0.005))
+    assert math.isinf(heatmap.liq_price_short(float("inf"), 10, 0.005))
 
 
 def test_model_rejects_bad_inputs_once_full_contract_is_bound() -> None:
