@@ -15,18 +15,24 @@ from dataclasses import dataclass, field
 import numpy as np
 
 MMR = 0.005
+# Price bin height as a share of the last price. A line's value is the USD in
+# one bin, so the bin height sets the scale of every number on the chart.
+BIN_PCT = 0.00078
+MAX_BINS = 1000
 VENUES = ("binance", "bybit", "bybit_uta", "okx")
 
 # Relative weight of each leverage tier. Weights in a model sum to 1.
-# half_life_h is the fade in hours (None is no fade). churn is the share of
+# mmr places each tier; 0 matches the line placement of the reference heatmaps
+# the weights were fit to (tools/calibrate.py). half_life_h is the fade in hours (None is no fade). churn is the share of
 # traded volume treated as replaced positions, capped per hour at churn_cap_h
 # of open interest.
 MODELS: dict[int, dict] = {
     1: {
         "id": 1,
-        "name": "Wide clusters",
-        "blurb": "More weight on 5x–25x, so shelves sit further from price and stay until price trades through them.",
-        "weights": ((5, 0.12), (10, 0.28), (25, 0.30), (50, 0.20), (100, 0.10)),
+        "name": "Calibrated",
+        "blurb": "Leverage mix fit to reference heatmap screenshots. Shelves stay until price trades through them.",
+        "weights": ((20, 0.08), (25, 0.12), (40, 0.05), (50, 0.21), (75, 0.05), (100, 0.41), (125, 0.08)),
+        "mmr": 0.0,
         "half_life_h": None,
         "churn": 0.0,
         "churn_cap_h": 0.0,
@@ -35,9 +41,10 @@ MODELS: dict[int, dict] = {
     },
     2: {
         "id": 2,
-        "name": "Tight magnets",
-        "blurb": "More weight on 25x–100x, a little turnover from volume, and a slow fade. Shelves hug price.",
-        "weights": ((10, 0.08), (25, 0.22), (50, 0.35), (75, 0.20), (100, 0.15)),
+        "name": "Calibrated + fade",
+        "blurb": "The same fit with a little turnover from volume and a 72-hour half-life.",
+        "weights": ((20, 0.09), (25, 0.13), (40, 0.03), (50, 0.25), (75, 0.02), (100, 0.48)),
+        "mmr": 0.0,
         "half_life_h": 72.0,
         "churn": 0.015,
         "churn_cap_h": 0.24,
@@ -46,9 +53,10 @@ MODELS: dict[int, dict] = {
     },
     3: {
         "id": 3,
-        "name": "Flow skew",
-        "blurb": "Same family of tiers, but new positions follow taker buy/sell when that data exists.",
-        "weights": ((10, 0.15), (20, 0.20), (25, 0.20), (50, 0.25), (100, 0.20)),
+        "name": "Calibrated + flow",
+        "blurb": "The same fit, with taker buy/sell tilting new and closing positions when that data exists.",
+        "weights": ((20, 0.08), (25, 0.13), (50, 0.27), (75, 0.02), (100, 0.46), (125, 0.04)),
+        "mmr": 0.0,
         "half_life_h": None,
         "churn": 0.0,
         "churn_cap_h": 0.0,
@@ -474,7 +482,7 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
     }
 
 
-def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Heatmap:
+def build_heatmap(series: MarketSeries, model_id: int) -> Heatmap:
     spec = MODELS.get(int(model_id))
     if spec is None:
         raise ValueError(f"unknown model {model_id}")
@@ -488,6 +496,8 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
         raise ValueError("price series is empty")
     pad_lo = low * 0.78
     pad_hi = high * 1.22
+    last = float(series.close[-1]) if np.isfinite(series.close[-1]) else high
+    n_bins = int(min(MAX_BINS, max(120, round((pad_hi - pad_lo) / (last * BIN_PCT)))))
     edges = np.linspace(pad_lo, pad_hi, n_bins + 1)
     centers = (edges[:-1] + edges[1:]) / 2.0
 
@@ -498,6 +508,7 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
     kernel = tuple(spec["kernel"])
     weights = spec["weights"]
     use_flow = bool(spec["flow"])
+    mmr = float(spec["mmr"])
 
     oi = np.where(np.isfinite(series.oi_coin) & (series.oi_coin > 0), series.oi_coin, np.nan)
     half_life = spec["half_life_h"]
@@ -547,8 +558,8 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
 
         if opened > 0:
             for lev, weight in weights:
-                _deposit(long_book, _nearest_bin(centers, liq_price_long(entry, lev)), opened * tilt_long * weight, kernel)
-                _deposit(short_book, _nearest_bin(centers, liq_price_short(entry, lev)), opened * tilt_short * weight, kernel)
+                _deposit(long_book, _nearest_bin(centers, liq_price_long(entry, lev, mmr)), opened * tilt_long * weight, kernel)
+                _deposit(short_book, _nearest_bin(centers, liq_price_short(entry, lev, mmr)), opened * tilt_short * weight, kernel)
 
         long_heat[:, i] = long_book
         short_heat[:, i] = short_book
@@ -575,5 +586,5 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
 def suggest_view(series: MarketSeries) -> tuple[float, float]:
     low = float(np.nanmin(series.low))
     high = float(np.nanmax(series.high))
-    span = max(high - low, high * 0.01)
-    return low - span * 0.35, high + span * 0.35
+    pad = max((high - low) * 0.35, high * 0.04)
+    return low - pad, high + pad

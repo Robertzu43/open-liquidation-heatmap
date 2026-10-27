@@ -88,7 +88,7 @@ def public_model(model_id: int) -> dict:
         "churn_cap_h": float(spec["churn_cap_h"]),
         "kernel": [float(value) for value in spec["kernel"]],
         "flow": bool(spec["flow"]),
-        "mmr": MMR,
+        "mmr": float(spec["mmr"]),
         "long_formula": "entry * (1 - 1/leverage) / (1 - MMR)",
         "short_formula": "entry * (1 + 1/leverage) / (1 + MMR)",
         "entry": "close of the candle whose open time is nearest the open-interest print",
