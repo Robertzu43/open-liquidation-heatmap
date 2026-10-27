@@ -59,7 +59,7 @@ Settings are stored in `localStorage`.
 
 Exchanges do not publish each account's entry or leverage. `liqmap/model.py` is the whole model:
 
-1. Match each open-interest print to the candle whose open time is nearest that print. Ten minutes after an hourly open stays on that candle. Fifty minutes after that open uses the next candle. The entry is that bar's close.
+1. Match each open-interest print to the candle whose open time is nearest that print. Ten minutes after an hourly open stays on that candle. Fifty minutes after that open uses the next candle. The entry is that bar's open, where open interest is read; OKX stamps a bar with its last reading, so its readings are moved one bar later to match.
 2. Spread that notional across a leverage mix. The weights in each model sum to 1.
 3. Park it at an isolated liquidation price. The zero-tier maintenance margin rate (MMR) is **0.005** (0.5%). Entry 100 at 10x is 90.4523 long and 109.4527 short.
 
@@ -69,7 +69,7 @@ short = entry * (1 + 1/leverage) / (1 + MMR)
 ```
 
 4. A small kernel blurs each deposit across neighboring price bins so a tier reads as a shelf, not a one-pixel line.
-5. When a later candle trades through a liquidation price, that resting liquidity is removed. Longs below the bar's low survive. Shorts above the bar's high survive.
+5. When the bar's own range, which trades after that entry, or any later candle trades through a liquidation price, that resting liquidity is removed. Longs below the bar's low survive. Shorts above the bar's high survive.
 6. Color is the resting notional at that price and time. The scale is relative to the window.
 
 | Model | Idea | Weights |

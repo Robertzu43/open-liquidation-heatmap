@@ -9,6 +9,7 @@ import numpy as np
 
 from liqmap.data import (
     DataError,
+    _shift_to_open,
     combine_series,
     fold_candles,
     fold_oi,
@@ -139,6 +140,34 @@ class ModelTests(unittest.TestCase):
         self.assertEqual([row["window_pct"] for row in analysis["imbalance"]], [1, 2, 5, 10])
         self.assertIn("BTC", analysis["summary"])
 
+    def test_entry_is_the_open_when_open_interest_was_read(self):
+        # Open interest doubles between bar 0 and bar 1. Bar 1 opens at 100, rallies to 110.5, closes at 110.
+        n = 3
+        series = MarketSeries(
+            times=np.arange(n, dtype=np.int64) * 86_400_000,
+            open=np.array([100.0, 100.0, 110.0]),
+            high=np.array([100.5, 110.5, 110.5]),
+            low=np.array([99.5, 99.9, 109.5]),
+            close=np.array([100.0, 110.0, 110.0]),
+            volume_usd=np.zeros(n),
+            oi_usd=np.array([1_000_000.0, 2_000_000.0, 2_000_000.0]),
+            long_share=np.full(n, 0.5),
+            exchange="test",
+            symbol="BTCUSDT",
+            coin="BTC",
+            bar_seconds=86_400,
+        )
+        heat = build_heatmap(series, 1)
+        spec = MODELS[1]
+        # Shorts enter at 100. The rally to 110.5 sweeps every tier except the far 5x (119.4).
+        five_x_share = dict(spec["weights"])[5]
+        self.assertAlmostEqual(float(heat.short_heat[:, 2].sum()), 500_000.0 * five_x_share, delta=1.0)
+        # The strongest long sits at the highest tier priced from the open, not the close.
+        top_lev = max(lev for lev, _w in spec["weights"])
+        peak = float(heat.centers[int(np.argmax(heat.long_heat[:, 1]))])
+        step = float(heat.centers[1] - heat.centers[0])
+        self.assertLess(abs(peak - liq_price_long(100.0, top_lev)), 2 * step)
+
 
 class TierTests(unittest.TestCase):
     def test_tier_books_sum_to_totals(self):
@@ -163,6 +192,11 @@ class TierTests(unittest.TestCase):
 
 
 class ParserTests(unittest.TestCase):
+    def test_shift_to_open_moves_okx_readings_one_bar_later(self):
+        np.testing.assert_array_equal(_shift_to_open(np.array([1.0, 2.0, 3.0])), [np.nan, 1.0, 2.0])
+        self.assertEqual(len(_shift_to_open(np.array([]))), 0)
+        np.testing.assert_array_equal(_shift_to_open(np.array([5.0])), [np.nan])
+
     def test_normalize_symbol(self):
         self.assertEqual(normalize_symbol("btc"), ("BTC", "BTCUSDT"))
         self.assertEqual(normalize_symbol("ETHUSDT"), ("ETH", "ETHUSDT"))

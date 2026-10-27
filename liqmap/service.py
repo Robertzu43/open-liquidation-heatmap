@@ -166,7 +166,7 @@ def public_model(model_id: int) -> dict:
         "mmr": MMR,
         "long_formula": "entry * (1 - 1/leverage) / (1 - MMR)",
         "short_formula": "entry * (1 + 1/leverage) / (1 + MMR)",
-        "entry": "close of the candle whose open time is nearest the open-interest print",
+        "entry": "open of the candle; open interest is read at that open (OKX readings are moved one bar later to match)",
     }
 
 

@@ -602,6 +602,13 @@ def _okx_pages(path: str, params: dict, start_ms: int, limit: int, cursor_key: s
     return rows
 
 
+def _shift_to_open(values: np.ndarray) -> np.ndarray:
+    """OKX stamps a bar with its last reading (the 1H row equals the hour's last 5m row); that is the next bar's opening reading."""
+    out = np.full_like(values, np.nan, dtype=np.float64)
+    out[1:] = values[:-1]
+    return out
+
+
 def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
     bar = OKX_BAR[spec["bar"]]
     inst = f"{coin}-USDT-SWAP"
@@ -706,6 +713,8 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
         oi_records.append((ts, oi_usd, share_near(ts)))
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi, share = fold_oi(oi_records, grid, bar_ms)
+    # Taker flow in bar i opened the positions that first show at bar i+1's open.
+    oi, share = _shift_to_open(oi), _shift_to_open(share)
     loaded = finalize_series(
         times=grid,
         open_=open_,

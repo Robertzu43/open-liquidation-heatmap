@@ -521,9 +521,10 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
         if np.isfinite(cur):
             prev = float(cur)
 
-        entry = float(series.close[i])
+        # Open interest is read at the bar open, so new positions enter at that price.
+        entry = float(series.open[i])
         if not np.isfinite(entry) or entry <= 0:
-            entry = float(series.open[i])
+            entry = float(series.close[i])
 
         add_long = 0.0
         add_short = 0.0
