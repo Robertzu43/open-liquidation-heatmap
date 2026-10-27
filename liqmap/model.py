@@ -18,14 +18,18 @@ MMR = 0.005
 VENUES = ("binance", "bybit", "bybit_uta", "okx")
 
 # Relative weight of each leverage tier. Weights in a model sum to 1.
+# half_life_h is the fade in hours (None is no fade). churn is the share of
+# traded volume treated as replaced positions, capped per hour at churn_cap_h
+# of open interest.
 MODELS: dict[int, dict] = {
     1: {
         "id": 1,
         "name": "Wide clusters",
         "blurb": "More weight on 5x–25x, so shelves sit further from price and stay until price trades through them.",
         "weights": ((5, 0.12), (10, 0.28), (25, 0.30), (50, 0.20), (100, 0.10)),
-        "decay": 1.0,
+        "half_life_h": None,
         "churn": 0.0,
+        "churn_cap_h": 0.0,
         "kernel": (0.15, 0.70, 0.15),
         "flow": False,
     },
@@ -34,8 +38,9 @@ MODELS: dict[int, dict] = {
         "name": "Tight magnets",
         "blurb": "More weight on 25x–100x, a little turnover from volume, and a slow fade. Shelves hug price.",
         "weights": ((10, 0.08), (25, 0.22), (50, 0.35), (75, 0.20), (100, 0.15)),
-        "decay": 0.9992,
+        "half_life_h": 72.0,
         "churn": 0.015,
+        "churn_cap_h": 0.24,
         "kernel": (0.06, 0.24, 0.40, 0.24, 0.06),
         "flow": False,
     },
@@ -44,8 +49,9 @@ MODELS: dict[int, dict] = {
         "name": "Flow skew",
         "blurb": "Same family of tiers, but new positions follow taker buy/sell when that data exists.",
         "weights": ((10, 0.15), (20, 0.20), (25, 0.20), (50, 0.25), (100, 0.20)),
-        "decay": 1.0,
+        "half_life_h": None,
         "churn": 0.0,
+        "churn_cap_h": 0.0,
         "kernel": (0.10, 0.25, 0.30, 0.25, 0.10),
         "flow": True,
     },
@@ -284,7 +290,7 @@ class MarketSeries:
     low: np.ndarray
     close: np.ndarray
     volume_usd: np.ndarray
-    oi_usd: np.ndarray
+    oi_coin: np.ndarray
     long_share: np.ndarray
     exchange: str
     symbol: str
@@ -300,7 +306,7 @@ class MarketSeries:
         self.low = np.asarray(self.low, dtype=np.float64)
         self.close = np.asarray(self.close, dtype=np.float64)
         self.volume_usd = np.asarray(self.volume_usd, dtype=np.float64)
-        self.oi_usd = np.asarray(self.oi_usd, dtype=np.float64)
+        self.oi_coin = np.asarray(self.oi_coin, dtype=np.float64)
         self.long_share = np.asarray(self.long_share, dtype=np.float64)
         if not (
             len(self.times)
@@ -309,7 +315,7 @@ class MarketSeries:
             == len(self.low)
             == len(self.close)
             == len(self.volume_usd)
-            == len(self.oi_usd)
+            == len(self.oi_coin)
             == len(self.long_share)
         ):
             raise ValueError("market series columns must share one length")
@@ -493,69 +499,60 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
     weights = spec["weights"]
     use_flow = bool(spec["flow"])
 
-    oi = np.where(np.isfinite(series.oi_usd), series.oi_usd, np.nan)
+    oi = np.where(np.isfinite(series.oi_coin) & (series.oi_coin > 0), series.oi_coin, np.nan)
+    half_life = spec["half_life_h"]
+    decay = 0.5 ** (series.bar_seconds / (half_life * 3600.0)) if half_life else 1.0
+    churn = float(spec["churn"])
+    churn_cap = float(spec["churn_cap_h"]) * series.bar_seconds / 3600.0
     prev = np.nan
     for i in range(n):
-        share = series.long_share[i]
+        share = series.long_share[i] if use_flow else 0.5
         if not np.isfinite(share):
             share = 0.5
         share = float(np.clip(share, 0.05, 0.95))
-        if not use_flow:
-            share = 0.5
+        # Each contract is one long and one short. The tilt is 1 on both sides
+        # at an even share, so model 3 at a neutral share matches models 1 and 2.
+        tilt_long = 2.0 * share
+        tilt_short = 2.0 * (1.0 - share)
 
-        cur = oi[i]
-        delta = 0.0
-        if np.isfinite(cur) and np.isfinite(prev):
-            delta = float(cur - prev)
-            if prev > 0:
-                delta = float(np.clip(delta, -prev, prev))
-        if np.isfinite(cur):
-            prev = float(cur)
+        # The bar's range printed before its close, and the close is the entry
+        # of this bar's new positions, so the wick only clears older levels.
+        long_book[int(np.searchsorted(centers, float(series.low[i]), side="left")) :] = 0.0
+        short_book[: int(np.searchsorted(centers, float(series.high[i]), side="right"))] = 0.0
 
         entry = float(series.close[i])
         if not np.isfinite(entry) or entry <= 0:
             entry = float(series.open[i])
 
-        add_long = 0.0
-        add_short = 0.0
-        if delta > 0:
-            add_long += delta * share
-            add_short += delta * (1.0 - share)
-        elif delta < 0 and (long_book.sum() + short_book.sum()) > 0:
-            prev_oi = float(oi[i] - delta) if np.isfinite(oi[i]) else 0.0
-            frac = min(1.0, abs(delta) / prev_oi) if prev_oi > 0 else 1.0
-            if use_flow:
-                long_book *= 1.0 - frac * (1.0 - share)
-                short_book *= 1.0 - frac * share
-            else:
-                long_book *= 1.0 - frac
-                short_book *= 1.0 - frac
+        cur = oi[i]
+        opened = 0.0
+        if np.isfinite(cur) and np.isfinite(prev):
+            delta = float(np.clip(cur - prev, -prev, prev))
+            if delta > 0:
+                opened = delta * entry
+            elif delta < 0:
+                frac = -delta / prev
+                # Taker buying while open interest falls is shorts buying back.
+                long_book *= max(0.0, 1.0 - frac * tilt_short)
+                short_book *= max(0.0, 1.0 - frac * tilt_long)
+        if np.isfinite(cur):
+            prev = float(cur)
 
-        churn = float(spec["churn"])
         vol = float(series.volume_usd[i]) if np.isfinite(series.volume_usd[i]) else 0.0
         if churn > 0 and vol > 0:
             seasoning = vol * churn
-            if np.isfinite(cur) and cur > 0:
-                seasoning = min(seasoning, cur * 0.02)
-            add_long += seasoning * share
-            add_short += seasoning * (1.0 - share)
+            if np.isfinite(cur):
+                seasoning = min(seasoning, cur * entry * churn_cap)
+            opened += seasoning
 
-        if add_long > 0 or add_short > 0:
+        if opened > 0:
             for lev, weight in weights:
-                if add_long > 0:
-                    _deposit(long_book, _nearest_bin(centers, liq_price_long(entry, lev)), add_long * weight, kernel)
-                if add_short > 0:
-                    _deposit(short_book, _nearest_bin(centers, liq_price_short(entry, lev)), add_short * weight, kernel)
+                _deposit(long_book, _nearest_bin(centers, liq_price_long(entry, lev)), opened * tilt_long * weight, kernel)
+                _deposit(short_book, _nearest_bin(centers, liq_price_short(entry, lev)), opened * tilt_short * weight, kernel)
 
         long_heat[:, i] = long_book
         short_heat[:, i] = short_book
 
-        low_i = float(series.low[i])
-        high_i = float(series.high[i])
-        long_book[int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
-        short_book[: int(np.searchsorted(centers, high_i, side="right"))] = 0.0
-
-        decay = float(spec["decay"])
         if decay != 1.0:
             long_book *= decay
             short_book *= decay

@@ -83,14 +83,16 @@ def public_model(model_id: int) -> dict:
         "name": spec["name"],
         "blurb": spec["blurb"],
         "weights": [{"leverage": int(lev), "weight": float(weight)} for lev, weight in spec["weights"]],
-        "decay": float(spec["decay"]),
+        "half_life_h": spec["half_life_h"],
         "churn": float(spec["churn"]),
+        "churn_cap_h": float(spec["churn_cap_h"]),
         "kernel": [float(value) for value in spec["kernel"]],
         "flow": bool(spec["flow"]),
         "mmr": MMR,
         "long_formula": "entry * (1 - 1/leverage) / (1 - MMR)",
         "short_formula": "entry * (1 + 1/leverage) / (1 + MMR)",
         "entry": "close of the candle whose open time is nearest the open-interest print",
+        "open_interest": "coins, one side; each new contract adds one long and one short",
     }
 
 

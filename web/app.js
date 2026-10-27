@@ -423,17 +423,17 @@ function renderHow(model) {
   if (!model) return;
   const weights = (model.weights || []).map((row) => `<li>${row.leverage}× · ${(row.weight * 100).toFixed(0)}%</li>`).join("");
   const flow = model.flow
-    ? "New open interest follows taker buy/sell when that print exists. Otherwise the split is even."
-    : "New open interest is split evenly between longs and shorts.";
+    ? "Each new contract is one long and one short. Taker buy/sell tilts which side carries the size when that print exists; an even share matches the other models."
+    : "Each new contract is one long and one short, so both sides get the full rise in open interest.";
   $("how-body").innerHTML = `
     <p>${escapeHtml(model.blurb || "")}</p>
     <p>Maintenance margin rate (MMR) is ${(model.mmr * 100).toFixed(1)}%. Entry for a bar is <span class="formula">${escapeHtml(model.entry)}</span>.</p>
     <p>Long liquidation = <span class="formula">${escapeHtml(model.long_formula)}</span></p>
     <p>Short liquidation = <span class="formula">${escapeHtml(model.short_formula)}</span></p>
-    <p>${flow} A later candle removes a shelf when price trades through it.</p>
+    <p>Open interest is counted in coins, so a price move alone adds nothing. ${flow} A later candle removes a shelf when price trades through it.</p>
     <p>Leverage mix</p>
     <ul>${weights}</ul>
-    <p>Per-bar decay ${model.decay}. Volume churn ${model.churn}. Kernel ${model.kernel.map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
+    <p>Fade ${model.half_life_h ? `half-life ${model.half_life_h} h` : "none"}. Volume churn ${model.churn}. Kernel ${model.kernel.map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
     <p>The color scale is relative to this window. It is not a count of real liquidations.</p>`;
 }
 

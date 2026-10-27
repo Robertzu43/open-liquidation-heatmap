@@ -1,6 +1,8 @@
 """Public-market loaders for the liquidation heatmap.
 
-Candles and open interest come from OKX and Binance. Binance tries the
+Candles and open interest come from OKX and Binance. Open interest is read in
+coins, one side of each contract, so a price move alone does not look like new
+positions. Binance tries the
 live USDT-M API first and, if that is blocked, the public data.binance.vision
 archive (cached under .cache/).
 
@@ -290,13 +292,13 @@ def fold_oi(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tuple[np.
         return oi, share
     starts = np.asarray(grid_ms, dtype=np.int64)
     half = bar_ms / 2.0
-    for open_ms, oi_usd, long_share in records:
+    for open_ms, oi_coin, long_share in records:
         ts = int(open_ms)
         index = _nearest_open_index(starts, ts)
         if abs(int(starts[index]) - ts) > half:
             continue
         try:
-            oi_value = float(oi_usd)
+            oi_value = float(oi_coin)
         except (TypeError, ValueError):
             oi_value = math.nan
         if math.isfinite(oi_value) and oi_value >= 0:
@@ -391,7 +393,7 @@ def finalize_series(
         low=low_s,
         close=close_s,
         volume_usd=volume_s,
-        oi_usd=oi_s,
+        oi_coin=oi_s,
         long_share=share_s,
         exchange=exchange,
         symbol=symbol,
@@ -429,7 +431,7 @@ def _records_from_series(series: MarketSeries) -> tuple[list[tuple], list[tuple]
             )
         )
         share = float(series.long_share[i])
-        ois.append((int(series.times[i]), float(series.oi_usd[i]), share))
+        ois.append((int(series.times[i]), float(series.oi_coin[i]), share))
     return candles, ois
 
 
@@ -480,7 +482,7 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
         low=low,
         close=close,
         volume_usd=volume,
-        oi_usd=oi_out,
+        oi_coin=oi_out,
         long_share=share_out,
         exchange="aggregate",
         symbol=f"{coin}USDT",
@@ -644,10 +646,11 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
         if ts < start_ms or ts >= end_ms:
             continue
         try:
-            oi_usd = float(row[3])
+            # [ts, oi contracts, oiCcy coins, oiUsd]
+            oi_coin = float(row[2])
         except (TypeError, ValueError, IndexError):
             continue
-        oi_records.append((ts, oi_usd, share_near(ts)))
+        oi_records.append((ts, oi_coin, share_near(ts)))
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi, share = fold_oi(oi_records, grid, bar_ms)
     loaded = finalize_series(
@@ -715,7 +718,7 @@ def _parse_metrics_csv(text: str) -> list[tuple]:
         return []
     header = [cell.strip() for cell in lines[0].split(",")]
     index = {name: pos for pos, name in enumerate(header)}
-    if "create_time" not in index or "sum_open_interest_value" not in index:
+    if "create_time" not in index or "sum_open_interest" not in index:
         return []
     rows = []
     for line in lines[1:]:
@@ -729,13 +732,13 @@ def _parse_metrics_csv(text: str) -> list[tuple]:
             else:
                 parsed = datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 open_ms = int(parsed.timestamp() * 1000)
-            oi_usd = float(parts[index["sum_open_interest_value"]])
+            oi_coin = float(parts[index["sum_open_interest"]])
             taker = parts[index["sum_taker_long_short_vol_ratio"]] if "sum_taker_long_short_vol_ratio" in index else ""
             account = parts[index["count_long_short_ratio"]] if "count_long_short_ratio" in index else ""
             share = ratio_to_share(taker)
             if not math.isfinite(share):
                 share = ratio_to_share(account)
-            rows.append((open_ms, oi_usd, share))
+            rows.append((open_ms, oi_coin, share))
         except (ValueError, IndexError, KeyError):
             continue
     return rows
@@ -911,7 +914,7 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
     for row in oi_rows:
         try:
             ts = int(row["timestamp"])
-            oi_records.append((ts, float(row["sumOpenInterestValue"]), taker_at.get(ts, math.nan)))
+            oi_records.append((ts, float(row["sumOpenInterest"]), taker_at.get(ts, math.nan)))
         except (KeyError, TypeError, ValueError):
             continue
     bar_ms = int(spec["bar_seconds"]) * 1000
@@ -1034,7 +1037,7 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
         low=low,
         close=close,
         volume=volume,
-        oi=oi,
+        oi=oi / close,
         share=share,
         exchange="demo",
         symbol=pair,
@@ -1105,7 +1108,7 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
         low=combined.low,
         close=combined.close,
         volume=combined.volume_usd,
-        oi=combined.oi_usd,
+        oi=combined.oi_coin,
         share=combined.long_share,
         exchange="aggregate",
         symbol=pair,

@@ -9,6 +9,7 @@ import numpy as np
 
 from liqmap.data import (
     DataError,
+    _parse_metrics_csv,
     combine_series,
     fold_candles,
     fold_oi,
@@ -31,7 +32,7 @@ from liqmap.model import (
 from liqmap.service import load_heatmap
 
 
-def _series(price, oi, share=0.5, high=None, low=None, coin="BTC"):
+def _series(price, oi, share=0.5, high=None, low=None, coin="BTC", bar_seconds=300):
     price = np.asarray(price, dtype=np.float64)
     n = len(price)
     if high is None:
@@ -40,18 +41,18 @@ def _series(price, oi, share=0.5, high=None, low=None, coin="BTC"):
         low = price - 0.05
     share_arr = np.full(n, share, dtype=np.float64) if np.isscalar(share) else np.asarray(share, dtype=np.float64)
     return MarketSeries(
-        times=np.arange(n, dtype=np.int64) * 300_000,
+        times=np.arange(n, dtype=np.int64) * bar_seconds * 1000,
         open=price,
         high=np.asarray(high, dtype=np.float64),
         low=np.asarray(low, dtype=np.float64),
         close=price,
         volume_usd=np.zeros(n),
-        oi_usd=np.asarray(oi, dtype=np.float64),
+        oi_coin=np.asarray(oi, dtype=np.float64),
         long_share=share_arr,
         exchange="test",
         symbol=f"{coin}USDT",
         coin=coin,
-        bar_seconds=300,
+        bar_seconds=bar_seconds,
     )
 
 
@@ -97,13 +98,47 @@ class ModelTests(unittest.TestCase):
         self.assertLess(liq_price_long(entry, 100), entry)
         self.assertGreater(liq_price_short(entry, 5), liq_price_short(entry, 100))
 
-    def test_usd_conservation_when_price_cannot_sweep(self):
-        oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0, 2_000_000.0])
+    def test_each_new_contract_is_one_long_and_one_short(self):
+        oi = np.array([10_000.0, 20_000.0, 20_000.0, 20_000.0])
         heat = build_heatmap(_series(np.full(4, 100.0), oi), 1)
-        self.assertAlmostEqual(float(heat.long_heat[:, 1].sum() + heat.short_heat[:, 1].sum()), 1_000_000.0, delta=1.0)
-        self.assertAlmostEqual(float(heat.profile_long.sum() + heat.profile_short.sum()), 1_000_000.0, delta=1.0)
-        self.assertAlmostEqual(float(heat.profile_long.sum()), 500_000.0, delta=1.0)
-        self.assertAlmostEqual(float(heat.profile_short.sum()), 500_000.0, delta=1.0)
+        self.assertAlmostEqual(float(heat.long_heat[:, 1].sum()), 1_000_000.0, delta=1.0)
+        self.assertAlmostEqual(float(heat.short_heat[:, 1].sum()), 1_000_000.0, delta=1.0)
+        self.assertAlmostEqual(float(heat.profile_long.sum()), 1_000_000.0, delta=1.0)
+        self.assertAlmostEqual(float(heat.profile_short.sum()), 1_000_000.0, delta=1.0)
+
+    def test_price_move_without_new_contracts_adds_nothing(self):
+        price = np.linspace(100.0, 110.0, 6)
+        heat = build_heatmap(_series(price, np.full(6, 10_000.0)), 1)
+        self.assertEqual(float(heat.long_heat.sum() + heat.short_heat.sum()), 0.0)
+
+    def test_entry_bar_wick_does_not_clear_its_own_positions(self):
+        oi = [10_000.0, 20_000.0, 20_000.0, 20_000.0]
+        calm = build_heatmap(_series(np.full(4, 100.0), oi), 1)
+        wick = build_heatmap(_series(np.full(4, 100.0), oi, low=[99.95, 99.0, 99.95, 99.95]), 1)
+        self.assertAlmostEqual(float(wick.profile_long.sum()), float(calm.profile_long.sum()), delta=1.0)
+        later = build_heatmap(_series(np.full(4, 100.0), oi, low=[99.95, 99.95, 99.0, 99.95]), 1)
+        self.assertLess(float(later.profile_long.sum()), float(calm.profile_long.sum()) - 1.0)
+
+    def test_model3_at_even_share_closes_like_the_even_split(self):
+        oi = [10_000.0, 20_000.0, 10_000.0, 10_000.0]
+        even = build_heatmap(_series(np.full(4, 100.0), oi), 1)
+        flow = build_heatmap(_series(np.full(4, 100.0), oi, share=0.5), 3)
+        self.assertAlmostEqual(float(even.profile_long.sum()), 500_000.0, delta=1.0)
+        self.assertAlmostEqual(float(flow.profile_long.sum()), 500_000.0, delta=1.0)
+        self.assertAlmostEqual(float(flow.profile_short.sum()), 500_000.0, delta=1.0)
+
+    def test_model2_fade_follows_the_clock_not_the_bar(self):
+        def kept_after_a_day(bar_seconds):
+            per_day = 86400 // bar_seconds
+            n = per_day + 2
+            oi = np.full(n, 20_000.0)
+            oi[0] = 10_000.0
+            heat = build_heatmap(_series(np.full(n, 100.0), oi, bar_seconds=bar_seconds), 2)
+            total = heat.long_heat.sum(axis=0) + heat.short_heat.sum(axis=0)
+            return float(total[1 + per_day] / total[1])
+
+        self.assertAlmostEqual(kept_after_a_day(300), 0.5 ** (24 / 72), places=6)
+        self.assertAlmostEqual(kept_after_a_day(3600), 0.5 ** (24 / 72), places=6)
 
     def test_sweep_removes_shorts_after_price_trades_through(self):
         price = np.array([100.0, 100.0, 100.0, 120.0, 120.0])
@@ -117,7 +152,7 @@ class ModelTests(unittest.TestCase):
         self.assertGreater(float(heat.profile_long.sum()), 100_000.0)
 
     def test_model3_flow_skew(self):
-        oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0])
+        oi = np.array([10_000.0, 20_000.0, 20_000.0])
         price = np.full(3, 100.0)
         bull = build_heatmap(_series(price, oi, share=0.9), 3)
         bear = build_heatmap(_series(price, oi, share=0.1), 3)
@@ -204,7 +239,7 @@ class ParserTests(unittest.TestCase):
                 low=close - 1,
                 close=close,
                 volume_usd=np.asarray(vol, dtype=np.float64),
-                oi_usd=np.asarray(oi, dtype=np.float64),
+                oi_coin=np.asarray(oi, dtype=np.float64),
                 long_share=np.asarray(share, dtype=np.float64),
                 exchange=exchange,
                 symbol="BTCUSDT",
@@ -217,10 +252,20 @@ class ParserTests(unittest.TestCase):
         combined = combine_series([quiet, busy], grid, 3600, "BTC")
         self.assertEqual(combined.exchange, "aggregate")
         self.assertAlmostEqual(float(combined.close[-1]), 22.0)
-        self.assertAlmostEqual(float(combined.oi_usd[-1]), 480.0)
+        self.assertAlmostEqual(float(combined.oi_coin[-1]), 480.0)
         # (120 * 0.2 + 360 * 0.8) / 480 = 0.65
         self.assertAlmostEqual(float(combined.long_share[-1]), 0.65)
         self.assertAlmostEqual(float(combined.volume_usd[-1]), 6.0)
+
+    def test_binance_metrics_use_coin_open_interest(self):
+        text = (
+            "create_time,symbol,sum_open_interest,sum_open_interest_value,sum_taker_long_short_vol_ratio\n"
+            "2026-10-26 00:05:00,BTCUSDT,80000.5,6400040000.0,3\n"
+        )
+        rows = _parse_metrics_csv(text)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0][1], 80000.5)
+        self.assertAlmostEqual(rows[0][2], 0.75)
 
     def test_demo_payload_is_little_endian_float32(self):
         payload = load_heatmap("demo", "btc", "12h", 1, "pair")
