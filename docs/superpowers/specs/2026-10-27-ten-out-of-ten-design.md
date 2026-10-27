@@ -1,6 +1,6 @@
 # Ten out of ten
 
-Drafted 2026-10-27. Not yet approved. Open decisions are listed at the end.
+Approved 2026-10-27 with the decisions listed at the end.
 
 ## Why
 
@@ -34,7 +34,7 @@ The goal is a free, open tool a trader can trust instead of a paid, closed one. 
 ## Anti-goals
 
 - Claiming the map predicts price, or that it is more accurate than any vendor. Both are estimates.
-- Any vendor URL, API call, scraped data, logo or look-alike branding. `tests/validation/test_supply_chain.py` fails on the vendor URL in any `.md` or `.py` file, so the README names the vendor in text only.
+- Any vendor name, URL, API call, scraped data, logo or look-alike branding in the README or the page. `tests/validation/test_supply_chain.py` also fails on the vendor URL in any `.md` or `.py` file.
 - More controls. Every new control must remove or hide one.
 
 ## Mechanics: the four rules
@@ -73,7 +73,7 @@ The look stays dark, mono numbers, Ember default. Polish goes into spacing, one 
 
 Order: one-line pitch, hero screenshot, "Why this exists" with a dated comparison table, three-line quick start, "Reading the chart" with an annotated screenshot, features, how it works in five lines with a link, FAQ, limitations, license.
 
-The comparison table states only what the vendor's own Prime page said on 2026-10-27: Prime costs $28 a month or $268 a year; without Prime, the heatmap supports BTC and ETH only; auto-refresh needs Prime. The other column states what this repo does, each claim checkable in code.
+The comparison table does not name any vendor, in the README or on the page. It compares this project with "typical paid heatmap services" in general terms only: a monthly subscription, free tiers limited to a few coins, auto-refresh behind the paywall, and a closed method. The calibration disclosure says the weights were checked by eye against "a commercial heatmap's public page". The other column states what this repo does, each claim checkable in code.
 
 Screenshots live in `docs/img/`. `.gitignore` ignores `*.png`, so it gets an exception for that folder.
 
@@ -81,8 +81,8 @@ Screenshots live in `docs/img/`. `.gitignore` ignores `*.png`, so it gets an exc
 
 Exact spacing, colors within the existing themes, copy of the first-visit card within the three ideas above, test fixture values.
 
-## Open decisions
+## Decisions (2026-10-27)
 
-1. Comparison table: keep it naming the vendor and its prices, or describe "paid heatmap services" generically.
-2. Recalibration: the fit compares against screenshots of the vendor's public page taken in a local browser, as in the band-placement spec. Confirm the same person will capture them again, or skip recalibration and say so in the README.
-3. Execution: subagent-driven or native.
+1. The README and the page do not name the vendor. Comparisons are generic. Existing method notes under `docs/` keep their sourcing as is.
+2. Recalibration happens. Screenshots of the vendor's public page are captured from a browser the way a visitor sees it, as in the band-placement spec, and stay outside the repository. If the page cannot be reached from the build environment, the task stops and asks for the screenshots.
+3. Execution is subagent-driven: a fresh implementer and a fresh reviewer per task, then one whole-branch review.

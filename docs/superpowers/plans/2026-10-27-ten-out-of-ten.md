@@ -15,7 +15,7 @@
 ## Global Constraints
 
 - No new runtime dependencies in `requirements.txt`.
-- No vendor URL, import or key anywhere. The vendor may be named in README and `docs/` text only. `tests/validation/test_supply_chain.py` must stay green.
+- No vendor URL, import or key anywhere. The README and `web/` never name the vendor. `tests/validation/test_supply_chain.py` must stay green.
 - Python host literals stay within `tests/validation/net_allowlist.py`.
 - Zero-tier golden case unchanged: entry 100, 10x, MMR 0.005 gives long 90.4523, short 109.4527.
 - Times shown to users stay America/Bogota, labeled COT.
@@ -167,7 +167,7 @@ def test_wick_into_a_bin_removes_only_the_crossed_part(self):
 
 **Files:** `liqmap/model.py` `MODELS[*]["weights"]` only if the check fails; `README.md` model table.
 
-- [ ] **Step 1:** Repeat Method steps 1–3 of `docs/superpowers/specs/2026-10-27-band-placement-fit-design.md` on BTC and ETH, 24h and 7d. Blocked on open decision 2 of the spec.
+- [ ] **Step 1:** Repeat Method steps 1–3 of `docs/superpowers/specs/2026-10-27-band-placement-fit-design.md` on BTC and ETH, 24h and 7d. Capture the vendor's public page with the preinstalled Playwright as a visitor would; keep images and series in the scratchpad. If the page is unreachable or blocks the browser, stop with status BLOCKED.
 - [ ] **Step 2:** If the pass rule still holds, change nothing and record the errors in the spec's Results. If not, re-tune weights only, then record.
 - [ ] **Step 3: Commit** — `chore(model): re-check band placement after the mechanics fix`
 
@@ -238,7 +238,7 @@ pip install -r requirements.txt
 python -m liqmap.server --open
 ```
 
-- [ ] **Step 2:** The comparison table uses only the spec's dated facts, names the vendor in text, and has no vendor link. Each "this project" cell points at the file that proves it.
+- [ ] **Step 2:** The comparison table is generic ("typical paid heatmap services") and names no vendor anywhere in the README. Each "this project" cell points at the file that proves it. `grep -ci 'coin''glass' README.md` prints 0.
 - [ ] **Step 3: Verify** — `python -m pytest tests/validation/test_supply_chain.py -q` passes; every README command run once from a clean venv works.
 - [ ] **Step 4: Commit** — `docs: rewrite the README around the free, open heatmap`
 
