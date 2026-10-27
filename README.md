@@ -57,7 +57,7 @@ Settings are stored in `localStorage`.
 Exchanges do not publish each account's entry or leverage. `liqmap/model.py` is the whole model:
 
 1. Match each open-interest print to the candle whose open time is nearest that print. Ten minutes after an hourly open stays on that candle. Fifty minutes after that open uses the next candle. The entry is that bar's close.
-2. Spread that notional across a leverage mix. The weights in each model sum to 1.
+2. Count open interest in coins, one side of each contract. A rise of X coins is X coins of new longs and X coins of new shorts, valued at the entry. A price move with no new contracts adds nothing. Spread each side across a leverage mix. The weights in each model sum to 1.
 3. Park it at an isolated liquidation price. The zero-tier maintenance margin rate (MMR) is **0.005** (0.5%). Entry 100 at 10x is 90.4523 long and 109.4527 short.
 
 ```
@@ -66,16 +66,16 @@ short = entry * (1 + 1/leverage) / (1 + MMR)
 ```
 
 4. A small kernel blurs each deposit across neighboring price bins so a tier reads as a shelf, not a one-pixel line.
-5. When a later candle trades through a liquidation price, that resting liquidity is removed. Longs below the bar's low survive. Shorts above the bar's high survive.
+5. When a later candle trades through a liquidation price, that resting liquidity is removed. Longs below the bar's low survive. Shorts above the bar's high survive. Each bar erases before it adds, so a bar's own wick, which printed before its close, never removes the positions entered at that close. When open interest falls, both sides shrink by the same fraction.
 6. Color is the resting notional at that price and time. The scale is relative to the window.
 
 | Model | Idea | Weights |
 | --- | --- | --- |
 | 1 Wide clusters | More weight on 5×–25×. Shelves sit further from price. No fade. | 5× 12%, 10× 28%, 25× 30%, 50× 20%, 100× 10% |
-| 2 Tight magnets | More weight on 25×–100×, a little volume churn, and a slow fade. | 10× 8%, 25× 22%, 50× 35%, 75× 20%, 100× 15% |
+| 2 Tight magnets | More weight on 25×–100×, a little volume churn, and a 72-hour half-life measured on the clock, so every range fades at the same rate per day. | 10× 8%, 25× 22%, 50× 35%, 75× 20%, 100× 15% |
 | 3 Flow skew | Same family of tiers, but new positions follow taker buy/sell when that data exists. | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% |
 
-Models 1 and 2 split new open interest evenly between longs and shorts. Model 3 uses the taker buy fraction as the long share.
+Models 1 and 2 give both sides the full rise in open interest. Model 3 tilts new and closing positions by the taker buy share: each side is scaled by twice its share, so an even share matches models 1 and 2.
 
 The same description is in the chart's "How this model works" disclosure, read from the model table so the page cannot drift from the code.
 
@@ -119,12 +119,12 @@ The server is the Python standard library `ThreadingHTTPServer` on `0.0.0.0:8765
 python -m unittest tests.test_model -v
 ```
 
-The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. Parser and combine tests do not touch the network.
+The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. They also check that each new contract adds one long and one short, that a price move with no new contracts adds nothing, that a bar's own wick leaves the positions entered at its close, that model 3 at an even share closes like the even split, and that model 2 fades by the clock on 5-minute and 1-hour bars alike. Parser and combine tests do not touch the network.
 
 ## Limitations
 
 - This is an estimate. It is not the exchange's liquidation engine and not anyone else's heatmap.
-- The leverage mix, the 0.5% zero-tier MMR, and the even long/short split (models 1 and 2) are assumptions.
+- The leverage mix, the 0.5% zero-tier MMR, the close as entry, and the even long/short split (models 1 and 2) are assumptions. Candles are last price, not the mark price that triggers liquidation.
 - Cross margin, tiered maintenance, fees, and funding are available on `heatmap.liq_price` and are not the default map.
 - Binance from this kind of hosted network often cannot use the live futures API. The archive is delayed. Symbol mode drops that delayed book rather than painting yesterday's open interest on today's price.
 - Different venues and different models produce different shelves. Treat the map as context, not a target.
