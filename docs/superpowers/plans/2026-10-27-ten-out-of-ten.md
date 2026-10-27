@@ -121,7 +121,10 @@ try {
   const spot = await ev(() => {
     const d = state.data, L = state.layout, n = d.times.length;
     let best = -1, bi = 0, bj = 0;
-    for (let b = 0; b < d.bins; b++) for (let j = 0; j < n; j++) { const v = d.heatA[b * n + j]; if (v > best) { best = v; bi = b; bj = j; } }
+    for (let b = 0; b < d.bins; b++) {
+      if (d.centersA[b] < state.view.lo || d.centersA[b] > state.view.hi) continue; // stay inside the zoomed view
+      for (let j = 0; j < n; j++) { const v = d.heatA[b * n + j]; if (v > best) { best = v; bi = b; bj = j; } }
+    }
     return { x: xOf(bj, L), y: yOf(d.centersA[bi], L) };
   });
   const cbox = await page.locator("canvas").first().boundingBox();
@@ -146,6 +149,7 @@ process.exit(failed ? 1 : 0);
 ```bash
 .venv/bin/python -m liqmap.server --host 127.0.0.1 --port 8791 &
 SERVER=$!
+curl -sf --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:8791/ >/dev/null
 UI_BASE=http://127.0.0.1:8791 \
   PLAYWRIGHT_CORE=/Users/robertozuniga/.npm/_npx/da7caeae9db9c589/node_modules/playwright-core/index.mjs \
   CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
@@ -154,7 +158,7 @@ kill $SERVER
 lsof -nP -iTCP:8791 -sTCP:LISTEN | wc -l   # 0
 ```
 
-Expected: 8 PASS lines and exit code 0. The As-of inputs are COT until Task 7 changes them.
+Expected: 8 PASS lines and exit code 0. The As-of inputs are COT until Task 6 changes them.
 
 - [ ] **Step 3:** Mention it in README "Tests", then commit.
 
@@ -234,7 +238,7 @@ Then update the text:
 - [ ] **Step 5: Run.**
 
 Run: `.venv/bin/python -m pytest -q`
-Expected: 193 passed, 2 skipped. The reviewer ran this on a scratch copy.
+Expected: 193 passed, 2 skipped. The reviewer ran this on a scratch copy. If Step 1 added the OKX `oi_at` test, it is 194, and Task 2's count becomes 197.
 
 - [ ] **Step 6: Commit.**
 
@@ -279,8 +283,12 @@ Add to `ReplayServiceTests` in `tests/test_history.py`. Its `setUp` already stub
 
 ```python
     def test_span_length_is_capped(self):
-        with self.assertRaisesRegex(DataError, "400 days"):
-            service.replay_payload("BTC", "24h", "1d", str(T_2021 - 200 * 86_400), str(T_2021 + 250 * 86_400))
+        # 850 days of frames plus a 7-day window is over the cap.
+        with self.assertRaisesRegex(DataError, "800 days"):
+            service.replay_payload("BTC", "7d", "1d", str(T_2021 - 250 * 86_400), str(T_2021 + 600 * 86_400))
+        # The window counts: 200 days of frames plus a 2-year window is also over.
+        with self.assertRaisesRegex(DataError, "800 days"):
+            service.replay_payload("BTC", "2y", "1d", str(T_2021 - 200 * 86_400), str(T_2021))
 
     def test_only_three_spans_are_kept(self):
         for rng in ("12h", "24h", "3d", "7d"):
@@ -293,7 +301,7 @@ Add to `ReplayServiceTests` in `tests/test_history.py`. Its `setUp` already stub
 Run: `.venv/bin/python -m pytest -q tests/test_server.py tests/test_history.py -k "localhost or capped or three_spans"`
 Expected:
 - `test_server.py` fails at import: there is no `_parser` yet.
-- `test_span_length_is_capped` fails: nothing is raised.
+- `test_span_length_is_capped` fails: no error mentions "800 days".
 - `test_only_three_spans_are_kept` fails: there are 4 spans.
 
 - [ ] **Step 3: Implement.**
@@ -319,7 +327,8 @@ In `liqmap/data.py` next to `MAX_BARS`:
 
 ```python
 # Longest replay span, counting the first frame's window: one archive file per day is downloaded.
-MAX_SPAN_DAYS = 400
+# 800 days keeps a 2y range replayable for about 70 days.
+MAX_SPAN_DAYS = 800
 ```
 
 In `load_span`, right after `last` is computed:
@@ -340,6 +349,7 @@ In `liqmap/service.py` next to `SPAN_TTL`, add `MAX_SPANS = 3`. In `replay_paylo
 - [ ] **Step 4:** Run `.venv/bin/python -m pytest -q`. Expected: 196 passed, 2 skipped (193 plus 3 new).
 - [ ] **Step 5: Update the README, then commit.**
   - Fix `README.md:121` to say "on `127.0.0.1:8765` by default; `--host 0.0.0.0` shares it on your network".
+  - In `README.md:53` (Replay row), add: "A replay downloads at most 800 days, counting the range's window, so a 2-year range can replay about 70 days."
   - Add the same sentence after the run command.
 
 ```bash
@@ -460,7 +470,7 @@ def liq_price_short(entry: float, leverage: float, mmr: float = MMR) -> float:
 
 - [ ] **Step 5: Clean up callers.**
   - `heatmap.py`: drop the imports of removed names and the `__all__` block.
-  - `tests/test_model.py`: drop those imports and the `liq_price` and NaN-error assertions at lines 68–72. Keep the `liq_price_long` and `liq_price_short` checks.
+  - `tests/test_model.py`: drop those imports, the `liq_price` and NaN-error assertions at lines 68–72, and `test_fade_and_bins` at lines 74–79. Keep the `liq_price_long` and `liq_price_short` checks.
   - `README.md:135`: remove the `heatmap.liq_price` sentence.
 - [ ] **Step 6: Run.**
   - `.venv/bin/python -m pytest -q` passes.
@@ -489,7 +499,9 @@ git commit -m "Delete liquidation formulas and helpers the model never calls"
   1. **Placement.** For each part, map its `times` onto `grid_ms` with `idx = np.searchsorted(grid_ms, times)`. Keep only `ok = (idx < len(grid_ms)) & (grid_ms[np.minimum(idx, len(grid_ms) - 1)] == times)`. A shorter part, or one on another grid, never misfolds.
   2. **Open interest.** Per bar, sum the finite OI of the parts that have a value. A bar with no finite OI stays NaN (track `oi_seen`), not 0.
   3. **Share and volume.** Share is weighted by each part's OI. Volume is the sum across parts. The test expects `volume_usd[-1] == 6`.
-  4. **Price.** Candles come from the donor ranked as today (`data.py:499`): freshest last finite bar first, then most volume.
+  4. **Price.** Candles come from the donor ranked as today (`data.py:500`): `times[-1]` first, then `nansum(volume)`.
+
+  Also keep today's skip of parts with no open interest and no candles, and the "no overlapping bars" `DataError` (`data.py:516`, `525-526`).
 
   Delete `_records_from_series`. `test_combine_sums_oi_and_keeps_busiest_price` must pass unchanged.
 - [ ] **Step 4: Parse the view once.** `get_series` returns `(loaded, spec, end_open)`. `load_heatmap` and `levels_payload` unpack it, and the second `resolve_view` call at `service.py:219-220` goes away.
