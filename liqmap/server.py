@@ -70,6 +70,8 @@ class Handler(BaseHTTPRequestHandler):
             one("range", "24h"),
             one("model", "1"),
             one("mode", "pair"),
+            one("asof", ""),
+            one("bar", ""),
         )
         self._send_json(payload)
 

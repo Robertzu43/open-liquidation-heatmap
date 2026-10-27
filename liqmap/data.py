@@ -53,6 +53,13 @@ RANGES: dict[str, dict] = {
     "2y": {"seconds": 730 * 86400, "bar": "1d", "bar_seconds": 86400},
 }
 OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12H", "1d": "1D"}
+# Bars a past Binance view may use. Open interest is published every 5 minutes.
+BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
+MAX_BARS = 3000
+# The live openInterestHist endpoint keeps 30 days; stay a day inside it.
+LIVE_OI_DAYS = 29
+# First day of Binance's public 5-minute metrics archive (2020-09-01 UTC).
+METRICS_START_S = 1_598_918_400
 STALE_AFTER_S = 18 * 3600
 _SYMBOL_COIN = re.compile(r"^[A-Z0-9]{2,12}$")
 _SESSION = requests.Session()
@@ -93,13 +100,62 @@ def normalize_symbol(raw: str) -> tuple[str, str]:
     return coin, coin + "USDT"
 
 
-def range_spec(range_key: str) -> dict:
+def range_spec(range_key: str, bar: str | None = None) -> dict:
     key = (range_key or "").strip().lower()
     spec = RANGES.get(key)
     if spec is None:
         choices = ", ".join(RANGES)
         raise DataError(f"Unknown range '{range_key}'. Use one of: {choices}.")
-    return {"key": key, **spec}
+    spec = {"key": key, **spec}
+    bar_key = (bar or "").strip().lower()
+    if bar_key:
+        if bar_key not in BAR_SECONDS:
+            raise DataError(f"Unknown bar '{bar}'. Use one of: {', '.join(BAR_SECONDS)}.")
+        spec["bar"] = bar_key
+        spec["bar_seconds"] = BAR_SECONDS[bar_key]
+        bars = spec["seconds"] // spec["bar_seconds"]
+        if not 2 <= bars <= MAX_BARS:
+            raise DataError(f"{key} on {bar_key} bars is {bars} bars. Pick a bar that gives 2 to {MAX_BARS}.")
+    return spec
+
+
+def parse_asof(raw: str | None, now_s: float | None = None) -> int | None:
+    """Unix seconds for a past view, or None for live. A time without a zone is refused."""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if text.isdigit():
+        value = int(text)
+    else:
+        try:
+            parsed = datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith(("Z", "z")) else text)
+        except ValueError:
+            raise DataError("asof must be unix seconds or an ISO time with a zone, like 2021-05-19T23:59:59Z.") from None
+        if parsed.tzinfo is None:
+            raise DataError("asof needs a time zone, like 2021-05-19T23:59:59Z or -05:00.")
+        value = int(parsed.timestamp())
+    now = time.time() if now_s is None else float(now_s)
+    return None if value >= now else value
+
+
+def history_end_open(asof_s: int, bar_s: int) -> int:
+    """Open of the last bar that had fully closed by ``asof_s``."""
+    return int(asof_s) // int(bar_s) * int(bar_s) - int(bar_s)
+
+
+def resolve_view(exchange: str, mode: str, range_key: str, asof: str | None, bar: str | None) -> tuple[dict, int | None]:
+    """Range spec and the last bar open of a past view (None when live)."""
+    if (asof or bar) and not (exchange == "binance" and mode == "pair"):
+        raise DataError("Past views and bar choice are Binance-only, in pair mode.")
+    spec = range_spec(range_key, bar)
+    asof_s = parse_asof(asof)
+    if asof_s is None:
+        return spec, None
+    bar_s = int(spec["bar_seconds"])
+    end_open = history_end_open(asof_s, bar_s)
+    if end_open + bar_s <= METRICS_START_S:
+        raise DataError("Binance open-interest history starts on 2020-09-01 UTC. Pick a later time.")
+    return spec, end_open
 
 
 def make_grid(end_open_s: int, n: int, bar_s: int) -> np.ndarray:
@@ -833,22 +889,35 @@ def _latest_archive_day(symbol: str, interval: str) -> datetime | None:
     return None
 
 
-def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
+def _try_binance_live(coin: str, pair: str, spec: dict, end_open_s: int | None = None) -> LoadedSeries | None:
     bar = spec["bar"]
-    grid = _window(spec)
+    bar_ms = int(spec["bar_seconds"]) * 1000
+    grid = _window(spec, end_open_s)
     start_ms = int(grid[0])
-    end_ms = int(grid[-1]) + int(spec["bar_seconds"]) * 1000
+    end_ms = int(grid[-1]) + bar_ms
     base = "https://fapi.binance.com"
-    try:
-        status, klines = _get_json(
-            f"{base}/fapi/v1/klines",
-            {"symbol": pair, "interval": bar, "startTime": start_ms, "endTime": end_ms, "limit": 1500},
-            timeout=(4, 8),
-            retries=1,
-        )
-    except DataError:
-        return None
-    if status in (202, 451) or status >= 400 or not isinstance(klines, list) or len(klines) < 2:
+    klines: list = []
+    cursor = start_ms
+    for _ in range(4):
+        try:
+            status, batch = _get_json(
+                f"{base}/fapi/v1/klines",
+                {"symbol": pair, "interval": bar, "startTime": cursor, "endTime": end_ms, "limit": 1500},
+                timeout=(4, 8),
+                retries=1,
+            )
+        except DataError:
+            return None
+        if status in (202, 451) or status >= 400 or not isinstance(batch, list):
+            return None
+        if not batch:
+            break
+        klines.extend(batch)
+        last = int(batch[-1][0])
+        if len(batch) < 1500 or last + bar_ms >= end_ms:
+            break
+        cursor = last + bar_ms
+    if len(klines) < 2:
         return None
     oi_rows: list[dict] = []
     cursor = start_ms
@@ -914,7 +983,6 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
             oi_records.append((ts, float(row["sumOpenInterestValue"]), taker_at.get(ts, math.nan)))
         except (KeyError, TypeError, ValueError):
             continue
-    bar_ms = int(spec["bar_seconds"]) * 1000
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi, share = fold_oi(oi_records, grid, bar_ms)
     try:
@@ -937,33 +1005,43 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
         )
     except DataError:
         return None
+    if end_open_s is not None:
+        loaded.stale = loaded.as_of < int(end_open_s) * 1000
     log.info("binance live %s %s bars=%s", pair, spec["key"], len(loaded.series.times))
     return loaded
 
 
-def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool) -> LoadedSeries:
-    latest = _latest_archive_day(pair, spec["bar"])
-    if latest is None:
-        raise DataError(f"Binance has no public futures archive for {pair}. Check the coin.")
+def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool, end_open_s: int | None = None) -> LoadedSeries:
     bar_s = int(spec["bar_seconds"])
-    end_open_now = int(time.time()) // bar_s * bar_s
-    day_last = int(latest.timestamp()) + 86400 - bar_s
-    end_open = min(end_open_now, day_last)
-    if not allow_stale and is_stale(end_open * 1000, bar_s):
-        when = _fmt_cot((end_open + bar_s) * 1000)
-        raise DataError(
-            f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when})."
-        )
+    if end_open_s is None:
+        latest = _latest_archive_day(pair, spec["bar"])
+        if latest is None:
+            raise DataError(f"Binance has no public futures archive for {pair}. Check the coin.")
+        end_open_now = int(time.time()) // bar_s * bar_s
+        day_last = int(latest.timestamp()) + 86400 - bar_s
+        end_open = min(end_open_now, day_last)
+        if not allow_stale and is_stale(end_open * 1000, bar_s):
+            when = _fmt_cot((end_open + bar_s) * 1000)
+            raise DataError(
+                f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when})."
+            )
+        note = "Built from the public Binance market archive because the live futures API was unavailable."
+    else:
+        end_open = int(end_open_s)
+        note = "Historical view from the Binance archive."
     grid = _window(spec, end_open_s=end_open)
     start_ms = int(grid[0])
-    end_ms = int(grid[-1]) + bar_s * 1000
+    bar_ms = bar_s * 1000
+    end_ms = int(grid[-1]) + bar_ms
     candles = _load_vision_klines(pair, spec["bar"], start_ms, end_ms)
-    metrics = _load_vision_metrics(pair, start_ms, end_ms)
+    # Keep the print at each bar open, so archive and live open interest mean the same thing.
+    metrics = [row for row in _load_vision_metrics(pair, start_ms, end_ms) if int(row[0]) % bar_ms == 0]
     if len(candles) < 2:
-        raise DataError(f"Binance archive has no {pair} {spec['bar']} candles for this window.")
+        raise DataError(
+            f"Binance archive has no {pair} {spec['bar']} candles for this window. The contract may not have been listed yet."
+        )
     if len(metrics) < 2:
         raise DataError(f"Binance archive has no {pair} open-interest metrics for this window.")
-    bar_ms = bar_s * 1000
     open_, high, low, close, volume = fold_candles(candles, grid, bar_ms)
     oi, share = fold_oi(metrics, grid, bar_ms)
     loaded = finalize_series(
@@ -980,9 +1058,17 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
         coin=coin,
         bar_seconds=bar_s,
         source="binance-vision",
-        note="Built from the public Binance market archive because the live futures API was unavailable.",
+        note=note,
         warnings=[],
+        now_s=None if end_open_s is None else end_open + bar_s,
     )
+    if end_open_s is not None:
+        loaded.stale = loaded.as_of < end_open * 1000
+        if loaded.stale:
+            when = _fmt_cot(loaded.as_of + bar_ms)
+            loaded.series.warnings.append(f"The Binance archive ends at {when}, before the requested time.")
+        log.info("binance history %s %s bar=%s bars=%s stale=%s", pair, spec["key"], spec["bar"], len(loaded.series.times), loaded.stale)
+        return loaded
     if loaded.stale:
         when = _fmt_cot(loaded.as_of + bar_s * 1000)
         loaded.series.warnings.append(
@@ -1001,6 +1087,28 @@ def fetch_binance(coin: str, pair: str, spec: dict, *, allow_stale: bool = True)
     if live is not None and live.stale and not allow_stale:
         raise DataError("Binance data is behind the live market.")
     return fetch_binance_vision(coin, pair, spec, allow_stale=allow_stale)
+
+
+def fetch_binance_history(coin: str, pair: str, spec: dict, end_open_s: int) -> LoadedSeries:
+    """A past view: the archive, or the live API when the archive ends early and the window is recent."""
+    bar_s = int(spec["bar_seconds"])
+    start_s = int(end_open_s) - (int(spec["seconds"]) // bar_s - 1) * bar_s
+    live_ok = start_s > time.time() - LIVE_OI_DAYS * 86400
+    archive: LoadedSeries | None = None
+    try:
+        archive = fetch_binance_vision(coin, pair, spec, allow_stale=True, end_open_s=end_open_s)
+    except DataError:
+        if not live_ok:
+            raise
+    if archive is not None and not archive.stale:
+        return archive
+    if live_ok:
+        live = _try_binance_live(coin, pair, spec, end_open_s=end_open_s)
+        if live is not None:
+            return live
+    if archive is None:
+        raise DataError(f"Binance has no {pair} data for this window yet.")
+    return archive
 
 
 def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
@@ -1119,15 +1227,24 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
     return loaded
 
 
-def load_market(exchange: str, symbol: str, range_key: str, mode: str = "pair") -> LoadedSeries:
+def load_market(
+    exchange: str,
+    symbol: str,
+    range_key: str,
+    mode: str = "pair",
+    asof: str | None = None,
+    bar: str | None = None,
+) -> LoadedSeries:
     mode_key = (mode or "pair").strip().lower()
     exchange_key = (exchange or "okx").strip().lower()
     if mode_key not in {"pair", "symbol"}:
         raise DataError("Mode must be pair or symbol.")
     if not re.fullmatch(r"[a-z0-9_-]{2,20}", exchange_key):
         raise DataError("Unknown exchange. Use okx, binance, or demo.")
-    spec = range_spec(range_key)
+    spec, end_open = resolve_view(exchange_key, mode_key, range_key, asof, bar)
     coin, pair = normalize_symbol(symbol)
+    if end_open is not None:
+        return fetch_binance_history(coin, pair, spec, end_open)
     if mode_key == "symbol" or exchange_key == "aggregate":
         return fetch_aggregate(coin, pair, spec)
     if exchange_key == "demo":

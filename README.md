@@ -48,7 +48,8 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Crosshair | Price, time, estimated liquidity, and the candle. |
 | Zoom / pan | Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets. Fit uses the traded range. Wide shows the full model price domain. |
 | Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
-| Auto-refresh | Off, 30s, 1m, or 5m. |
+| Auto-refresh | Off, 30s, 1m, or 5m. Paused while you look at a past moment. |
+| As of / Bar | Binance pair only. Pick any past moment since 2020-09-01 (COT) and any bar from 5m to 1d, up to 3,000 bars per view. "Live" returns to now. |
 
 Settings are stored in `localStorage`.
 
@@ -108,6 +109,8 @@ Series for the short ranges are cached briefly. Longer ranges are cached longer.
 ### HTTP API
 
 - `GET /api/heatmap?exchange&symbol&range&model&mode` — heatmap JSON. Price grids are little-endian float32, base64. `heat` is row-major with the price bin changing slowest.
+  - `asof` (Binance pair only): unix seconds, or ISO-8601 with a zone. The map ends at the last bar that had closed by then, and nothing after it is read. Older windows come from the public archive, cached under `.cache/`, so a period is downloaded once.
+  - `bar` (Binance pair only): `5m`, `15m`, `1h`, `4h`, `12h`, or `1d`. Empty keeps the range's default.
 - `GET /api/status` — models, ranges, default view.
 - `GET /api/symbols` — the coin list and venues.
 

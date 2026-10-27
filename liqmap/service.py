@@ -18,6 +18,7 @@ from liqmap.data import (
     load_market,
     normalize_symbol,
     range_spec,
+    resolve_view,
 )
 from liqmap.model import MODELS, MMR, build_heatmap, suggest_view
 
@@ -60,16 +61,29 @@ def _canonical(exchange: str, symbol: str, range_key: str, mode: str) -> tuple[s
     return exchange_key, coin, spec["key"], "pair"
 
 
-def get_series(exchange: str, symbol: str, range_key: str, mode: str = "pair"):
+def _evict(now: float) -> None:
+    """Drop expired series so one entry per past view does not pile up."""
+    with _guard:
+        for key, (stamp, _value) in list(_cache.items()):
+            if now - stamp >= SERIES_TTL.get(key[2], 120):
+                _cache.pop(key, None)
+                lock = _locks.get(key)
+                if lock is not None and not lock.locked():
+                    _locks.pop(key, None)
+
+
+def get_series(exchange: str, symbol: str, range_key: str, mode: str = "pair", asof: str | None = None, bar: str | None = None):
     exchange_key, coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
-    key = (exchange_key, coin, range_name, mode_key)
+    spec, end_open = resolve_view(exchange_key, mode_key, range_name, asof, bar)
+    key = (exchange_key, coin, range_name, mode_key, spec["bar"], end_open)
     lock = _key_lock(key)
     with lock:
         now = time.time()
         hit = _cache.get(key)
         if hit is not None and now - hit[0] < SERIES_TTL.get(range_name, 120):
             return hit[1]
-        loaded = load_market(exchange_key, coin, range_name, mode_key)
+        loaded = load_market(exchange_key, coin, range_name, mode_key, asof=asof, bar=bar)
+        _evict(now)
         _cache[key] = (time.time(), loaded)
         return loaded
 
@@ -122,16 +136,25 @@ def _title(exchange: str, coin: str, mode: str) -> str:
     return f"{exchange_name(exchange)} {coin}/USDT Liquidation Heatmap"
 
 
-def load_heatmap(exchange: str, symbol: str, range_key: str, model, mode: str = "pair") -> dict:
+def load_heatmap(
+    exchange: str,
+    symbol: str,
+    range_key: str,
+    model,
+    mode: str = "pair",
+    asof: str | None = None,
+    bar: str | None = None,
+) -> dict:
     try:
         model_id = int(model)
     except (TypeError, ValueError):
         raise DataError("Model must be 1, 2, or 3.") from None
     model_meta = public_model(model_id)
-    loaded = get_series(exchange, symbol, range_key, mode)
+    loaded = get_series(exchange, symbol, range_key, mode, asof, bar)
     heat = build_heatmap(loaded.series, model_id)
     series = loaded.series
-    _exchange, _coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
+    exchange_key, _coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
+    spec, end_open = resolve_view(exchange_key, mode_key, range_name, asof, bar)
     view_lo, view_hi = suggest_view(series)
     grid = np.ascontiguousarray(heat.long_heat + heat.short_heat, dtype=np.float64)
     return {
@@ -142,8 +165,9 @@ def load_heatmap(exchange: str, symbol: str, range_key: str, model, mode: str = 
         "coin": series.coin,
         "mode": mode_key,
         "range": range_name,
-        "bar": RANGES[range_name]["bar"],
+        "bar": spec["bar"],
         "bar_seconds": int(series.bar_seconds),
+        "asof": None if end_open is None else (end_open + int(spec["bar_seconds"])) * 1000,
         "model": model_meta,
         "source": loaded.source,
         "venues": list(loaded.venues),

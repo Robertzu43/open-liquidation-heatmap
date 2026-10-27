@@ -28,6 +28,8 @@ const state = {
   range: "24h",
   model: 1,
   mode: "pair",
+  bar: "",
+  asof: null,
   theme: "ember",
   threshold: 0.85,
   showMap: false,
@@ -59,6 +61,31 @@ const canvas = $("chart");
 const wrap = $("wrap");
 const tip = $("tip");
 const banner = $("banner");
+
+// Past views and bar choice are Binance pair-only; bars must give 2 to 3,000 per range.
+const BAR_S = { "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400 };
+const RANGE_S = { "12h": 43200, "24h": 86400, "3d": 259200, "7d": 604800, "30d": 2592000, "90d": 7776000, "180d": 15552000, "1y": 31536000, "2y": 63072000 };
+const COT_OFFSET_S = 5 * 3600;
+
+function barFits(range, bar) {
+  if (!bar) return true;
+  const bars = Math.floor(RANGE_S[range] / BAR_S[bar]);
+  return bars >= 2 && bars <= 3000;
+}
+
+function historyOn() {
+  return state.exchange === "binance" && state.mode === "pair";
+}
+
+function cotInputValue(seconds) {
+  // datetime-local text for a unix time, read on the COT (UTC−5) clock.
+  return new Date((seconds - COT_OFFSET_S) * 1000).toISOString().slice(0, 16);
+}
+
+function parseCotInput(text) {
+  const ms = Date.parse(text + ":00Z");
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) + COT_OFFSET_S : null;
+}
 
 function clamp(value, lo, hi) {
   return Math.min(hi, Math.max(lo, value));
@@ -184,6 +211,7 @@ function persist() {
       range: state.range,
       model: state.model,
       mode: state.mode,
+      bar: state.bar,
       theme: state.theme,
       threshold: state.threshold,
       showMap: state.showMap,
@@ -207,6 +235,7 @@ function restore() {
     if (ranges.includes(saved.range)) state.range = saved.range;
     if ([1, 2, 3].includes(Number(saved.model))) state.model = Number(saved.model);
     if (saved.mode === "pair" || saved.mode === "symbol") state.mode = saved.mode;
+    if (saved.bar in BAR_S && barFits(state.range, saved.bar)) state.bar = saved.bar;
     if (THEMES[saved.theme]) state.theme = saved.theme;
     if (Number.isFinite(saved.threshold)) state.threshold = clamp(saved.threshold, 0, 1);
     if (typeof saved.showMap === "boolean") state.showMap = saved.showMap;
@@ -237,6 +266,14 @@ function syncControls() {
   const symbolMode = state.mode === "symbol";
   $("exchange").disabled = symbolMode;
   $("exchange-field").classList.toggle("disabled", symbolMode);
+  const canTravel = historyOn();
+  $("bar").value = state.bar;
+  $("bar").disabled = !canTravel;
+  $("bar-field").classList.toggle("disabled", !canTravel);
+  $("asof-input").value = state.asof == null ? "" : cotInputValue(state.asof);
+  $("asof-input").disabled = !canTravel;
+  $("asof-field").classList.toggle("disabled", !canTravel);
+  $("live").disabled = !canTravel || state.asof == null;
   document.querySelectorAll(".swatch").forEach((button) => {
     button.classList.toggle("on", button.dataset.theme === state.theme);
   });
@@ -306,6 +343,10 @@ async function load(reason) {
     model: String(state.model),
     mode: state.mode,
   });
+  if (historyOn()) {
+    if (state.bar) params.set("bar", state.bar);
+    if (state.asof != null) params.set("asof", String(state.asof));
+  }
   try {
     const response = await fetch("/api/heatmap?" + params.toString(), { signal: controller.signal });
     const body = await response.json();
@@ -337,7 +378,7 @@ function fail(message) {
 
 function applyPayload(data) {
   const prev = state.data;
-  const identityChanged = !prev || prev.coin !== data.coin || prev.range !== data.range || prev.exchange !== data.exchange || prev.mode !== data.mode;
+  const identityChanged = !prev || prev.coin !== data.coin || prev.range !== data.range || prev.exchange !== data.exchange || prev.mode !== data.mode || prev.bar !== data.bar || prev.asof !== data.asof;
   data.openA = decodeF32(data.open);
   data.highA = decodeF32(data.high);
   data.lowA = decodeF32(data.low);
@@ -375,9 +416,11 @@ function applyPayload(data) {
   const withTime = data.bar_seconds < 86400;
   $("asof").textContent = `${sourceNames[data.source] || data.source} · last bar ${fmtStamp(data.as_of, withTime)} · updated ${fmtStamp(data.generated_at, true)}`;
   const lines = [];
+  if (data.asof) lines.push(`As of ${fmtStamp(data.asof, true)} · ${data.bar} bars`);
   (data.warnings || []).forEach((line) => lines.push(line));
   if (data.note && !lines.includes(data.note)) lines.push(data.note);
-  const serious = data.stale || lines.some((line) => /lag|left out|archive|synthetic|only go back/i.test(line));
+  // A past view names the archive on purpose; only its own warnings are serious.
+  const serious = data.stale || (!data.asof && lines.some((line) => /lag|left out|archive|synthetic|only go back/i.test(line)));
   showBanner(serious ? "warn" : "info", lines);
   renderAnalysis(data);
   renderHow(data.model);
@@ -897,7 +940,7 @@ function setAuto(seconds) {
   state.auto = seconds;
   if (seconds > 0) {
     state.timer = setInterval(() => {
-      if (document.hidden) return;
+      if (document.hidden || state.asof != null) return;
       load("auto");
     }, seconds * 1000);
   }
@@ -925,15 +968,35 @@ function wire() {
     state.exchange = $("exchange").value;
     state.timeFull = true;
     state.priceDirty = false;
+    syncControls();
     persist();
     load("exchange");
   });
   $("range").addEventListener("change", () => {
     state.range = $("range").value;
+    if (!barFits(state.range, state.bar)) state.bar = "";
     state.timeFull = true;
     state.priceDirty = false;
+    syncControls();
     persist();
     load("range");
+  });
+  $("bar").addEventListener("change", () => {
+    state.bar = barFits(state.range, $("bar").value) ? $("bar").value : "";
+    syncControls();
+    persist();
+    load("bar");
+  });
+  $("asof-input").addEventListener("change", () => {
+    const text = $("asof-input").value;
+    state.asof = text ? parseCotInput(text) : null;
+    syncControls();
+    load("asof");
+  });
+  $("live").addEventListener("click", () => {
+    state.asof = null;
+    syncControls();
+    load("live");
   });
   const coin = $("coin");
   const commitCoin = () => {
