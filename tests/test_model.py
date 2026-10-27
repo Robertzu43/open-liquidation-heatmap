@@ -151,11 +151,14 @@ class TierTests(unittest.TestCase):
         for model_id, spec in MODELS.items():
             heat = build_heatmap(series, model_id)
             self.assertEqual(heat.tiers, tuple(lev for lev, _w in spec["weights"]))
-            self.assertEqual(heat.long_tiers.shape, (len(heat.tiers),) + heat.long_heat.shape)
-            np.testing.assert_allclose(heat.long_tiers.sum(axis=0), heat.long_heat, rtol=1e-5, atol=1e-3)
-            np.testing.assert_allclose(heat.short_tiers.sum(axis=0), heat.short_heat, rtol=1e-5, atol=1e-3)
-            np.testing.assert_allclose(heat.profile_long_tiers.sum(axis=0), heat.profile_long, rtol=1e-5, atol=1e-3)
-            np.testing.assert_allclose(heat.profile_short_tiers.sum(axis=0), heat.profile_short, rtol=1e-5, atol=1e-3)
+            self.assertIsNone(heat.long_tier_column)
+            np.testing.assert_allclose(heat.profile_long_tiers.sum(axis=0), heat.profile_long, rtol=1e-9, atol=1e-6)
+            np.testing.assert_allclose(heat.profile_short_tiers.sum(axis=0), heat.profile_short, rtol=1e-9, atol=1e-6)
+            for column in (0, 57, 199):
+                one = build_heatmap(series, model_id, tier_column=column)
+                self.assertEqual(one.long_tier_column.shape, (len(one.tiers), len(one.centers)))
+                np.testing.assert_allclose(one.long_tier_column.sum(axis=0), heat.long_heat[:, column], rtol=1e-9, atol=1e-6)
+                np.testing.assert_allclose(one.short_tier_column.sum(axis=0), heat.short_heat[:, column], rtol=1e-9, atol=1e-6)
             self.assertGreater(float(heat.long_heat.sum()), 0)
 
 
