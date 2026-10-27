@@ -117,7 +117,7 @@ function fmtPx(value) {
   return v.toFixed(6);
 }
 
-function fmtStamp(ms, withTime) {
+function fmtStamp(ms, withTime, zone = true) {
   const opts = {
     timeZone: TZ,
     day: "2-digit",
@@ -129,7 +129,7 @@ function fmtStamp(ms, withTime) {
     opts.hour = "2-digit";
     opts.minute = "2-digit";
   }
-  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " COT";
+  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + (zone ? " COT" : "");
 }
 
 function fmtAxis(ms, withTime, narrow) {
@@ -809,15 +809,13 @@ function updateHover(clientX, clientY) {
   const withTime = data.bar_seconds < 86400;
   tip.hidden = false;
   tip.innerHTML = `
-    <div>${fmtStamp(data.times[index], withTime)}</div>
-    <div>Price ${fmtPx(price)}</div>
-    <div>Liquidity ${fmtUsd(usd || 0)}</div>
-    <div>O ${fmtPx(data.openA[index])} H ${fmtPx(data.highA[index])}</div>
-    <div>L ${fmtPx(data.lowA[index])} C ${fmtPx(data.closeA[index])}</div>`;
-  const left = x + 14;
-  const top = y + 14;
-  tip.style.left = (left + 220 > rect.width ? x - 200 : left) + "px";
-  tip.style.top = (top + 110 > rect.height ? y - 100 : top) + "px";
+    <div class="tip-head">${fmtStamp(data.times[index], withTime, false)}</div>
+    <div class="tip-row"><i></i><span>Price</span><b>${price >= 1 ? price.toFixed(2) : price.toPrecision(4)}</b></div>
+    <div class="tip-row"><i></i><span>Liquidation Leverage</span><b>${fmtUsd(usd || 0).slice(1)}</b></div>`;
+  const left = x + 16;
+  const top = y + 16;
+  tip.style.left = (left + tip.offsetWidth > rect.width ? x - tip.offsetWidth - 16 : left) + "px";
+  tip.style.top = (top + tip.offsetHeight > rect.height ? y - tip.offsetHeight - 16 : top) + "px";
   requestDraw();
 }
 

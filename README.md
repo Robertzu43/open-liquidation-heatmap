@@ -45,7 +45,7 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Liquidation map | Optional horizontal bars on the right. Green is resting long liquidity, red is resting short liquidity. Off by default. |
 | Candles | Green up, red down, drawn on the heat. |
 | Axes | USD color scale on the left, price on the right, time along the bottom. Times are America/Bogota, labeled COT (UTC−5). |
-| Crosshair | Price, time, estimated liquidity, and the candle. |
+| Crosshair | Hover a line to see the bar's date and time, the price under the cursor, and the estimated liquidation value at that line. |
 | Zoom / pan | Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets. Fit uses the traded range. Wide shows the full model price domain. |
 | Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
 | Auto-refresh | Off, 30s, 1m, or 5m. |

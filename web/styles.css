@@ -157,16 +157,30 @@ h1 { font-size: 22px; line-height: 1.2; margin: 0; font-weight: 620; letter-spac
   position: absolute;
   z-index: 3;
   pointer-events: none;
-  background: rgba(16, 18, 14, 0.94);
-  border: 1px solid #3c4334;
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-family: var(--mono);
-  font-size: 12px;
-  line-height: 1.45;
-  max-width: 230px;
+  background: rgba(6, 7, 5, 0.94);
+  border: 1px solid #2a2f24;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.5;
+  min-width: 220px;
   color: var(--text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
+.tip-head { font-weight: 600; margin-bottom: 8px; }
+.tip-row { display: flex; align-items: center; gap: 8px; }
+.tip-row + .tip-row { margin-top: 4px; }
+.tip-row i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #9cc3e6;
+  box-shadow: 0 0 0 2px #e7ecdf;
+  flex: none;
+}
+.tip-row span { color: #d5dccb; }
+.tip-row b { margin-left: auto; padding-left: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .tip[hidden], .loading[hidden] { display: none !important; }
 .loading {
   position: absolute;
