@@ -123,10 +123,12 @@ The server is the Python standard library `ThreadingHTTPServer` on `127.0.0.1:87
 ## Tests
 
 ```bash
-python -m unittest tests.test_model -v
+pip install -r requirements-dev.txt
+python -m pytest -q
+RUN_NETWORK=1 python -m pytest -q   # also calls the live exchange APIs
 ```
 
-The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. Parser and combine tests do not touch the network.
+The tests check leverage weights, liquidation-price direction, that new positions enter at the bar open, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, the per-tier books, the replay cap, and that the shelf finder sees a level above and below price. They also check that the model table above matches `liqmap/model.py`, and that no file links, imports or names a key for the vendor this project is not affiliated with. Network tests are skipped unless `RUN_NETWORK=1`.
 
 `tools/ui_check.mjs` drives the page in headless Chrome: the Binance past view, replay steps and play, hover tiers, model switch and Live. It needs a server on `UI_BASE` (default `http://127.0.0.1:8791`), playwright-core and Chrome, and it reads the Binance archive for May 2021:
 
@@ -139,9 +141,19 @@ UI_BASE=http://127.0.0.1:8791 PLAYWRIGHT_CORE=/path/to/playwright-core/index.mjs
 
 - This is an estimate. It is not the exchange's liquidation engine and not anyone else's heatmap.
 - The leverage mix, the 0.5% zero-tier MMR, and the even long/short split (models 1 and 2) are assumptions.
-- Cross margin, tiered maintenance, fees, and funding are available on `heatmap.liq_price` and are not the default map.
+- Cross margin, tiered maintenance, fees, and funding are available on `liqmap.model.liq_price` and are not the default map.
 - Binance from this kind of hosted network often cannot use the live futures API. The archive is delayed. Symbol mode drops that delayed book rather than painting yesterday's open interest on today's price.
 - Different venues and different models produce different shelves. Treat the map as context, not a target.
+- Sweeps use last-price candles, not the mark price that triggers a real liquidation. There is one fixed 0.5% MMR and no position-size brackets.
+
+### How good this can get
+
+Some limits are in the data, not the code.
+
+- **Usefulness tops out around 9/10.** True per-account leverage and entry are private, and Binance's public liquidation feed is sampled (at most one print per symbol per second), so there is no full ground truth to fit against.
+- **Reliability tops out around 9/10.** The free public endpoints can change, block some regions (Binance answers HTTP 451 from some networks), or lag (the Binance archive is a day or two behind).
+- **Matching CoinGlass from screenshots tops out around 8/10.** A screenshot shows where the peaks sit and how bright they are relative to each other. It does not show dollar values, so the weights can match placement and relative intensity, not amounts.
+- **Usability and construction** have no outside ceiling and can reach 10/10.
 
 ## License
 

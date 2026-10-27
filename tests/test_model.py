@@ -197,6 +197,16 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(len(_shift_to_open(np.array([]))), 0)
         np.testing.assert_array_equal(_shift_to_open(np.array([5.0])), [np.nan])
 
+    def test_readme_model_table_matches_models(self):
+        from pathlib import Path
+
+        text = (Path(__file__).resolve().parents[1] / "README.md").read_text()
+        for model_id, spec in MODELS.items():
+            row = next(line for line in text.splitlines() if line.startswith(f"| {model_id} {spec['name']} |"))
+            listed = row.rstrip().rstrip("|").rsplit("|", 1)[-1].strip()
+            expected = ", ".join(f"{lev}× {round(weight * 100)}%" for lev, weight in spec["weights"])
+            self.assertEqual(listed, expected, f"README row for model {model_id}")
+
     def test_normalize_symbol(self):
         self.assertEqual(normalize_symbol("btc"), ("BTC", "BTCUSDT"))
         self.assertEqual(normalize_symbol("ETHUSDT"), ("ETH", "ETHUSDT"))

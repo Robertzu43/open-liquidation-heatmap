@@ -1,6 +1,6 @@
 # How liquidation heatmaps work
 
-**Where this repository is.** [The pipeline](#the-pipeline) and [How a level dies](#how-a-level-dies) describe the target model. The current `heatmap.py` does not carry levels forward, sweep or fade them, scale them when open interest falls, use the mark price, apply margin tiers, or tilt by taker share. What that script does today is in [Implementation status](#implementation-status).
+**Where this repository is.** [The pipeline](#the-pipeline) and [How a level dies](#how-a-level-dies) describe the general model. `liqmap/model.py` builds a stock book: it carries levels forward, sweeps them with each bar's range, scales them when open interest falls, and in model 2 fades them. It does not use the mark price or margin brackets. What the code does today is in [Implementation status](#implementation-status).
 
 A liquidation heatmap is a picture of an estimate: at which prices a move would force leveraged perpetual positions to close, and how much size the model assigns to each price.
 
@@ -128,7 +128,7 @@ Under cross margin the liquidation price moves whenever the wallet moves. Fundin
 
 ## The pipeline
 
-This section is the **target model**, not the behavior of `heatmap.py`. The target keeps a stock of estimated coin size by price bin and by side, carries that stock forward, sweeps it, and scales it. The script does none of those updates; the gap is in [Implementation status](#implementation-status).
+This section is the **general model**. It keeps a stock of estimated coin size by price bin and by side, carries that stock forward, sweeps it, and scales it. `liqmap/model.py` does all three, in USD rather than coin size, with entry at the bar open and the sweep after the deposit; the differences are in [Implementation status](#implementation-status).
 
 The target walks one bar at a time. [Blocklens publishes one full version of this procedure](https://docs.blocklens.co/lab/liquidation-map), including pseudocode. The diagram is that shape, with the same-bar ordering made visible: the candle erases first, and positions opened on this bar are not erased by this bar's wick, because the archive does not say which happened first.
 
@@ -166,7 +166,7 @@ flowchart TD
 
 The diagram is the stock chart people mean by a liquidation heatmap: horizontal bands that start when the position is inferred and end when a later candle reaches them. [AlertaChart](https://www.alertachart.com/learn/liquidation-heatmap) draws that band. [Coinliqui](https://coinliqui.com/learn/liquidation-heatmap) also fades it on a clock.
 
-A **deposit** chart is a different object. It paints new liquidation notional only in the column of the bar that opened it, and it never carries the book forward. It answers "where was new liquidation risk created?" `heatmap.py` is a deposit chart. It is not the target above.
+A **deposit** chart is a different object. It paints new liquidation notional only in the column of the bar that opened it, and it never carries the book forward. It answers "where was new liquidation risk created?" `liqmap/model.py` is not a deposit chart. It is the stock chart above.
 
 ## Inferring entries from open interest and volume
 
@@ -346,7 +346,7 @@ Bybit's open-interest history pages with a cursor and can be asked back to the l
 
 ## How a level dies
 
-This section is the **target model**. In that model a level leaves the book in four ways, and the four are independent. The current `heatmap.py` does not sweep, fade, or scale; it only deposits a level into the column where it was opened, and only if the price falls inside the clip described in [Implementation status](#implementation-status).
+This section is the **general model**. In that model a level leaves the book in four ways, and the four are independent. `liqmap/model.py` uses all four: the bar's range sweeps, falling open interest scales, model 2 fades by a fixed factor each bar, and the window starts empty. Its sweep uses last-price candles, and it includes the bar that opened the position; see [Implementation status](#implementation-status).
 
 1. **The price sweeps it.** After the bar, long bins at or above the bar's low are zero, and short bins at or below the bar's high are zero. Using the mark-price high and low matches the trigger. Using the last-price high and low matches the candle the eye sees. New positions of the current bar should survive the current bar, because the model does not know whether the wick happened before the open. They become eligible on the next bar.
 2. **Open interest falls.** Scaling by `OI_now / OI_previous` shrinks every survivor, including bins the price did not touch. A zero or negative open-interest print is a data error, not a close. Blocklens records Binance archive rows with open interest of 0 that would otherwise multiply the whole book by zero and then rebuild it from a single hour. Treat non-positive and non-finite prints as missing: erase with the candle, and compute the next delta against the last valid print.
@@ -406,19 +406,19 @@ Put the reasons in one place.
 
 ## Implementation status
 
-`heatmap.py` is a teaching sketch of the public idea. It is not the target in [The pipeline](#the-pipeline) or [How a level dies](#how-a-level-dies). As of this note the script:
+`liqmap/model.py` (`build_heatmap`) is the whole model. `heatmap.py` and the web page only fetch a series and draw it. As of this note the model:
 
-- pulls Binance USDⓈ-M last-price klines and `openInterestHist`, and does not use the mark price,
-- differences `sumOpenInterestValue` rather than contract open interest,
-- keeps four leverages (10×, 20×, 50×, 100×) at weights 40, 30, 20, and 10 percent,
-- uses the cum=0 isolated form at a fixed 0.50% MMR, and does not apply margin tiers,
-- assigns half of each open-interest increase to longs and half to shorts, with no taker-share tilt,
-- deposits that notional only into the time column of the open: it does not carry levels forward, sweep or fade them, or scale them when open interest falls,
-- drops any liquidation price outside `0.95 * min(low)` … `1.05 * max(high)` of the loaded candles, so levels outside that band are silently dropped,
-- matches each open-interest timestamp to the nearest candle by `open_time` and uses that bar's close as the entry price, depositing the heat in that bar's column. Whether that candle is the one the reading belongs to depends on how the exchange aligns open-interest timestamps with candle opens; that is an alignment caveat, not a lookahead step in the script,
-- and sets the color ceiling at the 95th percentile of the positive cells.
+- keeps **one stock book per leverage tier** and per side, in USD. The heatmap column is their sum, and hovering a cell shows the tiers that make it up,
+- enters new positions at the **bar open**, because open interest is read at the open. OKX stamps a bar with its last reading, so OKX readings are moved one bar later when they are loaded,
+- **deposits, then sweeps.** New open interest is split across the tiers and placed at each tier's isolated liquidation price, blurred over a few neighboring bins. Then the bar's own range, which trades after that open, clears long bins at or above its low and short bins at or below its high. Every later bar sweeps the same way,
+- **scales proportionally when open interest drops.** Every bin of both sides shrinks by the fraction of open interest that closed. Model 3 shrinks shorts more when taker buying dominates, and longs more when selling dominates. A missing reading adds nothing, and the next change is measured from the last valid one,
+- in **model 2**, fades every bin by a factor of 0.9992 each bar and adds churn: 1.5% of the bar's USD volume, capped at 2% of open interest, deposited as new positions,
+- splits new size evenly between longs and shorts in models 1 and 2. Model 3 uses the taker buy share, clipped to 5–95%,
+- sweeps with **last-price candles, not the mark price**,
+- uses **one fixed 0.5% MMR** in the cum=0 isolated form, with no position-size brackets: long is `entry × (1 − 1/L) / (1 − MMR)`,
+- and places a liquidation price that falls outside the price grid (0.78 × the window's low to 1.22 × its high) in the edge bin.
 
-A reader comparing a stock-style heatmap to that script should expect different pictures from the same data. The script is still a check of the arithmetic: its long formula is `entry × (1 − 1/L) / (1 − MMR)`, the cum=0 isolated form at a fixed 0.50% MMR.
+The leverage weights of each model are in the README table, and a test checks that table against the code.
 
 ## Sources
 
