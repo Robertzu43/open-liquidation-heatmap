@@ -29,7 +29,7 @@ Based on widely discussed approaches (see independent write-ups of CoinGlass-sty
    - Short: `entry * (1 + 1/leverage) / (1 + MMR)`
    - MMR = maintenance margin rate (typically ~0.5% for BTC on major exchanges)
 5. Bin the resulting liquidation notional into a price/time grid.
-6. Optionally fade intensity as price later trades through a level (positions assumed cleared).
+6. Planned, not in `heatmap.py` yet: fade intensity as price later trades through a level (positions assumed cleared).
 
 Different models use different leverage weightings and decay assumptions. This repo starts with a simple, transparent version you can modify.
 
