@@ -93,6 +93,26 @@
       <div class="swatches" id="themes" role="group" aria-label="Color theme"></div>
     </div>
 
+    <div class="player" id="player" role="group" aria-label="Replay">
+      <label class="field" id="to-field">To (COT)
+        <input id="to-input" type="datetime-local" step="300">
+      </label>
+      <button type="button" id="rp-load" class="live-btn" title="Load a replay from As of to To">Load replay</button>
+      <button type="button" id="rp-back" class="live-btn" aria-label="Step back one bar" title="Step back (←)">◀</button>
+      <button type="button" id="rp-play" class="live-btn" aria-label="Play" title="Play / pause (Space)">Play</button>
+      <button type="button" id="rp-fwd" class="live-btn" aria-label="Step forward one bar" title="Step forward (→)">▶</button>
+      <label class="field slim">Speed
+        <select id="rp-speed">
+          <option value="1">1 bar/s</option>
+          <option value="2" selected>2 bars/s</option>
+          <option value="5">5 bars/s</option>
+          <option value="10">10 bars/s</option>
+        </select>
+      </label>
+      <input id="rp-scrub" type="range" min="0" max="0" value="0" aria-label="Replay position">
+      <span id="rp-time" class="rp-time">Set As of, then Load replay</span>
+    </div>
+
     <div class="sub">
       <label class="threshold">Liquidity Threshold = <b id="th-val">0.85</b>
         <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.85">

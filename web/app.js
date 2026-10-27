@@ -274,6 +274,7 @@ function syncControls() {
   $("asof-input").disabled = !canTravel;
   $("asof-field").classList.toggle("disabled", !canTravel);
   $("live").disabled = !canTravel || state.asof == null;
+  if ($("rp-load")) syncReplay();
   document.querySelectorAll(".swatch").forEach((button) => {
     button.classList.toggle("on", button.dataset.theme === state.theme);
   });
@@ -328,14 +329,7 @@ function rangeLabel(id) {
   return option ? option.textContent : id;
 }
 
-async function load(reason) {
-  const seq = ++state.seq;
-  if (state.controller) state.controller.abort();
-  const controller = new AbortController();
-  state.controller = controller;
-  const quiet = reason === "auto" && state.data;
-  const label = `Loading ${state.mode === "symbol" ? "aggregate" : state.exchange.toUpperCase()} · ${state.coin} · ${rangeLabel(state.range)}`;
-  setLoading(true, quiet ? "Refreshing…" : label);
+function mapParams(extra) {
   const params = new URLSearchParams({
     exchange: state.exchange,
     symbol: state.coin,
@@ -347,6 +341,19 @@ async function load(reason) {
     if (state.bar) params.set("bar", state.bar);
     if (state.asof != null) params.set("asof", String(state.asof));
   }
+  Object.entries(extra || {}).forEach(([key, value]) => params.set(key, String(value)));
+  return params;
+}
+
+async function load(reason) {
+  const seq = ++state.seq;
+  if (state.controller) state.controller.abort();
+  const controller = new AbortController();
+  state.controller = controller;
+  const quiet = reason === "auto" && state.data;
+  const label = `Loading ${state.mode === "symbol" ? "aggregate" : state.exchange.toUpperCase()} · ${state.coin} · ${rangeLabel(state.range)}`;
+  setLoading(true, quiet ? "Refreshing…" : label);
+  const params = mapParams();
   try {
     const response = await fetch("/api/heatmap?" + params.toString(), { signal: controller.signal });
     const body = await response.json();
@@ -378,7 +385,8 @@ function fail(message) {
 
 function applyPayload(data) {
   const prev = state.data;
-  const identityChanged = !prev || prev.coin !== data.coin || prev.range !== data.range || prev.exchange !== data.exchange || prev.mode !== data.mode || prev.bar !== data.bar || prev.asof !== data.asof;
+  const keepView = Boolean(data.replay && prev && prev.replay);
+  const identityChanged = !prev || prev.coin !== data.coin || prev.range !== data.range || prev.exchange !== data.exchange || prev.mode !== data.mode || prev.bar !== data.bar || (!keepView && prev.asof !== data.asof);
   data.openA = decodeF32(data.open);
   data.highA = decodeF32(data.high);
   data.lowA = decodeF32(data.low);
@@ -388,6 +396,8 @@ function applyPayload(data) {
   data.heatA = decodeF32(data.heat);
   data.longA = decodeF32(data.profile_long);
   data.shortA = decodeF32(data.profile_short);
+  data.tierLongA = decodeF32(data.profile_long_tiers || "");
+  data.tierShortA = decodeF32(data.profile_short_tiers || "");
   state.data = data;
   state.heatDirty = true;
   if (identityChanged) {
@@ -399,7 +409,7 @@ function applyPayload(data) {
     state.view.i0 = -0.5;
     state.view.i1 = n - 0.5;
   }
-  if (!state.priceDirty) {
+  if (!state.priceDirty && !keepView) {
     state.view.lo = data.price_view[0];
     state.view.hi = data.price_view[1];
   }
@@ -758,15 +768,29 @@ function drawTimeAxis(ctx, L, data) {
   }
 }
 
+// One color per leverage, the same in every model.
+const TIER_COLORS = {
+  5: "#7aa2f7", 10: "#8ecae6", 20: "#4cc9f0", 25: "#4361ee",
+  50: "#f4c542", 60: "#f9a03f", 75: "#f3722c", 100: "#e85d04",
+};
+
+function tierColor(leverage) {
+  return TIER_COLORS[leverage] || "#8f9a84";
+}
+
 function drawLiqBars(ctx, L, data, half) {
   const bins = data.bins;
+  const tiers = data.tiers || [];
   let maxP = 0;
   for (let b = 0; b < bins; b++) maxP = Math.max(maxP, data.longA[b] + data.shortA[b]);
   if (!(maxP > 0)) return;
+  const x0 = L.liqX + 6;
+  const span = L.liqW - 12;
   ctx.save();
   ctx.beginPath();
   ctx.rect(L.liqX, L.plotY, L.liqW, L.plotH);
   ctx.clip();
+  // Bars: the long and short USD at each price, stacked by leverage tier.
   for (let b = 0; b < bins; b++) {
     const total = data.longA[b] + data.shortA[b];
     if (!(total > 0)) continue;
@@ -774,19 +798,60 @@ function drawLiqBars(ctx, L, data, half) {
     const y2 = yOf(data.centersA[b] - half, L);
     if (y2 < L.plotY || y1 > L.plotY + L.plotH) continue;
     const bh = Math.max(1, y2 - y1);
-    const width = (total / maxP) * (L.liqW - 12);
-    const longW = width * (data.longA[b] / total);
-    ctx.fillStyle = "rgba(125, 206, 160, 0.9)";
-    ctx.fillRect(L.liqX + 6, y1, longW, bh);
-    ctx.fillStyle = "rgba(224, 122, 114, 0.92)";
-    ctx.fillRect(L.liqX + 6 + longW, y1, Math.max(0, width - longW), bh);
+    let x = x0;
+    tiers.forEach((leverage, k) => {
+      const usd = data.tierLongA[k * bins + b] + data.tierShortA[k * bins + b];
+      if (!(usd > 0)) return;
+      const w = (usd / maxP) * span;
+      ctx.fillStyle = tierColor(leverage);
+      ctx.fillRect(x, y1, w, bh);
+      x += w;
+    });
+  }
+  // Cumulative lines: longs summed from price downward, shorts from price upward.
+  const spot = data.analysis ? data.analysis.price : 0;
+  let cumLong = 0;
+  let cumShort = 0;
+  for (let b = 0; b < bins; b++) {
+    if (data.centersA[b] < spot) cumLong += data.longA[b];
+    else cumShort += data.shortA[b];
+  }
+  const cumMax = Math.max(cumLong, cumShort);
+  if (cumMax > 0) {
+    const line = (color, from, to, step, values) => {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      let run = 0;
+      let started = false;
+      for (let b = from; b !== to; b += step) {
+        run += values[b];
+        const px = x0 + (run / cumMax) * span;
+        const py = yOf(data.centersA[b], L);
+        if (!started) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+        started = true;
+      }
+      ctx.stroke();
+    };
+    let spotBin = 0;
+    while (spotBin < bins && data.centersA[spotBin] < spot) spotBin++;
+    line("rgba(125, 206, 160, 0.95)", spotBin - 1, -1, -1, data.longA);
+    line("rgba(224, 122, 114, 0.95)", spotBin, bins, 1, data.shortA);
   }
   ctx.restore();
   if (L.liqW >= 80) {
-    ctx.fillStyle = "#8f9a84";
     ctx.font = "10px ui-monospace, monospace";
     ctx.textAlign = "left";
-    ctx.fillText("L / S", L.liqX + 6, L.plotY + 12);
+    tiers.forEach((leverage, k) => {
+      const y = L.plotY + 12 + k * 13;
+      ctx.fillStyle = tierColor(leverage);
+      ctx.fillRect(x0, y - 8, 8, 8);
+      ctx.fillStyle = "#8f9a84";
+      ctx.fillText(`${leverage}x`, x0 + 12, y);
+    });
+    ctx.fillStyle = "#8f9a84";
+    ctx.fillText("Σ L / S", x0, L.plotY + L.plotH - 6);
   }
 }
 
@@ -861,7 +926,57 @@ function updateHover(clientX, clientY) {
   const top = y + 14;
   tip.style.left = (left + 220 > rect.width ? x - 200 : left) + "px";
   tip.style.top = (top + 110 > rect.height ? y - 100 : top) + "px";
+  hoverLevels(index, bin);
   requestDraw();
+}
+
+const levelCache = new Map();
+
+function hoverLevels(index, bin) {
+  const data = state.data;
+  clearTimeout(state.hoverTimer);
+  if (state.replay && state.replay.playing) return;
+  const key = `${state.model}|${data.asof || "live"}|${data.generated_at}|${index}|${bin}`;
+  state.hoverKey = key;
+  if (levelCache.has(key)) {
+    showLevels(levelCache.get(key));
+    return;
+  }
+  state.hoverTimer = setTimeout(async () => {
+    const extra = { t: data.times[index], price: data.centersA[bin] };
+    if (data.asof) extra.asof = Math.round(data.asof / 1000);
+    if (data.replay) extra.replay = 1;
+    try {
+      const response = await fetch("/api/levels?" + mapParams(extra).toString());
+      const body = await response.json();
+      if (!response.ok) return;
+      levelCache.set(key, body);
+      if (levelCache.size > 300) levelCache.delete(levelCache.keys().next().value);
+      if (state.hoverKey === key) showLevels(body);
+    } catch (_err) {
+      /* hover detail is optional */
+    }
+  }, 120);
+}
+
+function showLevels(body) {
+  if (tip.hidden) return;
+  const rows = body.tiers
+    .filter((row) => row.long_usd > 0 || row.short_usd > 0)
+    .map((row) => {
+      const parts = [];
+      if (row.long_usd > 0) parts.push("L " + fmtUsd(row.long_usd));
+      if (row.short_usd > 0) parts.push("S " + fmtUsd(row.short_usd));
+      return `<div class="tier"><i style="background:${tierColor(row.leverage)}"></i>${row.leverage}x ${parts.join(" · ")}</div>`;
+    })
+    .join("");
+  let box = tip.querySelector(".tiers");
+  if (!box) {
+    box = document.createElement("div");
+    box.className = "tiers";
+    tip.appendChild(box);
+  }
+  box.innerHTML = rows || "<div>No resting tiers here</div>";
 }
 
 function zoomPrice(y, factor) {
@@ -940,11 +1055,206 @@ function setAuto(seconds) {
   state.auto = seconds;
   if (seconds > 0) {
     state.timer = setInterval(() => {
-      if (document.hidden || state.asof != null) return;
+      if (document.hidden || state.asof != null || state.replay) return;
       load("auto");
     }, seconds * 1000);
   }
   persist();
+}
+
+// Replay: one span is loaded, then frames are fetched by index, never skipped.
+function frameAsof(r, idx) {
+  return Math.round((r.first + idx * r.step) / 1000);
+}
+
+function syncReplay() {
+  const r = state.replay;
+  const canTravel = historyOn();
+  $("rp-load").disabled = !canTravel || state.asof == null;
+  $("to-input").disabled = !canTravel;
+  $("to-field").classList.toggle("disabled", !canTravel);
+  ["rp-back", "rp-play", "rp-fwd", "rp-scrub"].forEach((id) => {
+    $(id).disabled = !r;
+  });
+  $("rp-play").textContent = r && r.playing ? "Pause" : "Play";
+  $("rp-play").setAttribute("aria-label", r && r.playing ? "Pause" : "Play");
+  if (r) {
+    $("rp-scrub").max = String(r.frames - 1);
+    $("rp-scrub").value = String(r.idx);
+    $("rp-time").textContent = `${fmtStamp(frameAsof(r, r.idx) * 1000, r.step < 86400000)} · ${r.idx + 1}/${r.frames}`;
+  } else if (!canTravel) {
+    $("rp-time").textContent = "Replay is Binance pair only";
+  } else {
+    $("rp-time").textContent = state.asof == null ? "Set As of, then Load replay" : "Ready to load";
+  }
+}
+
+function stopReplay() {
+  const r = state.replay;
+  if (!r) return;
+  r.gen += 1;
+  r.playing = false;
+  r.controller.abort();
+  state.replay = null;
+  syncReplay();
+}
+
+async function startReplay(keepIdx) {
+  const prev = state.replay;
+  const idx = keepIdx && prev ? prev.idx : 0;
+  if (prev) {
+    prev.gen += 1;
+    prev.controller.abort();
+  }
+  state.replay = null;
+  syncReplay();
+  const toText = $("to-input").value;
+  const params = new URLSearchParams({ symbol: state.coin, range: state.range, from: String(state.asof) });
+  if (state.bar) params.set("bar", state.bar);
+  if (toText) params.set("to", String(parseCotInput(toText)));
+  setLoading(true, "Loading replay… the first load of a long span downloads one file per day and can take minutes");
+  try {
+    const response = await fetch("/api/replay?" + params.toString());
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Could not load the replay.");
+    state.replay = {
+      gen: 1,
+      first: body.first_asof,
+      step: body.bar_seconds * 1000,
+      frames: body.frames,
+      idx: Math.min(idx, body.frames - 1),
+      playing: false,
+      speed: Number($("rp-speed").value) || 2,
+      cache: new Map(),
+      controller: new AbortController(),
+      reloaded: Boolean(keepIdx),
+      days: body.days,
+      note: body.note,
+    };
+    syncReplay();
+    await showFrame(state.replay.idx);
+  } catch (err) {
+    fail(err.message || "Could not load the replay.");
+  } finally {
+    setLoading(false);
+  }
+}
+
+function fetchFrame(r, idx) {
+  if (r.cache.has(idx)) return r.cache.get(idx);
+  const params = mapParams({ asof: frameAsof(r, idx), replay: 1 });
+  const promise = fetch("/api/heatmap?" + params.toString(), { signal: r.controller.signal }).then(async (response) => {
+    const body = await response.json();
+    if (response.status === 409) {
+      const error = new Error(body.error || "Replay expired");
+      error.expired = true;
+      throw error;
+    }
+    if (!response.ok) throw new Error(body.error || "Could not load this frame.");
+    return body;
+  });
+  promise.catch(() => r.cache.delete(idx));
+  r.cache.set(idx, promise);
+  return promise;
+}
+
+async function showFrame(idx) {
+  const r = state.replay;
+  if (!r) return false;
+  const gen = r.gen;
+  r.idx = clamp(idx, 0, r.frames - 1);
+  syncReplay();
+  try {
+    const body = await fetchFrame(r, r.idx);
+    if (state.replay !== r || gen !== r.gen) return false;
+    applyPayload(body);
+    if (r.note && r.idx === 0) showBanner("info", [r.note]);
+    for (const ahead of [r.idx + 1, r.idx + 2]) {
+      if (ahead < r.frames) fetchFrame(r, ahead).catch(() => {});
+    }
+    for (const key of r.cache.keys()) {
+      if (key < r.idx - 2 || key > r.idx + 2) r.cache.delete(key);
+    }
+    return true;
+  } catch (err) {
+    if (err.name === "AbortError" || state.replay !== r) return false;
+    if (err.expired && !r.reloaded) {
+      await startReplay(true);
+      return false;
+    }
+    r.playing = false;
+    syncReplay();
+    fail(err.message || "Could not load this frame.");
+    return false;
+  }
+}
+
+async function playLoop() {
+  const r = state.replay;
+  if (!r) return;
+  const gen = r.gen;
+  while (state.replay === r && r.playing && gen === r.gen && r.idx < r.frames - 1) {
+    const started = performance.now();
+    const shown = await showFrame(r.idx + 1);
+    if (!shown) break;
+    const wait = 1000 / r.speed - (performance.now() - started);
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  }
+  if (state.replay === r && gen === r.gen) {
+    r.playing = false;
+    syncReplay();
+  }
+}
+
+function togglePlay() {
+  const r = state.replay;
+  if (!r) return;
+  r.playing = !r.playing;
+  // Play from the last frame starts over; playLoop shows idx + 1 first.
+  if (r.playing && r.idx >= r.frames - 1) r.idx = -1;
+  if (r.idx >= 0) syncReplay();
+  if (r.playing) {
+    tip.hidden = true;
+    playLoop();
+  }
+}
+
+function stepReplay(delta) {
+  const r = state.replay;
+  if (!r) return;
+  r.playing = false;
+  showFrame(r.idx + delta);
+}
+
+function wireReplay() {
+  $("rp-load").addEventListener("click", () => startReplay(false));
+  $("rp-play").addEventListener("click", togglePlay);
+  $("rp-back").addEventListener("click", () => stepReplay(-1));
+  $("rp-fwd").addEventListener("click", () => stepReplay(1));
+  $("rp-speed").addEventListener("change", () => {
+    if (state.replay) state.replay.speed = Number($("rp-speed").value) || 2;
+  });
+  $("rp-scrub").addEventListener("input", () => {
+    const r = state.replay;
+    if (!r) return;
+    r.playing = false;
+    showFrame(Number($("rp-scrub").value));
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!state.replay) return;
+    const target = event.target;
+    if (target && (target.closest("input, select, textarea, button") || target.isContentEditable)) return;
+    if (event.key === " ") {
+      event.preventDefault();
+      togglePlay();
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      stepReplay(-1);
+    } else if (event.key === "ArrowRight") {
+      event.preventDefault();
+      stepReplay(1);
+    }
+  });
 }
 
 function wire() {
@@ -953,11 +1263,17 @@ function wire() {
       state.model = Number(button.dataset.model);
       syncControls();
       persist();
-      load("model");
+      if (state.replay) {
+        state.replay.cache.clear();
+        showFrame(state.replay.idx);
+      } else {
+        load("model");
+      }
     });
   });
   document.querySelectorAll("#mode-toggle button").forEach((button) => {
     button.addEventListener("click", () => {
+      stopReplay();
       state.mode = button.dataset.mode;
       syncControls();
       persist();
@@ -965,6 +1281,7 @@ function wire() {
     });
   });
   $("exchange").addEventListener("change", () => {
+    stopReplay();
     state.exchange = $("exchange").value;
     state.timeFull = true;
     state.priceDirty = false;
@@ -973,6 +1290,7 @@ function wire() {
     load("exchange");
   });
   $("range").addEventListener("change", () => {
+    stopReplay();
     state.range = $("range").value;
     if (!barFits(state.range, state.bar)) state.bar = "";
     state.timeFull = true;
@@ -982,18 +1300,21 @@ function wire() {
     load("range");
   });
   $("bar").addEventListener("change", () => {
+    stopReplay();
     state.bar = barFits(state.range, $("bar").value) ? $("bar").value : "";
     syncControls();
     persist();
     load("bar");
   });
   $("asof-input").addEventListener("change", () => {
+    stopReplay();
     const text = $("asof-input").value;
     state.asof = text ? parseCotInput(text) : null;
     syncControls();
     load("asof");
   });
   $("live").addEventListener("click", () => {
+    stopReplay();
     state.asof = null;
     syncControls();
     load("live");
@@ -1002,6 +1323,7 @@ function wire() {
   const commitCoin = () => {
     const next = coin.value.trim().toUpperCase();
     if (!next || next === state.coin) return;
+    stopReplay();
     state.coin = next;
     coin.value = next;
     state.timeFull = true;
@@ -1041,6 +1363,7 @@ function wire() {
     requestDraw();
   });
   $("auto").addEventListener("change", () => setAuto(Number($("auto").value) || 0));
+  wireReplay();
   $("fit").addEventListener("click", () => {
     if (!state.data) return;
     state.view.lo = state.data.price_view[0];
