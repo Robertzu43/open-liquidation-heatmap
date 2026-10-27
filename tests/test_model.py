@@ -140,15 +140,25 @@ class ModelTests(unittest.TestCase):
         self.assertIn("BTC", analysis["summary"])
 
     def test_levels_survive_the_bar_that_opened_them(self):
-        # OI rises between bar 0 and bar 1 prints, so it opened during bar 0.
-        # Bar 0 wicks 2% down; bar 1 and 2 are flat.
-        price = np.full(3, 100.0)
-        low = np.array([98.0, 99.95, 99.95])
-        high = np.full(3, 100.05)
+        # OI rises print0->print1, so positions opened during flat bar 0 (about 100).
+        # Bar 1 rallies; its low of 103.5 must not sweep 60x longs opened at 100.
+        price = np.array([100.0, 105.0, 105.0])
+        high = np.array([100.05, 105.05, 105.05])
+        low = np.array([99.95, 103.5, 104.95])
         oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0])
         heat = build_heatmap(_series(price, oi, high=high, low=low), 1)
-        self.assertAlmostEqual(float(heat.long_heat[:, 2].sum()), 500_000.0, delta=5_000)
         self.assertGreater(float(heat.profile_long_tiers[3].sum()), 0.0)  # 60x tier kept
+        self.assertAlmostEqual(float(heat.long_heat[:, 2].sum()), 500_000.0, delta=5_000)
+
+    def test_entry_falls_back_to_previous_close_when_range_missing(self):
+        price = np.array([100.0, 110.0, 110.0])
+        high = np.array([np.nan, 110.05, 110.05])
+        low = np.array([97.0, 109.95, 109.95])
+        oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0])
+        heat = build_heatmap(_series(price, oi, high=high, low=low), 1)
+        expected = liq_price_long(100.0, 5)
+        peak = heat.centers[np.argmax(heat.profile_long_tiers[0])]
+        self.assertLess(abs(peak - expected) / expected, 0.01)
 
     def test_entry_is_previous_bar_typical_price(self):
         price = np.array([100.0, 110.0, 110.0])
