@@ -1,63 +1,74 @@
 # Reuse from the strategy repositories
 
-Audit date: 2026-10-27.
+Audit date: 2026-10-27. Read-only. Nothing was cloned, committed, or pushed on either source repository.
 
-Requested sources, read-only:
+Both repositories are private. They are readable with Robert's GitHub account. The GitHub App credential on this cloud VM is installed only on `open-liquidation-heatmap`, so a token local to the VM returns 404 for them. That is why an earlier draft of this note reported the trees as missing. This revision replaces that draft with the inventory from the branches below.
 
-- https://github.com/Robertzu43/crypto-strategy-lab
-- https://github.com/Robertzu43/liquidation-strategy-research
-
-Nothing was cloned, forked, committed, or pushed on either repository. This note does not modify them.
-
-## Access
-
-Both paths are invisible to this run. The checks were:
-
-| Check | `crypto-strategy-lab` | `liquidation-strategy-research` |
+| Repository | Branch to read | What that branch contains |
 | --- | --- | --- |
-| `gh api repos/Robertzu43/<name>` | HTTP 404 | HTTP 404 |
-| `gh repo view Robertzu43/<name>` | GraphQL: could not resolve the repository | GraphQL: could not resolve the repository |
-| `git ls-remote` on the public HTTPS URL | `repository not found` | `repository not found` |
-| Unauthenticated fetch of the GitHub page | HTTP 404 | HTTP 404 |
-| Name present in `GET /users/Robertzu43/repos?per_page=100&type=all` | No | No |
+| [crypto-strategy-lab](https://github.com/Robertzu43/crypto-strategy-lab) | `feat/kronos-strategy` | Includes `feat/slice1-flush`. Take the data client and the data-quality helpers. Leave the Kronos study and the flush strategy. |
+| [liquidation-strategy-research](https://github.com/Robertzu43/liquidation-strategy-research) | `feature/robust-strategy-lab` | Take the pressure model, `models.py`, and the public download scripts. Leave the CoinGlass notes and `real-trades/`. |
 
-The GitHub credential on this run is the Cursor integration. It can list Robertzu43's public repositories. GitHub returns the same not-found response for a private repository when the caller was not granted access, so the two possibilities are not separable from here:
+## License gate
 
-1. No repository exists at that path.
-2. A private repository exists there, and this credential cannot read it.
+Neither repository has a `LICENSE` file yet. This heatmap is MIT. Do not copy any module, test, or script into it until Robert confirms an MIT license (or another license that can sit inside this MIT tree) on the source commit being ported. A private repo without a license is all-rights-reserved by default. Reading it for this audit is not permission to redistribute the code.
 
-Either way, no tree, file, function, or notebook was available to review. A web search for the two names did not turn up a public copy under Robertzu43. Other people publish unrelated repositories that happen to be named `crypto-strategy-lab`. Those were not audited. They are not the repositories this task named, and porting from them would launder someone else's project into this one.
+## Reusable from crypto-strategy-lab
 
-The public repository list for the account, as returned on this run, includes `open-liquidation-heatmap` and does not include either strategy repository. There is no local checkout of them on this machine.
+Branch: `feat/kronos-strategy` (this branch includes `feat/slice1-flush`). Port individual files. Do not merge the branch. Merging it would bring the Kronos study and the killed flush strategy along with the useful data code.
 
-## Inventory
+### `crypto_lab/data.py`
 
-No module can be listed, because none could be opened.
+Binance public-archive client. It caches downloads, retries failed requests, and checks checksums.
 
-| Kind of code the heatmap might reuse | Path | What it does | Quality | Port? |
-| --- | --- | --- | --- | --- |
-| Market-data fetchers | not readable | unknown | unknown | no |
-| Liquidation-price math | not readable | unknown | unknown | no |
-| Backtests | not readable | unknown | unknown | no |
-| Plotting | not readable | unknown | unknown | no |
-| Signals built on liquidation levels | not readable | unknown | unknown | no |
+This is the fetcher the heatmap should port first. Windows past about 30 days cannot be served by `GET /futures/data/openInterestHist`; they need the public `data.binance.vision` metric and kline archives, and those archives are zip files that fail quietly when a download is truncated. Cache, retries, and checksums are the difference between a 90-day map and a corrupted one. Keep the client pointed at the public archive. Do not add API keys, and do not generalize it into a trading client.
 
-There is no quality note to write about unseen code, and there is no function worth copying on the evidence of this pass.
+### `crypto_lab/events.py`, data-quality helpers only
+
+Port these helpers:
+
+| Symbol | Role in the heatmap |
+| --- | --- |
+| `to_5m` | Put open interest and candles on the 5-minute grid the Binance metrics archive already uses. |
+| `_asof` | Align a slower series onto that grid by the last observation available at each bar. |
+| `taker_share` | Taker-buy share for the long/short tilt described in [HOW_IT_WORKS.md](HOW_IT_WORKS.md). |
+| gap guard | Stop the book when timestamps are missing, instead of treating a hole as a real open-interest change. A zero or missing print must not scale the whole map to nothing. |
+
+Do not port `detect()`. It belongs to the flush strategy, which is killed. The helpers above are data quality. `detect()` is a strategy.
+
+### `diagnostics.timestamp_check`, and the tests
+
+`diagnostics.timestamp_check` checks that archive timestamps line up with the bar grid before any liquidation price is computed. Port it with the tests that cover `to_5m`, `_asof`, `taker_share`, the gap guard, the archive client, and the timestamp check. The tests are the contract. Porting the helpers without them will let a later edit look one bar into the future or drop a gap.
+
+## Reusable from liquidation-strategy-research
+
+Branch: `feature/robust-strategy-lab`.
+
+| Path | Why it is on the port list |
+| --- | --- |
+| `liquidation/pressure.py` | Liquidation-pressure signal. Port it only as a consumer of the estimated book this heatmap builds from public open interest. It has to keep the same caveat as the map: a bright cell is an estimated trigger, not a resting order and not a price target. |
+| `models.py` | Liquidation model code on this branch. Port the price and book math that is consistent with the isolated formula in [HOW_IT_WORKS.md](HOW_IT_WORKS.md). Re-read the file at the license gate and drop anything that hard-codes a vendor's levels. |
+| `scripts/download_*.py` | Download scripts for the public inputs. Use them as offline archive builders next to `crypto_lab/data.py`, after a file-by-file check that each one hits a public exchange archive and does not import `free_notes`, `free_path`, or `real-trades`. |
+
+## Explicitly excluded
+
+Do not port any of the following, even though they live on the same branches as the files above.
+
+| Path or body of work | Why it stays out |
+| --- | --- |
+| `liquidation/free_notes.py` | Records CoinGlass chart observations as data. This heatmap does not scrape CoinGlass, does not reverse-engineer it, and does not use its data. |
+| `liquidation/free_path.py` | Same exclusion. Chart observations from CoinGlass are not a public-API input. |
+| `real-trades/` | Personal trading data. Not a market-data source and not something to publish inside this repo. |
+| Flush strategy, including `detect()` in `crypto_lab/events.py` | Killed. `feat/slice1-flush` is inside `feat/kronos-strategy` only so the data helpers on that line of history can be read. The strategy itself is not reused. |
+| Kronos study | Not part of the heatmap. Do not port the study, its notebooks, or its model weights because they share a branch with `crypto_lab/data.py`. |
 
 ## Porting plan
 
-Do not block the heatmap on these two repositories. The methodology it needs is already public and is written up in [HOW_IT_WORKS.md](HOW_IT_WORKS.md): exchange liquidation formulas, open-interest history, and the published reconstruction methods. Waiting on an unreadable tree does not improve that.
+The order is fixed by the license and by what the heatmap can run without the strategy code.
 
-Do not fill the gap by cloning a similarly named repository from another owner.
-
-When either URL becomes readable to a later pass (public, or this account granted read access), redo the audit from the tree and only then name files. The pass should look for the items below, in this order, and reject the rest. These are search targets, not files that were found.
-
-1. **Contract-denominated open interest, with pagination.** A fetcher that diffs `sumOpenInterest` (Binance, one side, base-asset units), refuses to diff `sumOpenInterestValue`, and for Bybit uses `singleOpenInterest` rather than the two-sided `openInterest`. For windows past Binance's 30-day REST cap, a reader of `data.binance.vision` `futures/um/daily/metrics` plus the kline archives. Skip any client that needs an API key to do this; the public endpoints do not.
-2. **A liquidation-price function with a fixed test vector.** Isolated linear, `cum = 0`, wallet equal to initial margin: long `entry × (1 − 1/L) / (1 − MMR)`. A useful test is entry 100,000, leverage 10, MMR 0.004, long price 90,361.45. Bracket tables should be inputs, not constants baked into the formula. Drop leverages above the contract's bracket-1 maximum and renormalize the weights.
-3. **Side split and erasure.** Taker-buy share from the kline, the `min(1, 2b)` tilt or an equally explicit alternative, proportional scaling on open-interest declines, and erasure of bins the mark-price range has traded through. New positions should not be erased by the same bar that opened them. Zero or negative open-interest prints should be treated as missing.
-4. **A plot that states its normalization.** One scale for the whole grid, sequential colormap, colorbar labeled as estimated liquidation notional. Carry the book forward so a level is a horizontal band, not a single-column deposit, if the chart is meant to be a stock of surviving risk.
-5. **Signals and backtests last, and only if they are explicit about the estimate.** A strategy that treats a bright cell as a resting order, or as a price target, contradicts the public evidence summarized in HOW_IT_WORKS.md (weak acceleration, no magnet). Prefer research that joins the estimated book to subsequent open-interest changes and to the throttled liquidation feed, and that reports the leverage prior as a parameter. Leave execution, order routing, and key management where they are.
-
-Anything in those repositories that scrapes a heatmap vendor, replays a private endpoint, or ships that vendor's levels should not be ported. This heatmap is public-API only.
-
-If a later pass finds the repositories empty, or finds only unrelated strategy code with no liquidation math, the right outcome is still to port nothing and to keep building from the exchange documents.
+1. **License.** Robert adds or confirms MIT on both source commits. Until that confirmation, the list above is a reading list, not a diff.
+2. **Archive client.** Port `crypto_lab/data.py` into this repo's data layer. Keep cache, retries, and checksums. Target the public Binance vision metrics (`sum_open_interest`, not the USDT value) and klines, including taker-buy volume.
+3. **Alignment and tests.** Port `to_5m`, `_asof`, `taker_share`, the gap guard, and `diagnostics.timestamp_check`, plus their tests. Leave `detect()` behind. Wire taker share into the long/short tilt, and wire the gap guard so a missing or non-positive open-interest print does not wipe the book.
+4. **Download scripts.** Port `scripts/download_*.py` from `feature/robust-strategy-lab` only after each script is confirmed to use public exchange URLs. They should fill the cache the archive client reads. They should not be a second, unchecked downloader.
+5. **Model and pressure last.** Port `models.py` and `liquidation/pressure.py` once the public book exists. They sit downstream of that book. They do not replace it, and they do not become an order router.
+6. **Leave the exclusions on the source repos.** No `free_notes.py`, no `free_path.py`, no `real-trades/`, no flush strategy, no Kronos study. Do not push anything back to `crypto-strategy-lab` or `liquidation-strategy-research`.
