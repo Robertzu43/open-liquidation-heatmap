@@ -6,6 +6,8 @@ import argparse
 import gzip
 import json
 import logging
+import threading
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -147,15 +149,25 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
-def main(argv: list[str] | None = None) -> None:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Serve the open liquidation heatmap")
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--host", default="127.0.0.1", help="address to bind (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args(argv)
+    parser.add_argument("--open", action="store_true", help="open the page in a browser once the server is listening")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
-    print(f"Open liquidation heatmap at http://127.0.0.1:{args.port}", flush=True)
+    url = f"http://127.0.0.1:{server.server_address[1]}"
+    print(f"Open liquidation heatmap at {url}", flush=True)
+    if args.open:
+        timer = threading.Timer(0.2, webbrowser.open, args=(url,))
+        timer.daemon = True
+        timer.start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

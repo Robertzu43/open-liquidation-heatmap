@@ -118,12 +118,12 @@ Series for the short ranges are cached briefly. Longer ranges are cached longer.
 - `GET /api/status` — models, ranges, default view.
 - `GET /api/symbols` — the coin list and venues.
 
-The server is the Python standard library `ThreadingHTTPServer` on `0.0.0.0:8765`. JSON responses are gzip-compressed when the client asks.
+The server is the Python standard library `ThreadingHTTPServer` on `127.0.0.1:8765` by default (`--host` changes it, `--open` opens the page). JSON responses are gzip-compressed when the client asks.
 
 ## Tests
 
 ```bash
-python -m unittest tests.test_model -v
+python -m pytest
 ```
 
 The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. Parser and combine tests do not touch the network.
