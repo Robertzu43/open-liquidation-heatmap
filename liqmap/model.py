@@ -325,6 +325,12 @@ class Heatmap:
     profile_long: np.ndarray
     profile_short: np.ndarray
     analysis: dict
+    # Per leverage tier: (tiers, bins, bars) float32, and the latest column (tiers, bins).
+    tiers: tuple[int, ...] = ()
+    long_tiers: np.ndarray | None = None
+    short_tiers: np.ndarray | None = None
+    profile_long_tiers: np.ndarray | None = None
+    profile_short_tiers: np.ndarray | None = None
 
 
 def _nearest_bin(centers: np.ndarray, price: float) -> int:
@@ -485,12 +491,16 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
     edges = np.linspace(pad_lo, pad_hi, n_bins + 1)
     centers = (edges[:-1] + edges[1:]) / 2.0
 
-    long_book = np.zeros(n_bins, dtype=np.float64)
-    short_book = np.zeros(n_bins, dtype=np.float64)
-    long_heat = np.zeros((n_bins, n), dtype=np.float64)
-    short_heat = np.zeros((n_bins, n), dtype=np.float64)
     kernel = tuple(spec["kernel"])
     weights = spec["weights"]
+    tiers = tuple(int(lev) for lev, _weight in weights)
+    # One book per leverage tier; the totals are their sums.
+    long_book = np.zeros((len(tiers), n_bins), dtype=np.float64)
+    short_book = np.zeros((len(tiers), n_bins), dtype=np.float64)
+    long_heat = np.zeros((n_bins, n), dtype=np.float64)
+    short_heat = np.zeros((n_bins, n), dtype=np.float64)
+    long_tiers = np.zeros((len(tiers), n_bins, n), dtype=np.float32)
+    short_tiers = np.zeros((len(tiers), n_bins, n), dtype=np.float32)
     use_flow = bool(spec["flow"])
 
     oi = np.where(np.isfinite(series.oi_usd), series.oi_usd, np.nan)
@@ -541,19 +551,21 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
             add_short += seasoning * (1.0 - share)
 
         if add_long > 0 or add_short > 0:
-            for lev, weight in weights:
+            for tier, (lev, weight) in enumerate(weights):
                 if add_long > 0:
-                    _deposit(long_book, _nearest_bin(centers, liq_price_long(entry, lev)), add_long * weight, kernel)
+                    _deposit(long_book[tier], _nearest_bin(centers, liq_price_long(entry, lev)), add_long * weight, kernel)
                 if add_short > 0:
-                    _deposit(short_book, _nearest_bin(centers, liq_price_short(entry, lev)), add_short * weight, kernel)
+                    _deposit(short_book[tier], _nearest_bin(centers, liq_price_short(entry, lev)), add_short * weight, kernel)
 
-        long_heat[:, i] = long_book
-        short_heat[:, i] = short_book
+        long_tiers[:, :, i] = long_book
+        short_tiers[:, :, i] = short_book
+        long_heat[:, i] = long_book.sum(axis=0)
+        short_heat[:, i] = short_book.sum(axis=0)
 
         low_i = float(series.low[i])
         high_i = float(series.high[i])
-        long_book[int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
-        short_book[: int(np.searchsorted(centers, high_i, side="right"))] = 0.0
+        long_book[:, int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
+        short_book[:, : int(np.searchsorted(centers, high_i, side="right"))] = 0.0
 
         decay = float(spec["decay"])
         if decay != 1.0:
@@ -561,8 +573,8 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
             short_book *= decay
 
     spot = float(series.close[-1])
-    profile_long = long_book.copy()
-    profile_short = short_book.copy()
+    profile_long = long_book.sum(axis=0)
+    profile_short = short_book.sum(axis=0)
     return Heatmap(
         series=series,
         model_id=int(model_id),
@@ -572,6 +584,11 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
         profile_long=profile_long,
         profile_short=profile_short,
         analysis=analyze(centers, profile_long, profile_short, spot, series.coin),
+        tiers=tiers,
+        long_tiers=long_tiers,
+        short_tiers=short_tiers,
+        profile_long_tiers=long_book.copy(),
+        profile_short_tiers=short_book.copy(),
     )
 
 
