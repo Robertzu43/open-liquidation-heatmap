@@ -188,7 +188,7 @@ If contract open interest rose over the bar, the model assigns the new contracts
 - The typical price `(high + low + close) / 3`, which is what Blocklens uses.
 - A volume-weighted price, when trades or a VWAP are on hand.
 
-All of an hour's new size then shares one entry. Inside a 1-hour bar that traded a 2 percent range, the true entries were spread through the range, and the liquidation prices are spread by that same 2 percent times `(1 − 1/L) / (1 − MMR)`. For a 100× position the smearing is about 2 percent of a 0.6 percent distance, which is noise next to the bin. For a 5× position a 2 percent entry error is a tenth of the distance to liquidation, and it moves the band by roughly the entry error itself. Shorter bars reduce the error and multiply the number of rows.
+All of an hour's new size then shares one entry. Inside a 1-hour bar that traded a 2 percent range, the true entries were spread through the range, and the liquidation prices are spread by that same 2 percent times `(1 − 1/L) / (1 − MMR)`. For a 100× position at a 0.40 percent MMR that factor is 0.993976, so a 2 percent entry range moves the liquidation price by about 1.99 percent of price. That is 3.3 times the 0.602 percent distance to liquidation, or roughly eight 0.25 percent bins. For a 5× position a 2 percent entry error is a tenth of the distance to liquidation, and it moves the band by roughly the entry error itself. Shorter bars reduce the error and multiply the number of rows.
 
 ### Which side is the leveraged one
 
@@ -275,7 +275,7 @@ The distance formula is published by the exchange. The share of open interest th
 | [AlertaChart](https://www.alertachart.com/learn/liquidation-heatmap) | 10× 18%, 20× 22%, 25× 22%, 50× 18%, 75× 10%, 100× 10%. No 2×–5×. A 0.5 percent MMR in the additive formula. |
 | [Coinliqui](https://coinliqui.com/learn/liquidation-heatmap) | Three named profiles on 2×, 5×, 10×, 20×, 25×, 40×. Aggressive puts 24 percent at 25× and 22 percent at 40×. Balanced puts 27 percent at 10×. Conservative puts 23 percent at 2× and 32 percent at 5×. Nothing above 40×. Levels above a contract's own cap are redistributed. |
 
-A uniform prior across every integer from 2 to 125 would look like a high-leverage prior even if that was not the intent. Sixty of those integers lie between 50 and 125, and all of them land inside a 1.2 percent band around the entry. The single 2× bucket sits 50 percent away by itself. Equal weight per leverage is equal weight per price only after you account for how the formula compresses the top of the ladder.
+A uniform prior across every integer from 2 to 125 would look like a high-leverage prior even if that was not the intent. The integers from 50 through 125 inclusive number 76. At a 0.40 percent MMR their long distances run from 1.606 percent at 50× to 0.402 percent at 125×, so 50× sits outside 1.2 percent of the entry. The single 2× bucket sits 50 percent away by itself. Equal weight per leverage is equal weight per price only after you account for how the formula compresses the top of the ladder.
 
 Third-party-calibrated weights, including the Blocklens row, are someone else's fit to someone else's picture. They must not become this repository's defaults. A default here has to be an assumption this project states on its own. The weights currently hardcoded in `heatmap.py` are described in [Implementation status](#implementation-status); they are not that fit, and they are not a claim that 10×/20×/50×/100× is the right prior.
 
