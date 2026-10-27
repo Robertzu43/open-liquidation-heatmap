@@ -64,6 +64,21 @@
           <option value="2y">2 year</option>
         </select>
       </label>
+      <label class="field" id="bar-field">Bar
+        <select id="bar">
+          <option value="" selected>Auto</option>
+          <option value="5m">5m</option>
+          <option value="15m">15m</option>
+          <option value="1h">1h</option>
+          <option value="4h">4h</option>
+          <option value="12h">12h</option>
+          <option value="1d">1d</option>
+        </select>
+      </label>
+      <label class="field" id="asof-field">As of (COT)
+        <input id="asof-input" type="datetime-local" step="300">
+      </label>
+      <button type="button" id="live" class="live-btn" title="Back to the live map">Live</button>
       <div class="icon-btns">
         <button type="button" id="refresh" title="Refresh" aria-label="Refresh">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
@@ -76,6 +91,26 @@
         </button>
       </div>
       <div class="swatches" id="themes" role="group" aria-label="Color theme"></div>
+    </div>
+
+    <div class="player" id="player" role="group" aria-label="Replay">
+      <label class="field" id="to-field">To (COT)
+        <input id="to-input" type="datetime-local" step="300">
+      </label>
+      <button type="button" id="rp-load" class="live-btn" title="Load a replay from As of to To">Load replay</button>
+      <button type="button" id="rp-back" class="live-btn" aria-label="Step back one bar" title="Step back (←)">◀</button>
+      <button type="button" id="rp-play" class="live-btn" aria-label="Play" title="Play / pause (Space)">Play</button>
+      <button type="button" id="rp-fwd" class="live-btn" aria-label="Step forward one bar" title="Step forward (→)">▶</button>
+      <label class="field slim">Speed
+        <select id="rp-speed">
+          <option value="1">1 bar/s</option>
+          <option value="2" selected>2 bars/s</option>
+          <option value="5">5 bars/s</option>
+          <option value="10">10 bars/s</option>
+        </select>
+      </label>
+      <input id="rp-scrub" type="range" min="0" max="0" value="0" aria-label="Replay position">
+      <span id="rp-time" class="rp-time">Set As of, then Load replay</span>
     </div>
 
     <div class="sub">

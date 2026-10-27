@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from liqmap.data import DataError
-from liqmap.service import load_heatmap, status_payload, symbols_payload
+from liqmap.service import ReplayExpired, levels_payload, load_heatmap, replay_payload, status_payload, symbols_payload
 
 log = logging.getLogger("liqmap.server")
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -43,6 +43,12 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/api/heatmap":
                 self._heatmap(parsed.query)
                 return
+            if parsed.path == "/api/levels":
+                self._levels(parsed.query)
+                return
+            if parsed.path == "/api/replay":
+                self._replay(parsed.query)
+                return
             if parsed.path == "/api/status":
                 self._send_json(status_payload())
                 return
@@ -50,6 +56,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(symbols_payload())
                 return
             self._static(parsed.path)
+        except ReplayExpired as exc:
+            self._send_json({"error": str(exc), "replay_expired": True}, status=409)
         except DataError as exc:
             self._send_json({"error": str(exc)}, status=400)
         except BrokenPipeError:
@@ -58,20 +66,38 @@ class Handler(BaseHTTPRequestHandler):
             log.exception("request failed")
             self._send_json({"error": "The server failed while building this map."}, status=500)
 
-    def _heatmap(self, query: str) -> None:
+    @staticmethod
+    def _params(query: str):
         params = parse_qs(query, keep_blank_values=False)
-        def one(name: str, default: str) -> str:
+
+        def one(name: str, default: str = "") -> str:
             values = params.get(name)
             return values[0] if values else default
 
-        payload = load_heatmap(
+        return one
+
+    def _map_args(self, one) -> tuple:
+        return (
             one("exchange", "okx"),
             one("symbol", "BTC"),
             one("range", "24h"),
             one("model", "1"),
             one("mode", "pair"),
+            one("asof"),
+            one("bar"),
+            one("replay") == "1",
         )
-        self._send_json(payload)
+
+    def _heatmap(self, query: str) -> None:
+        self._send_json(load_heatmap(*self._map_args(self._params(query))))
+
+    def _levels(self, query: str) -> None:
+        one = self._params(query)
+        self._send_json(levels_payload(*self._map_args(one), one("t"), one("price")))
+
+    def _replay(self, query: str) -> None:
+        one = self._params(query)
+        self._send_json(replay_payload(one("symbol", "BTC"), one("range", "24h"), one("bar"), one("from"), one("to")))
 
     def _static(self, url_path: str) -> None:
         if url_path in {"", "/"}:

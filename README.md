@@ -48,7 +48,10 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Crosshair | Price, time, estimated liquidity, and the candle. |
 | Zoom / pan | Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets. Fit uses the traded range. Wide shows the full model price domain. |
 | Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
-| Auto-refresh | Off, 30s, 1m, or 5m. |
+| Auto-refresh | Off, 30s, 1m, or 5m. Paused while you look at a past moment. |
+| As of / Bar | Binance pair only. Pick any past moment since 2020-09-01 (COT) and any bar from 5m to 1d, up to 3,000 bars per view. "Live" returns to now. |
+| Replay | Binance pair only. Set As of (and optionally To), then Load replay. Step, play at up to 1/2/5/10 bars per second, or scrub. Each frame is the same map the page shows for that moment. The first load of a long span downloads one archive file per day. Space plays or pauses; the arrow keys step. |
+| Leverage | Hover any cell to see which leverage tiers make up its estimate. With Liquidation map on, the side bars stack by tier, with cumulative long and short lines from the current price. |
 
 Settings are stored in `localStorage`.
 
@@ -108,6 +111,10 @@ Series for the short ranges are cached briefly. Longer ranges are cached longer.
 ### HTTP API
 
 - `GET /api/heatmap?exchange&symbol&range&model&mode` — heatmap JSON. Price grids are little-endian float32, base64. `heat` is row-major with the price bin changing slowest.
+  - `asof` (Binance pair only): unix seconds, or ISO-8601 with a zone. The map ends at the last bar that had closed by then, and nothing after it is read. Older windows come from the public archive, cached under `.cache/`, so a period is downloaded once.
+  - `bar` (Binance pair only): `5m`, `15m`, `1h`, `4h`, `12h`, or `1d`. Empty keeps the range's default.
+- `GET /api/replay?symbol&range&bar&from&to` — load a replay span once (Binance pair). Frames are `/api/heatmap` with `asof` and `replay=1`. They never call an exchange, and a frame whose span has expired answers 409.
+- `GET /api/levels?<map query>&t&price` — long and short USD per leverage tier at one bar open and price.
 - `GET /api/status` — models, ranges, default view.
 - `GET /api/symbols` — the coin list and venues.
 
