@@ -166,7 +166,7 @@ def public_model(model_id: int) -> dict:
         "mmr": MMR,
         "long_formula": "entry * (1 - 1/leverage) / (1 - MMR)",
         "short_formula": "entry * (1 + 1/leverage) / (1 + MMR)",
-        "entry": "close of the candle whose open time is nearest the open-interest print",
+        "entry": "typical price (high + low + close) / 3 of the bar the open-interest change happened in",
     }
 
 
