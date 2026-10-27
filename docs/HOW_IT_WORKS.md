@@ -415,7 +415,7 @@ Put the reasons in one place.
 - assigns half of each open-interest increase to longs and half to shorts, with no taker-share tilt,
 - deposits that notional only into the time column of the open: it does not carry levels forward, sweep or fade them, or scale them when open interest falls,
 - drops any liquidation price outside `0.95 * min(low)` … `1.05 * max(high)` of the loaded candles, so levels outside that band are silently dropped,
-- takes the entry as the close of the kline whose `open_time` is nearest the open-interest timestamp, which looks one candle ahead,
+- matches each open-interest timestamp to the nearest candle by `open_time` and uses that bar's close as the entry price, depositing the heat in that bar's column. Whether that candle is the one the reading belongs to depends on how the exchange aligns open-interest timestamps with candle opens; that is an alignment caveat, not a lookahead step in the script,
 - and sets the color ceiling at the 95th percentile of the positive cells.
 
 A reader comparing a stock-style heatmap to that script should expect different pictures from the same data. The script is still a check of the arithmetic: its long formula is `entry × (1 − 1/L) / (1 − MMR)`, the cum=0 isolated form at a fixed 0.50% MMR.
