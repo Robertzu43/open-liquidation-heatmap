@@ -1,5 +1,5 @@
 # Shared by local `streamlit run`, Community Cloud, and the Docker image.
-# The container entrypoint sets the port from $PORT (7860 on Hugging Face).
+# The container entrypoint sets the port from $PORT (default 7860).
 
 [browser]
 gatherUsageStats = false

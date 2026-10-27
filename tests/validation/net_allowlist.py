@@ -6,7 +6,8 @@ tests open sockets only to this list.
 
 Venues are Binance, Bybit, and OKX. ``data.binance.vision`` is Binance's
 public historical-data archive (no API key), for when ``fapi.binance.com``
-returns HTTP 451. A fourth exchange is not a heatmap source.
+returns HTTP 451. Websocket hosts stay off this list until a non-US
+recorder exists. A fourth exchange is not a heatmap source.
 """
 
 from __future__ import annotations

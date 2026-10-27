@@ -1,4 +1,4 @@
-# Streamlit image for self-hosting and Hugging Face Spaces (port 7860).
+# Streamlit image for local runs and Render. Listens on $PORT (default 7860).
 # Streamlit Community Cloud does not use this file; see docs/DEPLOY.md.
 # Market data is fetched at runtime from public Binance, Bybit, and OKX only.
 

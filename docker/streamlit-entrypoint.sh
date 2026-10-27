@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pick a Streamlit entrypoint and listen on $PORT (7860 on Hugging Face Spaces).
+# Pick a Streamlit entrypoint and listen on $PORT (default 7860).
 set -eu
 
 port="${PORT:-7860}"

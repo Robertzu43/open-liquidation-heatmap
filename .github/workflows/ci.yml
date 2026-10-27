@@ -1,8 +1,10 @@
 # Ruff, mypy, and an offline pytest run on every push and pull request.
-# Sockets are disabled for that run. A weekly job (and any manual run) hits
-# live public Binance, Bybit, and OKX endpoints. GitHub-hosted runners are
-# typically in the US, so an HTTP 451 or country block skips that exchange
-# instead of failing the job. See docs/DEPLOY.md.
+# Sockets are disabled for that run. A nightly job (and any manual run) hits
+# live public Binance, Bybit, and OKX REST endpoints from a GitHub-hosted
+# runner. Those runners are typically in the US, so HTTP 451 or 403 skips
+# that venue instead of failing the job. Live Binance and Bybit checks from
+# a non-US recorder come later. This job stays on ubuntu-latest. See
+# docs/DEPLOY.md.
 
 name: CI
 
@@ -10,8 +12,8 @@ on:
   push:
   pull_request:
   schedule:
-    # Monday 06:17 UTC.
-    - cron: "17 6 * * 1"
+    # 06:17 UTC every day.
+    - cron: "17 6 * * *"
   workflow_dispatch:
 
 permissions:
@@ -122,8 +124,9 @@ jobs:
           RUN_NETWORK: "1"
           MPLBACKEND: Agg
         # pytest.ini still disables sockets. Each smoke test carries
-        # allow_hosts for the exchange allowlist, and skips on HTTP 451
-        # (Binance from US runners) or a Bybit country block.
+        # allow_hosts for the exchange allowlist, and skips a venue when
+        # every probe returns HTTP 451 or 403. Binance and Bybit live
+        # smoke from the recorder is a later job, not this runner.
         run: >
           pytest -q -ra
           tests/validation/test_public_endpoints.py

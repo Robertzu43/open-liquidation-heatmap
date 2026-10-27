@@ -15,6 +15,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -23,6 +24,12 @@ from tests.validation.net_allowlist import ALLOWED_EXCHANGE_HOSTS
 
 USER_AGENT = "open-liquidation-heatmap-qa/1.0"
 Json = dict[str, Any] | list[Any]
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+# GET /futures/data/openInterestHist: default 30, maximum 500 rows.
+# Only the latest 1 month of history is available.
+BINANCE_OPEN_INTEREST_HIST_MAX_ROWS = 500
+BINANCE_OPEN_INTEREST_HIST_HISTORY = "latest 1 month"
 
 
 @dataclass(frozen=True)
@@ -156,6 +163,51 @@ ENDPOINTS: tuple[Endpoint, ...] = (
 )
 
 
+def _fixture(name: str) -> Json:
+    return json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+
+
+def test_binance_fixtures_match_the_public_shape() -> None:
+    klines = _fixture("binance/klines.json")
+    _klines_binance(klines)
+    history = _fixture("binance/open_interest_hist.json")
+    _oi_binance(history)
+    assert isinstance(history, list)
+    assert len(history) <= BINANCE_OPEN_INTEREST_HIST_MAX_ROWS
+
+
+def test_binance_open_interest_hist_is_capped_at_500_rows_and_one_month() -> None:
+    """The public endpoint allows at most 500 rows and about one month."""
+    assert BINANCE_OPEN_INTEREST_HIST_MAX_ROWS == 500
+    assert "1 month" in BINANCE_OPEN_INTEREST_HIST_HISTORY
+    endpoint = next(item for item in ENDPOINTS if item.name == "openInterestHist")
+    assert int(dict(endpoint.params)["limit"]) <= BINANCE_OPEN_INTEREST_HIST_MAX_ROWS
+    deploy = (
+        Path(__file__).resolve().parents[2] / "docs" / "DEPLOY.md"
+    ).read_text(encoding="utf-8")
+    assert "500" in deploy
+    assert "latest 1 month" in deploy
+
+
+def test_okx_fixtures_match_the_public_shape() -> None:
+    _okx_candles(_fixture("okx/candles.json"))
+    _okx_oi(_fixture("okx/open_interest.json"))
+
+
+def test_okx_fixtures_sit_next_to_the_binance_fixtures() -> None:
+    assert (FIXTURES / "binance" / "klines.json").is_file()
+    assert (FIXTURES / "binance" / "open_interest_hist.json").is_file()
+    assert (FIXTURES / "okx" / "candles.json").is_file()
+    assert (FIXTURES / "okx" / "open_interest.json").is_file()
+
+
+def test_okx_shape_checks_reject_an_empty_or_partial_payload() -> None:
+    with pytest.raises(AssertionError):
+        _okx_candles({"code": "0", "data": []})
+    with pytest.raises((AssertionError, KeyError, IndexError, TypeError, ValueError)):
+        _okx_oi({"code": "0", "data": [{"instId": "BTC-USDT-SWAP"}]})
+
+
 def test_catalog_is_public_binance_bybit_okx_only() -> None:
     exchanges = {item.exchange for item in ENDPOINTS}
     assert exchanges == {"binance", "bybit", "okx"}
@@ -229,7 +281,9 @@ def _geo_skip_reason(exchange: str, blocked: list[ProbeResult]) -> str:
         "GitHub-hosted runners are typically in the US. "
         "fapi.binance.com returns HTTP 451 from US IPs, and Bybit often "
         "returns HTTP 403. This skip is not a healthy-endpoint result. "
-        "Host the demo in a region Binance and Bybit serve; see docs/DEPLOY.md."
+        "GitHub-hosted runners stay in the US. A Community Cloud demo uses "
+        "OKX plus data.binance.vision. Live Binance and Bybit smoke waits "
+        "for a non-US recorder; see docs/DEPLOY.md."
     )
 
 

@@ -2,6 +2,8 @@
 
 Manual pass for the Streamlit heatmap after the model rewrite is wired up. Run it against public Binance, Bybit, and OKX data. CoinGlass is out of scope: the page has no CoinGlass toggle, and the network panel shows no CoinGlass host.
 
+A Streamlit Community Cloud demo is in the United States, so Binance and Bybit REST answer HTTP 451 or 403. v0.1 on that host shows live OKX plus the `data.binance.vision` archive. Live Binance and Bybit need the planned non-US recorder. See `docs/DEPLOY.md`.
+
 Use one liquid symbol with a known trend, **BTCUSDT** (OKX: **BTC-USDT-SWAP**), and repeat a shorter pass on a quieter alt if the app offers one. Record the symbol, window, leverage filter, and exchanges with every screenshot.
 
 The model is an estimate from open interest and an assumed leverage distribution. These checks look for shape, side, and failure behavior. They do not ask the picture to match another vendor's heatmap.
@@ -58,7 +60,7 @@ The ladder runs from **2x through 125x** (2, 3, 5, 10, 20, 25, 50, 75, 100, 125,
 ## 6. Failure handling
 
 - [ ] An unknown symbol shows an error that names the symbol. The sidebar still accepts a new symbol.
-- [ ] One venue failing (timeout, HTTP 429, HTTP 451, or empty body) names that venue. The other venues still plot. HTTP 451 from Binance, or HTTP 403 from Bybit, means this demo is outside a region those venues serve (`docs/DEPLOY.md`). GitHub-hosted runners usually see that 451; it is a hosting limit, not a plotting bug.
+- [ ] One venue failing (timeout, HTTP 429, HTTP 451, or empty body) names that venue. The other venues still plot. HTTP 451 from Binance, or HTTP 403 from Bybit, on Community Cloud is the US hosting limit (`docs/DEPLOY.md`), not a plotting bug. The page keeps OKX and, for Binance history, `data.binance.vision`.
 - [ ] If Binance REST is geo-blocked, historical klines may come from `data.binance.vision`. That series is still Binance. The page does not substitute a different exchange.
 - [ ] A rate-limit response backs off. The UI does not sit in a spinner that never ends.
 - [ ] After an error, changing the window or the leverage filter works. The app is not stuck on the failed request.
