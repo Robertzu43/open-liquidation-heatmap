@@ -68,7 +68,7 @@ h1 { font-size: 22px; line-height: 1.2; margin: 0; font-weight: 620; letter-spac
   margin-bottom: 10px;
 }
 .models, .seg, .icon-btns, .zoom-btns, .swatches { display: flex; gap: 4px; align-items: center; }
-.tab, .seg button, .zoom-btns button, .icon-btns button {
+.tab, .seg button, .zoom-btns button, .icon-btns button, .live-btn {
   background: var(--bg-elev);
   border: 1px solid var(--line);
   color: var(--text);
@@ -96,6 +96,15 @@ h1 { font-size: 22px; line-height: 1.2; margin: 0; font-weight: 620; letter-spac
 .field input { width: 96px; text-transform: uppercase; }
 .field.slim select { min-width: 72px; }
 .field.disabled { opacity: 0.45; }
+.field #asof-input { width: 176px; text-transform: none; }
+.live-btn { align-self: flex-end; height: 34px; padding: 0 12px; }
+.live-btn:disabled { opacity: 0.45; cursor: default; }
+.player { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; margin: 4px 0 10px; }
+.player #to-input { width: 176px; text-transform: none; }
+.player #rp-scrub { flex: 1 1 200px; min-width: 120px; align-self: center; }
+.rp-time { color: var(--muted); font-size: 12px; align-self: center; font-variant-numeric: tabular-nums; }
+#tip .tiers { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+#tip .tier i { display: inline-block; width: 8px; height: 8px; margin-right: 5px; border-radius: 2px; }
 .icon-btns button { width: 36px; height: 34px; padding: 0; display: grid; place-items: center; }
 .icon-btns svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .icon-btns button:hover, .zoom-btns button:hover, .tab:hover, .seg button:hover { border-color: #8d7a45; }

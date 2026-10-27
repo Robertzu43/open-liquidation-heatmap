@@ -22,8 +22,8 @@ MODELS: dict[int, dict] = {
     1: {
         "id": 1,
         "name": "Wide clusters",
-        "blurb": "More weight on 5x–25x, so shelves sit further from price and stay until price trades through them.",
-        "weights": ((5, 0.12), (10, 0.28), (25, 0.30), (50, 0.20), (100, 0.10)),
+        "blurb": "Most weight on 50x–60x, with a far 5x tier. Shelves sit about 1–2% from price and stay until price trades through them.",
+        "weights": ((5, 0.12), (20, 0.10), (50, 0.25), (60, 0.53)),
         "decay": 1.0,
         "churn": 0.0,
         "kernel": (0.15, 0.70, 0.15),
@@ -32,8 +32,8 @@ MODELS: dict[int, dict] = {
     2: {
         "id": 2,
         "name": "Tight magnets",
-        "blurb": "More weight on 25x–100x, a little turnover from volume, and a slow fade. Shelves hug price.",
-        "weights": ((10, 0.08), (25, 0.22), (50, 0.35), (75, 0.20), (100, 0.15)),
+        "blurb": "Two tiers, 20x and 60x, a little turnover from volume, and a slow fade. Shelves hug price.",
+        "weights": ((20, 0.30), (60, 0.70)),
         "decay": 0.9992,
         "churn": 0.015,
         "kernel": (0.06, 0.24, 0.40, 0.24, 0.06),
@@ -325,6 +325,12 @@ class Heatmap:
     profile_long: np.ndarray
     profile_short: np.ndarray
     analysis: dict
+    # Per leverage tier, shape (tiers, bins): the latest column, and one requested column.
+    tiers: tuple[int, ...] = ()
+    profile_long_tiers: np.ndarray | None = None
+    profile_short_tiers: np.ndarray | None = None
+    long_tier_column: np.ndarray | None = None
+    short_tier_column: np.ndarray | None = None
 
 
 def _nearest_bin(centers: np.ndarray, price: float) -> int:
@@ -468,7 +474,7 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
     }
 
 
-def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Heatmap:
+def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_column: int | None = None) -> Heatmap:
     spec = MODELS.get(int(model_id))
     if spec is None:
         raise ValueError(f"unknown model {model_id}")
@@ -485,12 +491,15 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
     edges = np.linspace(pad_lo, pad_hi, n_bins + 1)
     centers = (edges[:-1] + edges[1:]) / 2.0
 
-    long_book = np.zeros(n_bins, dtype=np.float64)
-    short_book = np.zeros(n_bins, dtype=np.float64)
-    long_heat = np.zeros((n_bins, n), dtype=np.float64)
-    short_heat = np.zeros((n_bins, n), dtype=np.float64)
     kernel = tuple(spec["kernel"])
     weights = spec["weights"]
+    tiers = tuple(int(lev) for lev, _weight in weights)
+    # One book per leverage tier; the totals are their sums.
+    long_book = np.zeros((len(tiers), n_bins), dtype=np.float64)
+    short_book = np.zeros((len(tiers), n_bins), dtype=np.float64)
+    long_heat = np.zeros((n_bins, n), dtype=np.float64)
+    short_heat = np.zeros((n_bins, n), dtype=np.float64)
+    long_column = short_column = None
     use_flow = bool(spec["flow"])
 
     oi = np.where(np.isfinite(series.oi_usd), series.oi_usd, np.nan)
@@ -541,19 +550,22 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
             add_short += seasoning * (1.0 - share)
 
         if add_long > 0 or add_short > 0:
-            for lev, weight in weights:
+            for tier, (lev, weight) in enumerate(weights):
                 if add_long > 0:
-                    _deposit(long_book, _nearest_bin(centers, liq_price_long(entry, lev)), add_long * weight, kernel)
+                    _deposit(long_book[tier], _nearest_bin(centers, liq_price_long(entry, lev)), add_long * weight, kernel)
                 if add_short > 0:
-                    _deposit(short_book, _nearest_bin(centers, liq_price_short(entry, lev)), add_short * weight, kernel)
+                    _deposit(short_book[tier], _nearest_bin(centers, liq_price_short(entry, lev)), add_short * weight, kernel)
 
-        long_heat[:, i] = long_book
-        short_heat[:, i] = short_book
+        if i == tier_column:
+            long_column = long_book.copy()
+            short_column = short_book.copy()
+        long_heat[:, i] = long_book.sum(axis=0)
+        short_heat[:, i] = short_book.sum(axis=0)
 
         low_i = float(series.low[i])
         high_i = float(series.high[i])
-        long_book[int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
-        short_book[: int(np.searchsorted(centers, high_i, side="right"))] = 0.0
+        long_book[:, int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
+        short_book[:, : int(np.searchsorted(centers, high_i, side="right"))] = 0.0
 
         decay = float(spec["decay"])
         if decay != 1.0:
@@ -561,8 +573,8 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
             short_book *= decay
 
     spot = float(series.close[-1])
-    profile_long = long_book.copy()
-    profile_short = short_book.copy()
+    profile_long = long_book.sum(axis=0)
+    profile_short = short_book.sum(axis=0)
     return Heatmap(
         series=series,
         model_id=int(model_id),
@@ -572,6 +584,11 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360) -> Hea
         profile_long=profile_long,
         profile_short=profile_short,
         analysis=analyze(centers, profile_long, profile_short, spot, series.coin),
+        tiers=tiers,
+        profile_long_tiers=long_book.copy(),
+        profile_short_tiers=short_book.copy(),
+        long_tier_column=long_column,
+        short_tier_column=short_column,
     )
 
 

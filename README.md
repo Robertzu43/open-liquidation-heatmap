@@ -2,7 +2,7 @@
 
 An open estimate of a crypto perpetual **liquidation heatmap**. Bright shelves are prices where this model thinks leveraged positions would be forced out. The picture is built from public open interest and an assumed leverage mix.
 
-This project is **not** affiliated with CoinGlass. It does not scrape CoinGlass, call their private heatmap APIs, copy their code, or redistribute their data.
+This project is **not** affiliated with CoinGlass. It does not scrape CoinGlass, call their private heatmap APIs, copy their code, or redistribute their data. The leverage split of Models 1 and 2 was calibrated by eye against screenshots of their rendered chart; see [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#the-weights-are-the-model).
 
 Not financial advice. A shelf is a model, not a print of exchange positions.
 
@@ -48,7 +48,10 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Crosshair | Price, time, estimated liquidity, and the candle. |
 | Zoom / pan | Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets. Fit uses the traded range. Wide shows the full model price domain. |
 | Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
-| Auto-refresh | Off, 30s, 1m, or 5m. |
+| Auto-refresh | Off, 30s, 1m, or 5m. Paused while you look at a past moment. |
+| As of / Bar | Binance pair only. Pick any past moment since 2020-09-01 (COT) and any bar from 5m to 1d, up to 3,000 bars per view. "Live" returns to now. |
+| Replay | Binance pair only. Set As of (and optionally To), then Load replay. Step, play at up to 1/2/5/10 bars per second, or scrub. Each frame is the same map the page shows for that moment. The first load of a long span downloads one archive file per day. Space plays or pauses; the arrow keys step. |
+| Leverage | Hover any cell to see which leverage tiers make up its estimate. With Liquidation map on, the side bars stack by tier, with cumulative long and short lines from the current price. |
 
 Settings are stored in `localStorage`.
 
@@ -71,8 +74,8 @@ short = entry * (1 + 1/leverage) / (1 + MMR)
 
 | Model | Idea | Weights |
 | --- | --- | --- |
-| 1 Wide clusters | More weight on 5×–25×. Shelves sit further from price. No fade. | 5× 12%, 10× 28%, 25× 30%, 50× 20%, 100× 10% |
-| 2 Tight magnets | More weight on 25×–100×, a little volume churn, and a slow fade. | 10× 8%, 25× 22%, 50× 35%, 75× 20%, 100× 15% |
+| 1 Wide clusters | Most weight on 50×–60×, with a far 5× tier. Shelves sit about 1–2% from price. No fade. | 5× 12%, 20× 10%, 50× 25%, 60× 53% |
+| 2 Tight magnets | Two tiers, 20× and 60×, a little volume churn, and a slow fade. | 20× 30%, 60× 70% |
 | 3 Flow skew | Same family of tiers, but new positions follow taker buy/sell when that data exists. | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% |
 
 Models 1 and 2 split new open interest evenly between longs and shorts. Model 3 uses the taker buy fraction as the long share.
@@ -108,6 +111,10 @@ Series for the short ranges are cached briefly. Longer ranges are cached longer.
 ### HTTP API
 
 - `GET /api/heatmap?exchange&symbol&range&model&mode` — heatmap JSON. Price grids are little-endian float32, base64. `heat` is row-major with the price bin changing slowest.
+  - `asof` (Binance pair only): unix seconds, or ISO-8601 with a zone. The map ends at the last bar that had closed by then, and nothing after it is read. Older windows come from the public archive, cached under `.cache/`, so a period is downloaded once.
+  - `bar` (Binance pair only): `5m`, `15m`, `1h`, `4h`, `12h`, or `1d`. Empty keeps the range's default.
+- `GET /api/replay?symbol&range&bar&from&to` — load a replay span once (Binance pair). Frames are `/api/heatmap` with `asof` and `replay=1`. They never call an exchange, and a frame whose span has expired answers 409.
+- `GET /api/levels?<map query>&t&price` — long and short USD per leverage tier at one bar open and price.
 - `GET /api/status` — models, ranges, default view.
 - `GET /api/symbols` — the coin list and venues.
 

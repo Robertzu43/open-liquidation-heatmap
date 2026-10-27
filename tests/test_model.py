@@ -140,6 +140,28 @@ class ModelTests(unittest.TestCase):
         self.assertIn("BTC", analysis["summary"])
 
 
+class TierTests(unittest.TestCase):
+    def test_tier_books_sum_to_totals(self):
+        rng = np.random.default_rng(7)
+        price = 100 + np.cumsum(rng.normal(0, 0.4, 200))
+        oi = 1_000_000 + np.cumsum(rng.normal(0, 20_000, 200))
+        share = np.clip(0.5 + rng.normal(0, 0.1, 200), 0.05, 0.95)
+        series = _series(price, oi, share=share, high=price + 0.6, low=price - 0.6)
+        series.volume_usd = np.abs(rng.normal(0, 50_000, 200))
+        for model_id, spec in MODELS.items():
+            heat = build_heatmap(series, model_id)
+            self.assertEqual(heat.tiers, tuple(lev for lev, _w in spec["weights"]))
+            self.assertIsNone(heat.long_tier_column)
+            np.testing.assert_allclose(heat.profile_long_tiers.sum(axis=0), heat.profile_long, rtol=1e-9, atol=1e-6)
+            np.testing.assert_allclose(heat.profile_short_tiers.sum(axis=0), heat.profile_short, rtol=1e-9, atol=1e-6)
+            for column in (0, 57, 199):
+                one = build_heatmap(series, model_id, tier_column=column)
+                self.assertEqual(one.long_tier_column.shape, (len(one.tiers), len(one.centers)))
+                np.testing.assert_allclose(one.long_tier_column.sum(axis=0), heat.long_heat[:, column], rtol=1e-9, atol=1e-6)
+                np.testing.assert_allclose(one.short_tier_column.sum(axis=0), heat.short_heat[:, column], rtol=1e-9, atol=1e-6)
+            self.assertGreater(float(heat.long_heat.sum()), 0)
+
+
 class ParserTests(unittest.TestCase):
     def test_normalize_symbol(self):
         self.assertEqual(normalize_symbol("btc"), ("BTC", "BTCUSDT"))
