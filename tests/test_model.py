@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import base64
 import unittest
+from unittest import mock
 
 import numpy as np
 
+from liqmap import data
 from liqmap.data import (
     DataError,
     combine_series,
     fold_candles,
+    _parse_metrics_csv,
+    fetch_okx,
     fold_oi,
     is_stale,
     make_grid,
@@ -80,12 +84,97 @@ class ModelTests(unittest.TestCase):
 
     def test_open_interest_joins_the_nearest_candle_open(self):
         grid = np.array([0, 3_600_000, 7_200_000], dtype=np.int64)
-        early, _share = fold_oi([(600_000, 100.0, 0.5)], grid, 3_600_000)
+        early, _share, _base = fold_oi([(600_000, 100.0, 0.5, 2.0)], grid, 3_600_000)
         self.assertEqual(early[0], 100.0)
         self.assertTrue(np.isnan(early[1]))
-        later, _share = fold_oi([(3_000_000, 600.0, 0.5)], grid, 3_600_000)
+        later, _share, later_base = fold_oi([(3_000_000, 600.0, 0.5, 12.0)], grid, 3_600_000)
         self.assertTrue(np.isnan(later[0]))
         self.assertEqual(later[1], 600.0)
+        self.assertEqual(later_base[1], 12.0)
+
+    def test_price_move_with_flat_contracts_adds_nothing(self):
+        price = np.array([100.0, 105.0, 105.0])
+        base = np.full(3, 10_000.0)
+        s = _series(price, base * price)  # USD OI rises 5% with flat contracts
+        s.oi_base = base
+        heat = build_heatmap(s, 1)
+        self.assertAlmostEqual(float(heat.profile_long.sum() + heat.profile_short.sum()), 0.0, delta=1.0)
+
+    def test_zero_oi_print_is_missing_not_a_close(self):
+        price = np.full(4, 100.0)
+        base = np.array([100.0, 200.0, 0.0, 200.0])
+
+        def total(n):
+            s = _series(price[:n], base[:n] * price[:n])
+            s.oi_base = base[:n]
+            heat = build_heatmap(s, 1)
+            return float(heat.long_heat[:, n - 1].sum() + heat.short_heat[:, n - 1].sum())
+
+        self.assertGreater(total(2), 0.0)
+        self.assertAlmostEqual(total(4), total(2), delta=total(2) * 0.01)
+
+    def test_missing_coin_column_falls_back_to_usd_and_warns(self):
+        price = np.array([100.0, 100.0, 100.0])
+        s = _series(price, np.array([1e6, 2e6, 3e6]))
+        self.assertIsNone(s.oi_base)
+        heat = build_heatmap(s, 1)
+        total = float(heat.profile_long.sum() + heat.profile_short.sum())
+        self.assertAlmostEqual(total, 2e6, delta=2e6 * 0.01)
+        self.assertEqual(s.warnings.count("Open interest in coin units was unavailable; using USD value."), 1)
+        build_heatmap(s, 1)
+        self.assertEqual(len(s.warnings), 1)
+
+    def test_metrics_csv_reads_coin_open_interest(self):
+        text = (
+            "create_time,symbol,sum_open_interest,sum_open_interest_value,count_toptrader_long_short_ratio,"
+            "sum_toptrader_long_short_ratio,count_long_short_ratio,sum_taker_long_short_vol_ratio\n"
+            "2021-05-19 00:00:00,BTCUSDT,1000,40000000,1.5,1.2,1.0,1.0\n"
+        )
+        rows = _parse_metrics_csv(text)
+        self.assertEqual(len(rows), 1)
+        ts, usd, share, coins = rows[0]
+        self.assertEqual((ts, usd, coins), (1621382400000, 40000000.0, 1000.0))
+        self.assertAlmostEqual(share, 0.5)
+
+    def test_okx_open_interest_row_uses_coin_column(self):
+        grid = data._window(range_spec("12h"))
+        start = int(grid[0])
+        step = 300_000
+        candles = [[str(start + i * step), "100", "101", "99", "100", "1", "1", "1", "1"] for i in range(len(grid))]
+        row = [str(start + 5 * step), "123456", "1234.5", "45000000"]
+
+        def pages(path, params, *args):
+            if "open-interest-history" in path:
+                return [row, [str(start + 6 * step), "123457", "1235.5", "45100000"]]
+            if "candles" in path:
+                return candles
+            return []
+
+        with mock.patch.object(data, "_okx_pages", side_effect=pages):
+            loaded = fetch_okx("BTC", "BTCUSDT", range_spec("12h"))
+        series = loaded.series
+        i = int(np.flatnonzero(series.times == start + 5 * step)[0])
+        self.assertEqual(float(series.oi_base[i]), 1234.5)
+        self.assertEqual(float(series.oi_usd[i]), 45000000.0)
+
+    def test_aggregate_sums_coin_units(self):
+        grid = np.array([0, 3_600_000, 7_200_000], dtype=np.int64)
+
+        def part(base, exchange):
+            close = np.full(3, 100.0)
+            base = None if base is None else np.full(3, base, dtype=np.float64)
+            return MarketSeries(
+                times=grid.copy(), open=close, high=close + 1, low=close - 1, close=close,
+                volume_usd=np.ones(3), oi_usd=np.full(3, 1e4 if base is None else base[0] * 100.0),
+                long_share=np.full(3, 0.5), exchange=exchange, symbol="BTCUSDT", coin="BTC",
+                bar_seconds=3600, oi_base=base,
+            )
+
+        combined = combine_series([part(100.0, "okx"), part(50.0, "binance")], grid, 3600, "BTC")
+        self.assertEqual(list(combined.oi_base), [150.0, 150.0, 150.0])
+        # A venue without coin units must not be mixed with the others' coins.
+        mixed = combine_series([part(100.0, "okx"), part(None, "binance")], grid, 3600, "BTC")
+        self.assertTrue(np.isnan(mixed.oi_base).all())
 
     def test_liq_price_direction(self):
         entry = 100.0
@@ -145,8 +234,10 @@ class ModelTests(unittest.TestCase):
         price = np.array([100.0, 105.0, 105.0])
         high = np.array([100.05, 105.05, 105.05])
         low = np.array([99.95, 103.5, 104.95])
-        oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0])
-        heat = build_heatmap(_series(price, oi, high=high, low=low), 1)
+        base = np.array([10_000.0, 20_000.0, 20_000.0])  # contracts, so the rally adds nothing
+        s = _series(price, base * price, high=high, low=low)
+        s.oi_base = base
+        heat = build_heatmap(s, 1)
         self.assertGreater(float(heat.profile_long_tiers[3].sum()), 0.0)  # 60x tier kept
         self.assertAlmostEqual(float(heat.long_heat[:, 2].sum()), 500_000.0, delta=5_000)
 

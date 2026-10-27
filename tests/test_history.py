@@ -28,7 +28,7 @@ def _klines(start_ms, end_ms, bar_ms):
 
 def _metrics(start_ms, end_ms):
     # Open interest is the print's own timestamp, so a test can tell which print was kept.
-    return [(t, float(t), 0.5) for t in range(start_ms, end_ms, 300_000)]
+    return [(t, float(t), 0.5, float(t) / 100.0) for t in range(start_ms, end_ms, 300_000)]
 
 
 class WindowTests(unittest.TestCase):

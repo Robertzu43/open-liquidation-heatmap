@@ -292,6 +292,8 @@ class MarketSeries:
     bar_seconds: int
     note: str = ""
     warnings: list[str] = field(default_factory=list)
+    # Open interest in coin units, NaN when missing.
+    oi_base: np.ndarray | None = None
 
     def __post_init__(self) -> None:
         self.times = np.asarray(self.times, dtype=np.int64)
@@ -302,6 +304,10 @@ class MarketSeries:
         self.volume_usd = np.asarray(self.volume_usd, dtype=np.float64)
         self.oi_usd = np.asarray(self.oi_usd, dtype=np.float64)
         self.long_share = np.asarray(self.long_share, dtype=np.float64)
+        if self.oi_base is not None:
+            self.oi_base = np.asarray(self.oi_base, dtype=np.float64)
+            if len(self.oi_base) != len(self.oi_usd):
+                raise ValueError("market series columns must share one length")
         if not (
             len(self.times)
             == len(self.open)
@@ -503,6 +509,20 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
     use_flow = bool(spec["flow"])
 
     oi = np.where(np.isfinite(series.oi_usd), series.oi_usd, np.nan)
+    # Open interest in coins. A zero print is missing. Without a coin column, use USD value / close.
+    fallback = np.where(np.isfinite(oi) & (series.close > 0), oi / np.where(series.close > 0, series.close, 1.0), np.nan)
+    if series.oi_base is None:
+        coins = fallback
+        used_fallback = bool(np.isfinite(coins).any())
+    else:
+        given = np.asarray(series.oi_base, dtype=np.float64)
+        coins = np.where(np.isfinite(given), given, fallback)
+        used_fallback = bool((~np.isfinite(given) & np.isfinite(fallback)).any())
+    coins = np.where(coins > 0, coins, np.nan)
+    if used_fallback:
+        message = "Open interest in coin units was unavailable; using USD value."
+        if message not in series.warnings:
+            series.warnings.append(message)
     prev = np.nan
     for i in range(n):
         share = series.long_share[i]
@@ -513,13 +533,13 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
             share = 0.5
 
         cur = oi[i]
+        cur_coins = coins[i]
         delta = 0.0
-        if np.isfinite(cur) and np.isfinite(prev):
-            delta = float(cur - prev)
-            if prev > 0:
-                delta = float(np.clip(delta, -prev, prev))
-        if np.isfinite(cur):
-            prev = float(cur)
+        if np.isfinite(cur_coins) and np.isfinite(prev):
+            delta = float(cur_coins - prev)
+            delta = float(np.clip(delta, -prev, prev))
+        if np.isfinite(cur_coins):
+            prev = float(cur_coins)
 
         # The OI change printed at bar i opened during bar i-1, so price it there.
         entry = float("nan")
@@ -533,10 +553,11 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
         add_long = 0.0
         add_short = 0.0
         if delta > 0:
-            add_long += delta * share
-            add_short += delta * (1.0 - share)
+            added = delta * entry
+            add_long += added * share
+            add_short += added * (1.0 - share)
         elif delta < 0 and (long_book.sum() + short_book.sum()) > 0:
-            prev_oi = float(oi[i] - delta) if np.isfinite(oi[i]) else 0.0
+            prev_oi = float(cur_coins - delta) if np.isfinite(cur_coins) else 0.0
             frac = min(1.0, abs(delta) / prev_oi) if prev_oi > 0 else 1.0
             if use_flow:
                 long_book *= 1.0 - frac * (1.0 - share)
