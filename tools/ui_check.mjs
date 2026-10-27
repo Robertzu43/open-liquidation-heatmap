@@ -1,4 +1,4 @@
-// Headless check of the page: past view, replay, hover tiers, model switch, Live.
+// Headless check of the page: time zones, color scale, past view, replay, hover tiers, model switch, Live.
 // UI_BASE=http://127.0.0.1:8791 PLAYWRIGHT_CORE=/path/index.mjs CHROME=/path/chrome node tools/ui_check.mjs
 const { chromium } = await import(process.env.PLAYWRIGHT_CORE);
 const base = process.env.UI_BASE || "http://127.0.0.1:8791";
@@ -18,11 +18,32 @@ try {
   await page.selectOption("#exchange", "binance");
   await page.waitForTimeout(2500);
   await page.selectOption("#bar", "15m");
-  await page.fill("#asof-input", "2021-05-18T19:00");
+  await page.selectOption("#tz", "UTC");
+  const dst = await ev(() => {
+    state.tz = "America/New_York";
+    const out = { fallBack: parseZonedInput("2026-11-01T01:30"), gap: parseZonedInput("2026-03-08T02:30"), before: parseZonedInput("2026-03-08T01:30") };
+    state.tz = "UTC";
+    return out;
+  });
+  check("New York fall-back hour is its daylight instant", dst.fallBack === 1793511000, JSON.stringify(dst));
+  check("New York spring-forward gap maps to 01:30", dst.gap === 1772951400 && dst.before === 1772951400, JSON.stringify(dst));
+  await page.fill("#asof-input", "2021-05-19T00:00");
   await page.dispatchEvent("#asof-input", "change");
   await page.waitForTimeout(2500);
   check("past view loads", await ev(() => Boolean(state.data && state.data.asof)));
-  await page.fill("#to-input", "2021-05-20T19:00");
+  const scale = await ev(() => {
+    const L = state.layout, tick = L.ticks.find((t) => t.frac === 0.5);
+    return { at: tick && 1 - (tick.y - L.plotY) / (L.plotH - 1), want: Math.pow(0.5, state.gamma) };
+  });
+  check("color-bar 50% tick sits at 0.5^gamma", scale.at != null && Math.abs(scale.at - scale.want) < 1e-9, JSON.stringify(scale));
+  const zoneBefore = await ev(() => ({ asof: state.asof, axis: fmtAxis(state.data.times[0], true, false), input: $("asof-input").value }));
+  await page.selectOption("#tz", "America/New_York");
+  await page.waitForTimeout(300);
+  const zoneAfter = await ev(() => ({ asof: state.asof, axis: fmtAxis(state.data.times[0], true, false), input: $("asof-input").value }));
+  check("zone switch keeps As of and moves the axis", zoneAfter.asof === zoneBefore.asof && zoneAfter.axis !== zoneBefore.axis && zoneAfter.input === "2021-05-18T20:00", JSON.stringify({ zoneBefore, zoneAfter }));
+  await page.selectOption("#tz", "UTC");
+  await page.waitForTimeout(300);
+  await page.fill("#to-input", "2021-05-21T00:00");
   await page.click("#rp-load");
   await page.waitForFunction(() => state.replay && state.data && state.data.replay, null, { timeout: 120000 });
   const r0 = await ev(() => ({ frames: state.replay.frames, asof: state.data.asof }));
@@ -61,6 +82,12 @@ try {
   await page.click("#live");
   await page.waitForTimeout(4000);
   check("Live leaves replay", await ev(() => !state.replay && state.data && !state.data.asof));
+  const sent = page.waitForRequest((req) => req.url().includes("/api/heatmap?") && req.url().includes("asof="));
+  await page.fill("#asof-input", "2021-05-19T23:59");
+  await page.dispatchEvent("#asof-input", "change");
+  const asofParam = new URL((await sent).url()).searchParams.get("asof");
+  check("UTC As of 2021-05-19T23:59 sends asof=1621468740", asofParam === "1621468740", asofParam);
+  await page.waitForTimeout(2500);
   check("no page errors", errors.length === 0, JSON.stringify(errors));
 } finally {
   await browser.close();

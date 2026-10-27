@@ -1,8 +1,9 @@
 /* Open liquidation heatmap. The server sends little-endian float32 grids.
    Threshold only remaps color; it does not refetch. */
 
-const TZ = "America/Bogota";
 const STORE = "open-liqmap-v1";
+const BROWSER_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const ZONES = [...new Set([BROWSER_TZ, "UTC", "America/New_York", "America/Bogota", "Europe/London", "Asia/Singapore"])];
 const THEMES = {
   ember: {
     name: "Ember",
@@ -30,6 +31,7 @@ const state = {
   mode: "pair",
   bar: "",
   asof: null,
+  tz: BROWSER_TZ,
   theme: "ember",
   threshold: 0.85,
   showMap: false,
@@ -65,7 +67,6 @@ const banner = $("banner");
 // Past views and bar choice are Binance pair-only; bars must give 2 to 3,000 per range.
 const BAR_S = { "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400 };
 const RANGE_S = { "12h": 43200, "24h": 86400, "3d": 259200, "7d": 604800, "30d": 2592000, "90d": 7776000, "180d": 15552000, "1y": 31536000, "2y": 63072000 };
-const COT_OFFSET_S = 5 * 3600;
 
 function barFits(range, bar) {
   if (!bar) return true;
@@ -77,14 +78,28 @@ function historyOn() {
   return state.exchange === "binance" && state.mode === "pair";
 }
 
-function cotInputValue(seconds) {
-  // datetime-local text for a unix time, read on the COT (UTC−5) clock.
-  return new Date((seconds - COT_OFFSET_S) * 1000).toISOString().slice(0, 16);
+function zoneOffsetMs(utcMs, tz) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: tz, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" })
+      .formatToParts(new Date(utcMs)).map((p) => [p.type, p.value]),
+  );
+  return Date.UTC(+parts.year, +parts.month - 1, +parts.day, +parts.hour, +parts.minute, +parts.second) - utcMs;
 }
 
-function parseCotInput(text) {
-  const ms = Date.parse(text + ":00Z");
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) + COT_OFFSET_S : null;
+// datetime-local text read on the chosen clock → unix seconds.
+// A repeated fall-back hour resolves to its first (daylight) instant.
+// A skipped spring-forward time maps one hour earlier (New York 02:30 on 2026-03-08 → 01:30).
+function parseZonedInput(text) {
+  const wall = Date.parse(text + ":00Z");
+  if (!Number.isFinite(wall)) return null;
+  let utc = wall - zoneOffsetMs(wall, state.tz);
+  utc = wall - zoneOffsetMs(utc, state.tz);
+  return Math.floor(utc / 1000);
+}
+
+function zonedInputValue(seconds) {
+  const ms = seconds * 1000;
+  return new Date(ms + zoneOffsetMs(ms, state.tz)).toISOString().slice(0, 16);
 }
 
 function clamp(value, lo, hi) {
@@ -146,7 +161,7 @@ function fmtPx(value) {
 
 function fmtStamp(ms, withTime) {
   const opts = {
-    timeZone: TZ,
+    timeZone: state.tz,
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -156,14 +171,16 @@ function fmtStamp(ms, withTime) {
     opts.hour = "2-digit";
     opts.minute = "2-digit";
   }
-  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " COT";
+  const zone = new Intl.DateTimeFormat("en-GB", { timeZone: state.tz, timeZoneName: "short" })
+    .formatToParts(new Date(ms)).find((part) => part.type === "timeZoneName").value;
+  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " " + zone;
 }
 
 function fmtAxis(ms, withTime, narrow) {
-  const opts = { timeZone: TZ, hourCycle: "h23" };
+  const opts = { timeZone: state.tz, hourCycle: "h23" };
   if (narrow && withTime) {
     const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: TZ, day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      timeZone: state.tz, day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
     }).formatToParts(new Date(ms));
     const pick = (type) => parts.find((part) => part.type === type).value;
     return pick("day") + " " + pick("hour") + ":" + pick("minute");
@@ -217,6 +234,7 @@ function persist() {
       showMap: state.showMap,
       showCandles: state.showCandles,
       auto: state.auto,
+      tz: state.tz,
     }));
   } catch (_err) {
     /* private mode */
@@ -241,6 +259,7 @@ function restore() {
     if (typeof saved.showMap === "boolean") state.showMap = saved.showMap;
     if (typeof saved.showCandles === "boolean") state.showCandles = saved.showCandles;
     if (saved.auto != null) state.auto = Number(saved.auto) || 0;
+    if (ZONES.includes(saved.tz)) state.tz = saved.tz;
   } catch (_err) {
     /* ignore broken storage */
   }
@@ -255,6 +274,7 @@ function syncControls() {
   $("liqmap").checked = state.showMap;
   $("candles").checked = state.showCandles;
   $("auto").value = String(state.auto);
+  $("tz").value = state.tz;
   document.querySelectorAll(".tab").forEach((button) => {
     const on = Number(button.dataset.model) === state.model;
     button.classList.toggle("on", on);
@@ -270,7 +290,7 @@ function syncControls() {
   $("bar").value = state.bar;
   $("bar").disabled = !canTravel;
   $("bar-field").classList.toggle("disabled", !canTravel);
-  $("asof-input").value = state.asof == null ? "" : cotInputValue(state.asof);
+  $("asof-input").value = state.asof == null ? "" : zonedInputValue(state.asof);
   $("asof-input").disabled = !canTravel;
   $("asof-field").classList.toggle("disabled", !canTravel);
   $("live").disabled = !canTravel || state.asof == null;
@@ -722,11 +742,26 @@ function drawScale(ctx, L) {
   ctx.fillStyle = "#d5dccb";
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
   const gamma = state.gamma || gammaOf(state.threshold);
-  const usdAt = (intensity) => (intensity <= 0 ? 0 : state.vmax * Math.pow(intensity, 1 / gamma));
-  ctx.fillText(fmtUsd(usdAt(1)), barX - 4, L.plotY + 10);
-  ctx.fillText(fmtUsd(usdAt(0.5)), barX - 4, L.plotY + L.plotH * 0.5);
-  ctx.fillText("0", barX - 4, L.plotY + L.plotH - 2);
+  // Round USD at the height of its color; ends first, and a label too close to a drawn one is skipped.
+  L.ticks = [];
+  [1, 0, 0.5, 0.75, 0.25].forEach((frac) => {
+    const y = L.plotY + (1 - Math.pow(frac, gamma)) * Math.max(1, L.plotH - 1);
+    if (L.ticks.some((tick) => Math.abs(tick.y - y) < 11)) return;
+    L.ticks.push({ frac, y });
+    ctx.fillRect(barX - 3, Math.round(y), 3, 1);
+    const ty = clamp(y, L.plotY + 5, L.plotY + L.plotH - 5);
+    ctx.fillText(frac ? fmtUsd(state.vmax * frac) : "0", barX - 5, ty);
+  });
+  ctx.textBaseline = "alphabetic";
+  if (L.scaleW >= 86) {
+    ctx.font = "9px ui-monospace, monospace";
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#8f9a84";
+    ctx.fillText("nonlinear ·", 4, L.plotY + L.plotH + 12);
+    ctx.fillText("threshold " + state.threshold.toFixed(2), 4, L.plotY + L.plotH + 24);
+  }
 }
 
 function drawPriceAxis(ctx, L) {
@@ -1111,7 +1146,7 @@ async function startReplay(keepIdx) {
   const toText = $("to-input").value;
   const params = new URLSearchParams({ symbol: state.coin, range: state.range, from: String(state.asof) });
   if (state.bar) params.set("bar", state.bar);
-  if (toText) params.set("to", String(parseCotInput(toText)));
+  if (toText) params.set("to", String(parseZonedInput(toText)));
   setLoading(true, "Loading replay… the first load of a long span downloads one file per day and can take minutes");
   try {
     const response = await fetch("/api/replay?" + params.toString());
@@ -1309,7 +1344,7 @@ function wire() {
   $("asof-input").addEventListener("change", () => {
     stopReplay();
     const text = $("asof-input").value;
-    state.asof = text ? parseCotInput(text) : null;
+    state.asof = text ? parseZonedInput(text) : null;
     syncControls();
     load("asof");
   });
@@ -1363,6 +1398,16 @@ function wire() {
     requestDraw();
   });
   $("auto").addEventListener("change", () => setAuto(Number($("auto").value) || 0));
+  $("tz").addEventListener("change", () => {
+    // Keep both inputs on the same instants; only the clock they are read on changes.
+    const toText = $("to-input").value;
+    const to = toText ? parseZonedInput(toText) : null;
+    state.tz = $("tz").value;
+    if (to != null) $("to-input").value = zonedInputValue(to);
+    persist();
+    syncControls();
+    if (state.data) applyPayload(state.data);
+  });
   wireReplay();
   $("fit").addEventListener("click", () => {
     if (!state.data) return;
@@ -1461,6 +1506,7 @@ async function bootStatus() {
   }
 }
 
+ZONES.forEach((zone) => $("tz").add(new Option(zone === BROWSER_TZ ? zone + " (browser)" : zone, zone)));
 restore();
 buildSwatches();
 syncControls();

@@ -44,12 +44,13 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Liquidity threshold | Default 0.85. Client-side only. It compresses the color ramp so weak cells stay dark and shelves stay bright. It does not blank the chart. |
 | Liquidation map | Optional horizontal bars on the right. Green is resting long liquidity, red is resting short liquidity. Off by default. |
 | Candles | Green up, red down, drawn on the heat. |
-| Axes | USD color scale on the left, price on the right, time along the bottom. Times are America/Bogota, labeled COT (UTC−5). |
+| Axes | Color scale on the left, labeled in round USD (0, 25, 50, 75 and 100% of the brightest cell) at the height of each color; the scale is nonlinear and set by the threshold. Price on the right, time along the bottom. |
+| Time zone | Times show on the browser's zone by default; pick UTC, New York, Bogota, London or Singapore instead. The choice is remembered. The As of and To inputs are read on the chosen clock, across daylight-saving changes. Server messages are in UTC. |
 | Crosshair | Price, time, estimated liquidity, and the candle. |
 | Zoom / pan | Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets. Fit uses the traded range. Wide shows the full model price domain. |
 | Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
 | Auto-refresh | Off, 30s, 1m, or 5m. Paused while you look at a past moment. |
-| As of / Bar | Binance pair only. Pick any past moment since 2020-09-01 (COT) and any bar from 5m to 1d, up to 3,000 bars per view. "Live" returns to now. |
+| As of / Bar | Binance pair only. Pick any past moment since 2020-09-01 and any bar from 5m to 1d, up to 3,000 bars per view. "Live" returns to now. |
 | Replay | Binance pair only. Set As of (and optionally To), then Load replay. Step, play at up to 1/2/5/10 bars per second, or scrub. Each frame is the same map the page shows for that moment. The first load of a long span downloads one archive file per day. A replay downloads at most 800 days, counting the range's window, so a 2-year range can replay about 70 days. Space plays or pauses; the arrow keys step. |
 | Leverage | Hover any cell to see which leverage tiers make up its estimate. With Liquidation map on, the side bars stack by tier, with cumulative long and short lines from the current price. |
 
@@ -89,7 +90,7 @@ Only public market data. No API key.
 | Venue | What we use |
 | --- | --- |
 | OKX | Swap candles, open-interest history, and taker volume for `COIN-USDT-SWAP`. This is the default because it is live. |
-| Binance | Live USDT-M klines and open interest when `fapi.binance.com` answers. If it does not (some networks get HTTP 451), the public [data.binance.vision](https://data.binance.vision) archive is used instead. Archive zips are cached under `.cache/`. The archive lags the live market by a day or two; the page shows an as-of banner in COT. |
+| Binance | Live USDT-M klines and open interest when `fapi.binance.com` answers. If it does not (some networks get HTTP 451), the public [data.binance.vision](https://data.binance.vision) archive is used instead. Archive zips are cached under `.cache/`. The archive lags the live market by a day or two; the page shows an as-of banner in the chosen time zone. |
 | Demo | A seeded synthetic series. No network. |
 | Symbol mode | OKX and Binance are fetched together. Price candles come from the freshest venue. Open interest is the sum. A stale Binance archive is left out, and the banner says so. |
 

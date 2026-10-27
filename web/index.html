@@ -75,7 +75,7 @@
           <option value="1d">1d</option>
         </select>
       </label>
-      <label class="field" id="asof-field">As of (COT)
+      <label class="field" id="asof-field">As of
         <input id="asof-input" type="datetime-local" step="300">
       </label>
       <button type="button" id="live" class="live-btn" title="Back to the live map">Live</button>
@@ -94,7 +94,7 @@
     </div>
 
     <div class="player" id="player" role="group" aria-label="Replay">
-      <label class="field" id="to-field">To (COT)
+      <label class="field" id="to-field">To
         <input id="to-input" type="datetime-local" step="300">
       </label>
       <button type="button" id="rp-load" class="live-btn" title="Load a replay from As of to To">Load replay</button>
@@ -126,6 +126,9 @@
           <option value="60">1m</option>
           <option value="300">5m</option>
         </select>
+      </label>
+      <label class="field slim">Time zone
+        <select id="tz"></select>
       </label>
       <div class="zoom-btns">
         <button type="button" id="fit">Fit</button>
