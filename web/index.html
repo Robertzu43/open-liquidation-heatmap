@@ -18,29 +18,14 @@
         </div>
       </div>
       <div class="heading">
-        <h1 id="title">OKX BTC/USDT Liquidation Heatmap</h1>
+        <h1 id="title">Open Liquidation Heatmap</h1>
         <p id="asof" class="asof">Loading the latest public candles…</p>
       </div>
     </header>
 
-    <div class="toolbar">
-      <div class="models" role="tablist" aria-label="Liquidation model">
-        <button type="button" class="tab on" data-model="1" role="tab" aria-selected="true">Model 1</button>
-        <button type="button" class="tab" data-model="2" role="tab" aria-selected="false">Model 2</button>
-        <button type="button" class="tab" data-model="3" role="tab" aria-selected="false">Model 3</button>
-      </div>
-      <div class="seg" id="mode-toggle" role="group" aria-label="Pair or symbol">
-        <button type="button" class="on" data-mode="pair">Pair</button>
-        <button type="button" data-mode="symbol">Symbol</button>
-      </div>
-      <label class="field" id="exchange-field">Exchange
-        <select id="exchange">
-          <option value="okx" selected>OKX</option>
-          <option value="binance">Binance</option>
-          <option value="demo">Demo</option>
-        </select>
-      </label>
-      <label class="field">Coin
+    <nav class="toolbar" id="toolbar" aria-label="Map controls">
+      <label class="field coin">
+        <span>Coin</span>
         <input id="coin" list="coins" value="BTC" spellcheck="false" autocomplete="off" aria-label="Coin">
       </label>
       <datalist id="coins">
@@ -51,8 +36,18 @@
         <option value="DOGE"></option>
         <option value="BNB"></option>
       </datalist>
-      <label class="field">Range
-        <select id="range">
+      <label class="field" id="exchange-field">
+        <span>Exchange</span>
+        <select id="exchange" aria-label="Exchange">
+          <option value="okx" selected>OKX</option>
+          <option value="binance">Binance</option>
+          <option value="all">All venues</option>
+          <option value="demo">Demo</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Range</span>
+        <select id="range" aria-label="Range">
           <option value="12h">12 hour</option>
           <option value="24h" selected>24 hour</option>
           <option value="3d">3 day</option>
@@ -64,74 +59,105 @@
           <option value="2y">2 year</option>
         </select>
       </label>
-      <label class="field" id="bar-field">Bar
-        <select id="bar">
-          <option value="" selected>Auto</option>
-          <option value="5m">5m</option>
-          <option value="15m">15m</option>
-          <option value="1h">1h</option>
-          <option value="4h">4h</option>
-          <option value="12h">12h</option>
-          <option value="1d">1d</option>
-        </select>
-      </label>
-      <label class="field" id="asof-field">As of (COT)
-        <input id="asof-input" type="datetime-local" step="300">
-      </label>
-      <button type="button" id="live" class="live-btn" title="Back to the live map">Live</button>
-      <div class="icon-btns">
-        <button type="button" id="refresh" title="Refresh" aria-label="Refresh">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
-        </button>
-        <button type="button" id="shot" title="Save PNG snapshot" aria-label="Save PNG snapshot">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
-        </button>
-        <button type="button" id="full" title="Fullscreen" aria-label="Fullscreen">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
-        </button>
+      <div class="models seg" role="tablist" aria-label="Liquidation model">
+        <button type="button" class="tab on" data-model="1" role="tab" aria-selected="true">Model 1</button>
+        <button type="button" class="tab" data-model="2" role="tab" aria-selected="false">Model 2</button>
+        <button type="button" class="tab" data-model="3" role="tab" aria-selected="false">Model 3</button>
       </div>
-      <div class="swatches" id="themes" role="group" aria-label="Color theme"></div>
-    </div>
+      <button type="button" id="more" class="more" aria-expanded="false" aria-controls="drawer">
+        More
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+      </button>
+    </nav>
 
-    <div class="player" id="player" role="group" aria-label="Replay">
-      <label class="field" id="to-field">To (COT)
-        <input id="to-input" type="datetime-local" step="300">
-      </label>
-      <button type="button" id="rp-load" class="live-btn" title="Load a replay from As of to To">Load replay</button>
-      <button type="button" id="rp-back" class="live-btn" aria-label="Step back one bar" title="Step back (←)">◀</button>
-      <button type="button" id="rp-play" class="live-btn" aria-label="Play" title="Play / pause (Space)">Play</button>
-      <button type="button" id="rp-fwd" class="live-btn" aria-label="Step forward one bar" title="Step forward (→)">▶</button>
-      <label class="field slim">Speed
-        <select id="rp-speed">
-          <option value="1">1 bar/s</option>
-          <option value="2" selected>2 bars/s</option>
-          <option value="5">5 bars/s</option>
-          <option value="10">10 bars/s</option>
-        </select>
-      </label>
-      <input id="rp-scrub" type="range" min="0" max="0" value="0" aria-label="Replay position">
-      <span id="rp-time" class="rp-time">Set As of, then Load replay</span>
-    </div>
-
-    <div class="sub">
-      <label class="threshold">Liquidity Threshold = <b id="th-val">0.85</b>
-        <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.85">
-      </label>
-      <label class="check"><input id="liqmap" type="checkbox"> Liquidation map</label>
-      <label class="check"><input id="candles" type="checkbox" checked> Candles</label>
-      <label class="field slim">Auto-refresh
-        <select id="auto">
-          <option value="0">Off</option>
-          <option value="30">30s</option>
-          <option value="60">1m</option>
-          <option value="300">5m</option>
-        </select>
-      </label>
-      <div class="zoom-btns">
-        <button type="button" id="fit">Fit</button>
-        <button type="button" id="wide">Wide</button>
+    <section class="drawer" id="drawer" aria-label="More settings" hidden>
+      <div class="group">
+        <h3>Display</h3>
+        <label class="threshold">Threshold <b id="th-val">0.85</b>
+          <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.85" aria-label="Liquidity threshold">
+        </label>
+        <div class="row">
+          <label class="check"><input id="candles" type="checkbox" checked> Candles</label>
+          <label class="check"><input id="liqmap" type="checkbox"> Liquidation map</label>
+        </div>
+        <div class="row">
+          <span class="muted">Theme</span>
+          <div class="swatches" id="themes" role="group" aria-label="Color theme"></div>
+        </div>
       </div>
-    </div>
+
+      <div class="group">
+        <h3>View</h3>
+        <div class="row">
+          <button type="button" id="fit" class="btn" title="Fit price to this window">Fit</button>
+          <button type="button" id="wide" class="btn" title="Show every price bin">Wide</button>
+          <button type="button" id="refresh" class="btn icon" title="Refresh" aria-label="Refresh">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
+          </button>
+          <button type="button" id="shot" class="btn icon" title="Save PNG snapshot" aria-label="Save PNG snapshot">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
+          </button>
+          <button type="button" id="full" class="btn icon" title="Fullscreen" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+          </button>
+        </div>
+        <label class="field inline">
+          <span>Auto-refresh</span>
+          <select id="auto">
+            <option value="0">Off</option>
+            <option value="30">30s</option>
+            <option value="60">1m</option>
+            <option value="300">5m</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="group travel">
+        <h3>Past views and replay</h3>
+        <p class="muted" id="travel-note">Pick Binance to choose the bar, look at a past time or replay a span.</p>
+        <div id="travel">
+          <div class="row">
+            <label class="field" id="bar-field">
+              <span>Bar</span>
+              <select id="bar">
+                <option value="" selected>Auto</option>
+                <option value="5m">5m</option>
+                <option value="15m">15m</option>
+                <option value="1h">1h</option>
+                <option value="4h">4h</option>
+                <option value="12h">12h</option>
+                <option value="1d">1d</option>
+              </select>
+            </label>
+            <label class="field" id="asof-field">
+              <span>As of (COT)</span>
+              <input id="asof-input" type="datetime-local" step="300">
+            </label>
+            <button type="button" id="live" class="btn" title="Back to the live map">Live</button>
+          </div>
+          <div class="player" id="player" role="group" aria-label="Replay">
+            <label class="field" id="to-field">
+              <span>To (COT)</span>
+              <input id="to-input" type="datetime-local" step="300">
+            </label>
+            <button type="button" id="rp-load" class="btn" title="Load a replay from As of to To">Load replay</button>
+            <div class="row">
+              <button type="button" id="rp-back" class="btn" aria-label="Step back one bar" title="Step back (←)">◀</button>
+              <button type="button" id="rp-play" class="btn" aria-label="Play" title="Play / pause (Space)">Play</button>
+              <button type="button" id="rp-fwd" class="btn" aria-label="Step forward one bar" title="Step forward (→)">▶</button>
+              <select id="rp-speed" aria-label="Replay speed">
+                <option value="1">1 bar/s</option>
+                <option value="2" selected>2 bars/s</option>
+                <option value="5">5 bars/s</option>
+                <option value="10">10 bars/s</option>
+              </select>
+            </div>
+            <input id="rp-scrub" type="range" min="0" max="0" value="0" aria-label="Replay position">
+            <span id="rp-time" class="rp-time">Set As of, then Load replay</span>
+          </div>
+        </div>
+      </div>
+    </section>
 
     <div id="banner" class="banner" role="alert" hidden></div>
 
@@ -148,8 +174,14 @@
           <canvas id="chart" aria-label="Liquidation heatmap"></canvas>
           <div id="tip" class="tip" hidden></div>
           <div id="loading" class="loading" hidden>Loading…</div>
+          <aside id="intro" class="intro" aria-label="How to read this map" hidden>
+            <p><b>Bright</b> means many estimated liquidations at that price.</p>
+            <p><b>Above price</b> are shorts, <b>below price</b> are longs.</p>
+            <p>It is an estimate from public market data, not exchange records.</p>
+            <button type="button" id="intro-close" class="btn">Got it</button>
+          </aside>
         </div>
-        <p class="caption">Color is relative estimated liquidity in this window, dark for low and bright for high. <span class="hint">Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets.</span></p>
+        <p class="caption">Color is relative to this window. <span class="hint">Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets.</span></p>
       </section>
 
       <aside class="panel" id="panel">
@@ -167,7 +199,7 @@
         </div>
         <h3 class="section">Imbalance around price</h3>
         <table class="grid" id="imbalance">
-          <thead><tr><th>Window</th><th>Long</th><th>Short</th><th>S/L</th></tr></thead>
+          <thead><tr><th>Window</th><th>Short</th><th>Long</th><th>Split</th></tr></thead>
           <tbody></tbody>
         </table>
         <h3 class="section">Resting levels</h3>

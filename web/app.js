@@ -3,6 +3,7 @@
 
 const TZ = "America/Bogota";
 const STORE = "open-liqmap-v1";
+const INTRO_KEY = "open-liqmap-intro-seen";
 const THEMES = {
   ember: {
     name: "Ember",
@@ -185,9 +186,9 @@ function escapeHtml(text) {
 
 function layoutFor(w, h) {
   const narrow = w < 520;
-  const scaleW = narrow ? 58 : 86;
+  const scaleW = narrow ? 66 : 86;
   const priceW = narrow ? 52 : 82;
-  const liqW = state.showMap ? (narrow ? 46 : 124) : 0;
+  const liqW = state.showMap ? (narrow ? 46 : 150) : 0;
   const timeH = 30;
   const top = 8;
   const plotX = scaleW;
@@ -246,8 +247,12 @@ function restore() {
   }
 }
 
+function exchangeChoice() {
+  return state.mode === "symbol" ? "all" : state.exchange;
+}
+
 function syncControls() {
-  $("exchange").value = state.exchange;
+  $("exchange").value = exchangeChoice();
   $("coin").value = state.coin;
   $("range").value = state.range;
   $("threshold").value = String(state.threshold);
@@ -260,20 +265,13 @@ function syncControls() {
     button.classList.toggle("on", on);
     button.setAttribute("aria-selected", on ? "true" : "false");
   });
-  document.querySelectorAll("#mode-toggle button").forEach((button) => {
-    button.classList.toggle("on", button.dataset.mode === state.mode);
-  });
-  const symbolMode = state.mode === "symbol";
-  $("exchange").disabled = symbolMode;
-  $("exchange-field").classList.toggle("disabled", symbolMode);
+  // Bar, past views and replay exist only for a Binance pair; elsewhere they are hidden.
   const canTravel = historyOn();
+  $("travel").hidden = !canTravel;
+  $("travel-note").hidden = canTravel;
   $("bar").value = state.bar;
-  $("bar").disabled = !canTravel;
-  $("bar-field").classList.toggle("disabled", !canTravel);
   $("asof-input").value = state.asof == null ? "" : cotInputValue(state.asof);
-  $("asof-input").disabled = !canTravel;
-  $("asof-field").classList.toggle("disabled", !canTravel);
-  $("live").disabled = !canTravel || state.asof == null;
+  $("live").disabled = state.asof == null;
   if ($("rp-load")) syncReplay();
   document.querySelectorAll(".swatch").forEach((button) => {
     button.classList.toggle("on", button.dataset.theme === state.theme);
@@ -379,7 +377,8 @@ function fail(message) {
   $("levels").querySelector("tbody").innerHTML = "";
   $("resting").textContent = "";
   $("tags").innerHTML = "";
-  $("asof").textContent = "No map loaded";
+  // The title keeps naming the last map that loaded; only success changes it.
+  $("asof").textContent = $("title").dataset.loaded ? "This request failed · the title names the last map that loaded" : "No map loaded";
   drawMessage(message);
 }
 
@@ -415,6 +414,7 @@ function applyPayload(data) {
   }
   clampView();
   $("title").textContent = data.title;
+  $("title").dataset.loaded = "1";
   document.title = data.title + " · Open Liq";
   const sourceNames = {
     okx: "OKX live",
@@ -430,7 +430,7 @@ function applyPayload(data) {
   (data.warnings || []).forEach((line) => lines.push(line));
   if (data.note && !lines.includes(data.note)) lines.push(data.note);
   // A past view names the archive on purpose; only its own warnings are serious.
-  const serious = data.stale || (!data.asof && lines.some((line) => /lag|left out|archive|synthetic|only go back/i.test(line)));
+  const serious = data.stale || (!data.asof && data.source !== "demo" && lines.some((line) => /lag|left out|archive|synthetic|only go back/i.test(line)));
   showBanner(serious ? "warn" : "info", lines);
   renderAnalysis(data);
   renderHow(data.model);
@@ -440,13 +440,12 @@ function applyPayload(data) {
 
 function renderAnalysis(data) {
   const analysis = data.analysis || {};
-  $("summary").textContent = analysis.summary || "";
+  $("summary").textContent = readableRatios(analysis.summary || "");
   $("above").innerHTML = levelHtml(analysis.above);
   $("below").innerHTML = levelHtml(analysis.below);
   const imb = $("imbalance").querySelector("tbody");
   imb.innerHTML = (analysis.imbalance || []).map((row) => {
-    const ratio = row.short_to_long == null ? "—" : Number(row.short_to_long).toFixed(2) + "×";
-    return `<tr><td>${row.window_pct}%</td><td>${fmtUsd(row.long_usd)}</td><td>${fmtUsd(row.short_usd)}</td><td>${ratio}</td></tr>`;
+    return `<tr><td>${row.window_pct}%</td><td>${fmtUsd(row.short_usd)}</td><td>${fmtUsd(row.long_usd)}</td><td class="split">${splitHtml(row.short_usd, row.long_usd)}</td></tr>`;
   }).join("");
   const levels = $("levels").querySelector("tbody");
   levels.innerHTML = (analysis.levels || []).map((level) => {
@@ -464,6 +463,25 @@ function renderAnalysis(data) {
     button.addEventListener("click", () => focusPrice(level.price));
     tags.appendChild(button);
   });
+}
+
+function splitHtml(shortUsd, longUsd) {
+  const s = Math.max(0, Number(shortUsd) || 0);
+  const l = Math.max(0, Number(longUsd) || 0);
+  if (!(s + l > 0)) return "—";
+  const sp = Math.round((s / (s + l)) * 100);
+  return `<span class="s">Short ${sp}%</span> / <span class="l">Long ${100 - sp}%</span>`;
+}
+
+function fmtRatio(ratio) {
+  const r = Number(ratio);
+  if (!Number.isFinite(r)) return "—";
+  return r > 10 ? "> 10×" : r.toFixed(2) + "×";
+}
+
+// The server writes ratios like "553.84×"; above 10 they read "> 10×".
+function readableRatios(text) {
+  return String(text).replace(/(\d+(?:\.\d+)?)×/g, (match, num) => (Number(num) > 10 ? fmtRatio(num) : match));
 }
 
 function levelHtml(level) {
@@ -668,7 +686,8 @@ function draw() {
     const x1 = xOf(nT - 0.5, L);
     const yTop = yOf(centers[bins - 1] + half, L);
     const yBot = yOf(centers[0] - half, L);
-    ctx.imageSmoothingEnabled = true;
+    // Smoothing off: one bin stays one crisp shelf instead of a blur.
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(state.heatCanvas, x0, yTop, x1 - x0, yBot - yTop);
   }
   if (state.showCandles) drawCandles(ctx, L, data);
@@ -719,14 +738,20 @@ function drawScale(ctx, L) {
     ctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
     ctx.fillRect(barX, L.plotY + y, barW, 1);
   }
-  ctx.fillStyle = "#d5dccb";
-  ctx.font = "10px ui-monospace, monospace";
-  ctx.textAlign = "right";
+  // Ticks sit at 0, 0.5 and 1 of the bar; each label is the USD that shade() maps there.
   const gamma = state.gamma || gammaOf(state.threshold);
   const usdAt = (intensity) => (intensity <= 0 ? 0 : state.vmax * Math.pow(intensity, 1 / gamma));
-  ctx.fillText(fmtUsd(usdAt(1)), barX - 4, L.plotY + 10);
-  ctx.fillText(fmtUsd(usdAt(0.5)), barX - 4, L.plotY + L.plotH * 0.5);
-  ctx.fillText("0", barX - 4, L.plotY + L.plotH - 2);
+  ctx.font = "10px ui-monospace, monospace";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  [1, 0.5, 0].forEach((intensity) => {
+    const y = L.plotY + (1 - intensity) * L.plotH;
+    ctx.fillStyle = "#8f9a84";
+    ctx.fillRect(barX - 4, Math.round(y) - (intensity === 0 ? 1 : 0), 3, 1);
+    ctx.fillStyle = "#d5dccb";
+    ctx.fillText(fmtUsd(usdAt(intensity)), barX - 6, clamp(y, L.plotY + 6, L.plotY + L.plotH - 6));
+  });
+  ctx.textBaseline = "alphabetic";
 }
 
 function drawPriceAxis(ctx, L) {
@@ -784,8 +809,10 @@ function drawLiqBars(ctx, L, data, half) {
   let maxP = 0;
   for (let b = 0; b < bins; b++) maxP = Math.max(maxP, data.longA[b] + data.shortA[b]);
   if (!(maxP > 0)) return;
-  const x0 = L.liqX + 6;
-  const span = L.liqW - 12;
+  // Wide layouts keep a legend column on the left so labels never sit on the bars.
+  const legendW = L.liqW >= 80 ? 44 : 0;
+  const x0 = L.liqX + legendW + 6;
+  const span = L.liqW - legendW - 12;
   ctx.save();
   ctx.beginPath();
   ctx.rect(L.liqX, L.plotY, L.liqW, L.plotH);
@@ -840,18 +867,19 @@ function drawLiqBars(ctx, L, data, half) {
     line("rgba(224, 122, 114, 0.95)", spotBin, bins, 1, data.shortA);
   }
   ctx.restore();
-  if (L.liqW >= 80) {
+  if (legendW) {
+    const lx = L.liqX + 4;
     ctx.font = "10px ui-monospace, monospace";
     ctx.textAlign = "left";
     tiers.forEach((leverage, k) => {
-      const y = L.plotY + 12 + k * 13;
+      const y = L.plotY + 12 + k * 14;
       ctx.fillStyle = tierColor(leverage);
-      ctx.fillRect(x0, y - 8, 8, 8);
+      ctx.fillRect(lx, y - 8, 8, 8);
       ctx.fillStyle = "#8f9a84";
-      ctx.fillText(`${leverage}x`, x0 + 12, y);
+      ctx.fillText(`${leverage}x`, lx + 11, y);
     });
     ctx.fillStyle = "#8f9a84";
-    ctx.fillText("Σ L / S", x0, L.plotY + L.plotH - 6);
+    ctx.fillText("Σ L/S", lx, L.plotY + L.plotH - 6);
   }
 }
 
@@ -1041,7 +1069,7 @@ function snapshot() {
   ctx.font = `${12 * state.dpr}px sans-serif`;
   ctx.fillText("Open Liq estimate · not exchange liquidation records", 16 * state.dpr, 42 * state.dpr);
   const link = document.createElement("a");
-  const name = `${state.exchange}-${state.coin}-${state.range}-model${state.model}.png`.toLowerCase();
+  const name = `${exchangeChoice()}-${state.coin}-${state.range}-model${state.model}.png`.toLowerCase();
   link.href = out.toDataURL("image/png");
   link.download = name;
   document.body.appendChild(link);
@@ -1069,10 +1097,7 @@ function frameAsof(r, idx) {
 
 function syncReplay() {
   const r = state.replay;
-  const canTravel = historyOn();
-  $("rp-load").disabled = !canTravel || state.asof == null;
-  $("to-input").disabled = !canTravel;
-  $("to-field").classList.toggle("disabled", !canTravel);
+  $("rp-load").disabled = state.asof == null;
   ["rp-back", "rp-play", "rp-fwd", "rp-scrub"].forEach((id) => {
     $(id).disabled = !r;
   });
@@ -1082,8 +1107,6 @@ function syncReplay() {
     $("rp-scrub").max = String(r.frames - 1);
     $("rp-scrub").value = String(r.idx);
     $("rp-time").textContent = `${fmtStamp(frameAsof(r, r.idx) * 1000, r.step < 86400000)} · ${r.idx + 1}/${r.frames}`;
-  } else if (!canTravel) {
-    $("rp-time").textContent = "Replay is Binance pair only";
   } else {
     $("rp-time").textContent = state.asof == null ? "Set As of, then Load replay" : "Ready to load";
   }
@@ -1257,6 +1280,41 @@ function wireReplay() {
   });
 }
 
+function setDrawer(open) {
+  $("drawer").hidden = !open;
+  $("more").setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function wireDrawer() {
+  $("more").addEventListener("click", () => setDrawer($("drawer").hidden));
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("drawer").hidden) {
+      setDrawer(false);
+      $("more").focus();
+    }
+  });
+}
+
+function introSeen() {
+  try {
+    return localStorage.getItem(INTRO_KEY) === "1";
+  } catch (_err) {
+    return false;
+  }
+}
+
+function wireIntro() {
+  $("intro").hidden = introSeen();
+  $("intro-close").addEventListener("click", () => {
+    $("intro").hidden = true;
+    try {
+      localStorage.setItem(INTRO_KEY, "1");
+    } catch (_err) {
+      /* private mode: the card returns next visit */
+    }
+  });
+}
+
 function wire() {
   document.querySelectorAll(".tab").forEach((button) => {
     button.addEventListener("click", () => {
@@ -1271,18 +1329,16 @@ function wire() {
       }
     });
   });
-  document.querySelectorAll("#mode-toggle button").forEach((button) => {
-    button.addEventListener("click", () => {
-      stopReplay();
-      state.mode = button.dataset.mode;
-      syncControls();
-      persist();
-      load("mode");
-    });
-  });
   $("exchange").addEventListener("change", () => {
     stopReplay();
-    state.exchange = $("exchange").value;
+    // "All venues" is the aggregate (symbol) mode; every other choice is one pair.
+    const choice = $("exchange").value;
+    if (choice === "all") {
+      state.mode = "symbol";
+    } else {
+      state.mode = "pair";
+      state.exchange = choice;
+    }
     state.timeFull = true;
     state.priceDirty = false;
     syncControls();
@@ -1364,6 +1420,7 @@ function wire() {
   });
   $("auto").addEventListener("change", () => setAuto(Number($("auto").value) || 0));
   wireReplay();
+  wireDrawer();
   $("fit").addEventListener("click", () => {
     if (!state.data) return;
     state.view.lo = state.data.price_view[0];
@@ -1466,6 +1523,7 @@ buildSwatches();
 syncControls();
 setAuto(state.auto);
 wire();
+wireIntro();
 resize();
 bootStatus();
 load("boot");

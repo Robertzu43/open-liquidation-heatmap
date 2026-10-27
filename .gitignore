@@ -2,6 +2,7 @@ __pycache__/
 *.py[cod]
 .cache/
 *.png
+!docs/img/*.png
 *.npz
 .venv/
 .pytest_cache/
