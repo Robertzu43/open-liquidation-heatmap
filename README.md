@@ -2,7 +2,7 @@
 
 An open estimate of a crypto perpetual **liquidation heatmap**. Bright shelves are prices where this model thinks leveraged positions would be forced out. The picture is built from public open interest and an assumed leverage mix.
 
-This project is **not** affiliated with CoinGlass. It does not scrape CoinGlass, call their private heatmap APIs, copy their code, or redistribute their data.
+This project is **not** affiliated with CoinGlass. It does not scrape CoinGlass, call their private heatmap APIs, copy their code, or redistribute their data. The leverage split of Models 1 and 2 was calibrated by eye against screenshots of their rendered chart; see [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#the-weights-are-the-model).
 
 Not financial advice. A shelf is a model, not a print of exchange positions.
 
@@ -71,8 +71,8 @@ short = entry * (1 + 1/leverage) / (1 + MMR)
 
 | Model | Idea | Weights |
 | --- | --- | --- |
-| 1 Wide clusters | More weight on 5×–25×. Shelves sit further from price. No fade. | 5× 12%, 10× 28%, 25× 30%, 50× 20%, 100× 10% |
-| 2 Tight magnets | More weight on 25×–100×, a little volume churn, and a slow fade. | 10× 8%, 25× 22%, 50× 35%, 75× 20%, 100× 15% |
+| 1 Wide clusters | Most weight on 50×–60×, with a far 5× tier. Shelves sit about 1–2% from price. No fade. | 5× 12%, 20× 10%, 50× 25%, 60× 53% |
+| 2 Tight magnets | Two tiers, 20× and 60×, a little volume churn, and a slow fade. | 20× 30%, 60× 70% |
 | 3 Flow skew | Same family of tiers, but new positions follow taker buy/sell when that data exists. | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% |
 
 Models 1 and 2 split new open interest evenly between longs and shorts. Model 3 uses the taker buy fraction as the long share.

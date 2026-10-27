@@ -22,8 +22,8 @@ MODELS: dict[int, dict] = {
     1: {
         "id": 1,
         "name": "Wide clusters",
-        "blurb": "More weight on 5x–25x, so shelves sit further from price and stay until price trades through them.",
-        "weights": ((5, 0.12), (10, 0.28), (25, 0.30), (50, 0.20), (100, 0.10)),
+        "blurb": "Most weight on 50x–60x, with a far 5x tier. Shelves sit about 1–2% from price and stay until price trades through them.",
+        "weights": ((5, 0.12), (20, 0.10), (50, 0.25), (60, 0.53)),
         "decay": 1.0,
         "churn": 0.0,
         "kernel": (0.15, 0.70, 0.15),
@@ -32,8 +32,8 @@ MODELS: dict[int, dict] = {
     2: {
         "id": 2,
         "name": "Tight magnets",
-        "blurb": "More weight on 25x–100x, a little turnover from volume, and a slow fade. Shelves hug price.",
-        "weights": ((10, 0.08), (25, 0.22), (50, 0.35), (75, 0.20), (100, 0.15)),
+        "blurb": "Two tiers, 20x and 60x, a little turnover from volume, and a slow fade. Shelves hug price.",
+        "weights": ((20, 0.30), (60, 0.70)),
         "decay": 0.9992,
         "churn": 0.015,
         "kernel": (0.06, 0.24, 0.40, 0.24, 0.06),
