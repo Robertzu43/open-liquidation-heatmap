@@ -48,7 +48,7 @@ LOOKBACK_TO_RANGE = {
 
 CMAP = LinearSegmentedColormap.from_list(
     "openliq",
-    ["#160e22", "#5c2478", "#c45a48", "#f0b429", "#fff1a8"],
+    ["#400b4f", "#2f3468", "#136583", "#007d7e", "#00957a", "#00a76b", "#26b85e", "#8ece40", "#ebe136"],
 )
 
 
@@ -87,7 +87,7 @@ def plot_heatmap(heat, centers, times_ms, open_, high, low, close, title: str, o
     xs = np.arange(n)
     for i in range(n):
         up = close[i] >= open_[i]
-        color = "#7dcea0" if up else "#e07a72"
+        color = "#00c37a" if up else "#ff3f55"
         ax.plot([xs[i], xs[i]], [low[i], high[i]], color=color, linewidth=0.6, solid_capstyle="round")
         body_low = min(open_[i], close[i])
         body_high = max(open_[i], close[i])

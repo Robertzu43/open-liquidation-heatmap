@@ -2,8 +2,12 @@
    Threshold only remaps color; it does not refetch. */
 
 const TZ = "America/Bogota";
-const STORE = "open-liqmap-v1";
+const STORE = "open-liqmap-v2";
 const THEMES = {
+  aurora: {
+    name: "Aurora",
+    stops: [[64, 11, 79], [47, 52, 104], [19, 101, 131], [0, 125, 126], [0, 149, 122], [0, 167, 107], [38, 184, 94], [142, 206, 64], [235, 225, 54]],
+  },
   ember: {
     name: "Ember",
     stops: [[22, 12, 36], [92, 36, 140], [176, 70, 78], [232, 164, 48], [255, 236, 140]],
@@ -28,8 +32,8 @@ const state = {
   range: "24h",
   model: 1,
   mode: "pair",
-  theme: "ember",
-  threshold: 0.85,
+  theme: "aurora",
+  threshold: 0.15,
   showMap: false,
   showCandles: true,
   auto: 0,
@@ -160,7 +164,7 @@ function layoutFor(w, h) {
   const narrow = w < 520;
   const scaleW = narrow ? 58 : 86;
   const priceW = narrow ? 52 : 82;
-  const liqW = state.showMap ? (narrow ? 46 : 124) : 0;
+  const liqW = state.showMap ? (narrow ? 46 : 200) : 0;
   const timeH = 30;
   const top = 8;
   const plotX = scaleW;
@@ -447,13 +451,10 @@ function focusPrice(price) {
   requestDraw();
 }
 
-function robustMax(heat) {
-  const vals = [];
-  for (let i = 0; i < heat.length; i++) if (heat[i] > 0) vals.push(heat[i]);
-  if (!vals.length) return 1;
-  vals.sort((a, b) => a - b);
-  const idx = Math.min(vals.length - 1, Math.floor(0.985 * (vals.length - 1)));
-  return Math.max(vals[idx], 1e-6);
+function heatMax(heat) {
+  let max = 0;
+  for (let i = 0; i < heat.length; i++) if (heat[i] > max) max = heat[i];
+  return Math.max(max, 1e-6);
 }
 
 function rebuildHeat() {
@@ -466,11 +467,11 @@ function rebuildHeat() {
   off.height = bins;
   const ctx = off.getContext("2d", { willReadFrequently: true });
   const img = ctx.createImageData(nT, bins);
-  const vmax = robustMax(data.heatA);
+  const vmax = heatMax(data.heatA);
   state.vmax = vmax;
   state.gamma = gammaOf(state.threshold);
   const theme = THEMES[state.theme];
-  const bg = [20, 22, 15];
+  const bg = theme.stops[0];
   for (let b = 0; b < bins; b++) {
     const y = bins - 1 - b;
     const row = b * nT;
@@ -615,7 +616,7 @@ function draw() {
     const x1 = xOf(nT - 0.5, L);
     const yTop = yOf(centers[bins - 1] + half, L);
     const yBot = yOf(centers[0] - half, L);
-    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(state.heatCanvas, x0, yTop, x1 - x0, yBot - yTop);
   }
   if (state.showCandles) drawCandles(ctx, L, data);
@@ -642,7 +643,7 @@ function drawCandles(ctx, L, data) {
     const close = data.closeA[i];
     const x = xOf(i, L);
     const up = close >= open;
-    ctx.strokeStyle = up ? "#7dcea0" : "#e07a72";
+    ctx.strokeStyle = up ? "#00c37a" : "#ff3f55";
     ctx.fillStyle = ctx.strokeStyle;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -658,7 +659,7 @@ function drawCandles(ctx, L, data) {
 
 function drawScale(ctx, L) {
   const theme = THEMES[state.theme];
-  const barW = 8;
+  const barW = 12;
   const barX = L.plotX - barW - 4;
   for (let y = 0; y < L.plotH; y++) {
     const intensity = 1 - y / Math.max(1, L.plotH - 1);
@@ -671,8 +672,8 @@ function drawScale(ctx, L) {
   ctx.textAlign = "right";
   const gamma = state.gamma || gammaOf(state.threshold);
   const usdAt = (intensity) => (intensity <= 0 ? 0 : state.vmax * Math.pow(intensity, 1 / gamma));
-  ctx.fillText(fmtUsd(usdAt(1)), barX - 4, L.plotY + 10);
-  ctx.fillText(fmtUsd(usdAt(0.5)), barX - 4, L.plotY + L.plotH * 0.5);
+  ctx.fillText(fmtUsd(usdAt(1)).slice(1), barX - 4, L.plotY + 10);
+  ctx.fillText(fmtUsd(usdAt(0.5)).slice(1), barX - 4, L.plotY + L.plotH * 0.5);
   ctx.fillText("0", barX - 4, L.plotY + L.plotH - 2);
 }
 
@@ -724,27 +725,40 @@ function drawLiqBars(ctx, L, data, half) {
   ctx.beginPath();
   ctx.rect(L.liqX, L.plotY, L.liqW, L.plotH);
   ctx.clip();
+  const usable = L.liqW - 12;
+  ctx.fillStyle = "rgba(19, 101, 131, 0.9)";
   for (let b = 0; b < bins; b++) {
     const total = data.longA[b] + data.shortA[b];
     if (!(total > 0)) continue;
     const y1 = yOf(data.centersA[b] + half, L);
     const y2 = yOf(data.centersA[b] - half, L);
     if (y2 < L.plotY || y1 > L.plotY + L.plotH) continue;
-    const bh = Math.max(1, y2 - y1);
-    const width = (total / maxP) * (L.liqW - 12);
-    const longW = width * (data.longA[b] / total);
-    ctx.fillStyle = "rgba(125, 206, 160, 0.9)";
-    ctx.fillRect(L.liqX + 6, y1, longW, bh);
-    ctx.fillStyle = "rgba(224, 122, 114, 0.92)";
-    ctx.fillRect(L.liqX + 6 + longW, y1, Math.max(0, width - longW), bh);
+    ctx.fillRect(L.liqX + 6, y1, (total / maxP) * usable, Math.max(1, y2 - y1));
   }
+  // Running totals outward from price: shorts that a rally would liquidate
+  // above, longs that a drop would liquidate below.
+  const spot = data.analysis.price;
+  const above = [];
+  const below = [];
+  let sum = 0;
+  for (let b = 0; b < bins; b++) if (data.centersA[b] > spot) above.push([data.centersA[b], (sum += data.shortA[b])]);
+  sum = 0;
+  for (let b = bins - 1; b >= 0; b--) if (data.centersA[b] <= spot) below.push([data.centersA[b], (sum += data.longA[b])]);
+  const maxC = Math.max(above.length ? above[above.length - 1][1] : 0, below.length ? below[below.length - 1][1] : 0);
+  [[above, "#00c37a"], [below, "#ff3f55"]].forEach(([points, color]) => {
+    if (!(maxC > 0) || !points.length) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    points.forEach(([price, total], k) => {
+      const x = L.liqX + 6 + (total / maxC) * usable;
+      const y = yOf(price, L);
+      if (k === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
   ctx.restore();
-  if (L.liqW >= 80) {
-    ctx.fillStyle = "#8f9a84";
-    ctx.font = "10px ui-monospace, monospace";
-    ctx.textAlign = "left";
-    ctx.fillText("L / S", L.liqX + 6, L.plotY + 12);
-  }
 }
 
 function drawFrame(ctx, L) {
