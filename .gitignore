@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.cache/
+*.egg-info/
+dist/
+build/
+heatmap.png
+heatmap.html
+heatmap_grid.npz
+heatmap.v1.json
+.streamlit/

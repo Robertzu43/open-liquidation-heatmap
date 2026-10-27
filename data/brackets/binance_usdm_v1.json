@@ -1,0 +1,36 @@
+{
+  "version": "binance-usdm-brackets-2024-public-snapshot",
+  "source": "https://www.binance.com/en/futures/trading-rules/perpetual/leverage-margin",
+  "note": "Partial snapshot of Binance's public USD-M leverage and margin schedule. GET /fapi/v1/leverageBracket is signed, so this file is not loaded from that endpoint. Refresh it when Binance updates the public page. Maintenance amount follows Binance's published cum column.",
+  "symbols": {
+    "BTCUSDT": {
+      "max_leverage": 125,
+      "brackets": [
+        {"notional_floor": 0, "notional_cap": 50000, "max_leverage": 125, "mmr": 0.004, "maintenance_amount": 0},
+        {"notional_floor": 50000, "notional_cap": 250000, "max_leverage": 100, "mmr": 0.005, "maintenance_amount": 50},
+        {"notional_floor": 250000, "notional_cap": 1000000, "max_leverage": 50, "mmr": 0.01, "maintenance_amount": 1300},
+        {"notional_floor": 1000000, "notional_cap": 5000000, "max_leverage": 20, "mmr": 0.025, "maintenance_amount": 16300},
+        {"notional_floor": 5000000, "notional_cap": 10000000, "max_leverage": 10, "mmr": 0.05, "maintenance_amount": 141300},
+        {"notional_floor": 10000000, "notional_cap": 20000000, "max_leverage": 5, "mmr": 0.1, "maintenance_amount": 641300}
+      ]
+    },
+    "ETHUSDT": {
+      "max_leverage": 100,
+      "brackets": [
+        {"notional_floor": 0, "notional_cap": 50000, "max_leverage": 100, "mmr": 0.005, "maintenance_amount": 0},
+        {"notional_floor": 50000, "notional_cap": 250000, "max_leverage": 75, "mmr": 0.0065, "maintenance_amount": 75},
+        {"notional_floor": 250000, "notional_cap": 1000000, "max_leverage": 50, "mmr": 0.01, "maintenance_amount": 950},
+        {"notional_floor": 1000000, "notional_cap": 5000000, "max_leverage": 25, "mmr": 0.02, "maintenance_amount": 10950},
+        {"notional_floor": 5000000, "notional_cap": 10000000, "max_leverage": 10, "mmr": 0.05, "maintenance_amount": 160950}
+      ]
+    },
+    "_default": {
+      "max_leverage": 50,
+      "brackets": [
+        {"notional_floor": 0, "notional_cap": 50000, "max_leverage": 50, "mmr": 0.01, "maintenance_amount": 0},
+        {"notional_floor": 50000, "notional_cap": 250000, "max_leverage": 25, "mmr": 0.02, "maintenance_amount": 500},
+        {"notional_floor": 250000, "notional_cap": 1000000, "max_leverage": 10, "mmr": 0.05, "maintenance_amount": 8000}
+      ]
+    }
+  }
+}
