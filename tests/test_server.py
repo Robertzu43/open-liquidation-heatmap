@@ -88,6 +88,33 @@ def test_gzip_when_asked(port):
     assert json.loads(gzip.decompress(body))["bins"] == 360
 
 
+def test_levels_for_a_demo_bar(port):
+    _, heat = get_json(port, DEMO)
+    t = heat["times"][len(heat["times"]) // 2]
+    price = sum(heat["price_view"]) / 2
+    status, body = get_json(port, f"/api/levels?exchange=demo&symbol=BTC&range=24h&model=1&t={t}&price={price}")
+    assert status == 200
+    assert body["tiers"]
+    for tier in body["tiers"]:
+        assert {"leverage", "long_usd", "short_usd"} <= tier.keys()
+    assert "long_usd" in body and "short_usd" in body
+
+
+@pytest.mark.parametrize("t", ["", "&t=abc"])
+def test_levels_bad_t_is_400(port, t):
+    status, body = get_json(port, f"/api/levels?exchange=demo&symbol=BTC&range=24h&model=1{t}&price=100")
+    assert status == 400
+    assert body["error"]
+
+
+def test_page_url_uses_bound_host():
+    scheme = "http" + "://"
+    assert server.page_url("10.0.0.5", 80) == scheme + "10.0.0.5:80"
+    assert server.page_url("::1", 80) == scheme + "[::1]:80"
+    for wildcard in ("0.0.0.0", "::", ""):
+        assert server.page_url(wildcard, 9) == "http://127.0.0.1:9"
+
+
 def test_default_host_is_loopback():
     assert build_parser().parse_args([]).host == "127.0.0.1"
 

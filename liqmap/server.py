@@ -157,12 +157,21 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def page_url(host: str, port: int) -> str:
+    """URL to show for a bound host; wildcard or empty hosts map to loopback."""
+    if host in {"", "0.0.0.0", "::"}:
+        host = "127.0.0.1"
+    if ":" in host:
+        host = f"[{host}]"
+    return f"http://{host}:{port}"
+
+
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
-    url = f"http://127.0.0.1:{server.server_address[1]}"
+    url = page_url(args.host, server.server_address[1])
     print(f"Open liquidation heatmap at {url}", flush=True)
     if args.open:
         timer = threading.Timer(0.2, webbrowser.open, args=(url,))
