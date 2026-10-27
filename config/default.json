@@ -1,0 +1,22 @@
+{
+  "symbol": "BTCUSDT",
+  "window": "24h",
+  "interval": null,
+  "exchanges": ["binance", "bybit", "okx"],
+  "profile": "lognormal",
+  "alpha": 1.0,
+  "median": 15.0,
+  "sigma": 0.55,
+  "ladder": "full",
+  "leverages": null,
+  "mmr": null,
+  "mmr_mode": "bracket",
+  "fade": true,
+  "decay": 0.0,
+  "age_half_life_bars": null,
+  "bin_mode": "percent",
+  "bin_size": 0.25,
+  "smooth": 0.0,
+  "split": "even",
+  "y_span": null
+}
