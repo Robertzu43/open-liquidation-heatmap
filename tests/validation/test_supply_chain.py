@@ -176,9 +176,19 @@ def test_allowlist_rejects_a_stray_host() -> None:
     assert unlisted_python_hosts(listed) == []
 
 
-def test_allowlist_is_the_three_public_venues() -> None:
+def test_allowlist_is_public_binance_bybit_and_okx() -> None:
     assert ALLOWED_EXCHANGE_HOSTS == (
         "fapi.binance.com",
+        "data.binance.vision",
         "api.bybit.com",
         "www.okx.com",
     )
+
+
+def test_binance_archive_is_allowed_and_a_fourth_venue_is_not() -> None:
+    scheme = "https" + "://"
+    fourth = "api." + "gateio.ws"
+    text = f"url = '{scheme}{fourth}/api/v4/spot/candlesticks'\n"
+    assert unlisted_python_hosts(text) == [fourth]
+    archive = f"url = '{scheme}data.binance.vision/data/futures/um/'\n"
+    assert unlisted_python_hosts(archive) == []

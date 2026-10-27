@@ -41,6 +41,8 @@ def test_deploy_doc_covers_hosts_cache_and_has_no_wallet() -> None:
     assert "cache" in text.lower()
     assert "CoinGlass" in text
     assert "451" in text
+    assert "data.binance.vision" in text
+    assert "liqmap.model" in text
     assert "region" in text.lower()
     lowered = text.lower()
     assert "0x" not in lowered

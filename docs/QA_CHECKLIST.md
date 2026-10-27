@@ -12,7 +12,8 @@ The model is an estimate from open interest and an assumed leverage distribution
 - [ ] A price series is visible on the heatmap (line or candles).
 - [ ] The color scale has a legend with units or a label for estimated liquidation intensity.
 - [ ] The first fetch shows a spinner or other progress, then settles. A second interaction with the same symbol and window does not start a long refetch (cache).
-- [ ] The UI lists Binance, Bybit, and OKX. It does not list CoinGlass.
+- [ ] The UI lists Binance, Bybit, and OKX. It does not list CoinGlass or any other exchange.
+- [ ] Liquidation prices come from `liqmap.model` (re-exported as `heatmap.liq_price`). The page does not contain a second formula.
 
 ## 2. Time windows
 
@@ -58,6 +59,7 @@ The ladder runs from **2x through 125x** (2, 3, 5, 10, 20, 25, 50, 75, 100, 125,
 
 - [ ] An unknown symbol shows an error that names the symbol. The sidebar still accepts a new symbol.
 - [ ] One venue failing (timeout, HTTP 429, HTTP 451, or empty body) names that venue. The other venues still plot. HTTP 451 from Binance, or HTTP 403 from Bybit, means this demo is outside a region those venues serve (`docs/DEPLOY.md`). GitHub-hosted runners usually see that 451; it is a hosting limit, not a plotting bug.
+- [ ] If Binance REST is geo-blocked, historical klines may come from `data.binance.vision`. That series is still Binance. The page does not substitute a different exchange.
 - [ ] A rate-limit response backs off. The UI does not sit in a spinner that never ends.
 - [ ] After an error, changing the window or the leverage filter works. The app is not stuck on the failed request.
 - [ ] Very small windows and the longest window either render or explain why history is missing. They do not return a partial grid with silent zeros and no message.

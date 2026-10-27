@@ -15,6 +15,12 @@ The demo host has to sit in a region Binance and Bybit serve.
 
 `fapi.binance.com` returns **HTTP 451** to US IP addresses. Bybit often returns **HTTP 403** from the same places (a CloudFront country block). GitHub-hosted Actions runners are typically in the United States, so the scheduled smoke test skips an exchange that answers 451 or 403 instead of treating that response as a healthy check. OKX currently answers from US regions; a US-only demo still loses Binance and Bybit.
 
+Binance publishes historical klines at `data.binance.vision` with no API key. A loader may read that archive when `fapi.binance.com` is geo-blocked. The archive is still Binance. Bybit stays on `api.bybit.com` and OKX on `www.okx.com`. `tests/validation/net_allowlist.py` lists those hosts and no other exchange.
+
+The Streamlit app and the browser chart both call `liqmap.model`. `heatmap.liq_price`, `heatmap.fade_swept`, and `heatmap.bin_intensity` re-export that module. Do not keep a second liquidation formula in the UI.
+
+Public open interest does not need an exchange API key. Do not put a key in the repository, in CI, or in the image. A person who connects a read-only exchange account does that on their own machine, through the process environment. The app does not store that key, and it does not use the key as a second heatmap.
+
 Pick a Community Cloud or Spaces region in the EU or APAC, or any other network those two venues accept. When a venue returns 451 or a country block, the app should name that venue and keep drawing the venues that responded.
 
 ## Streamlit Community Cloud
