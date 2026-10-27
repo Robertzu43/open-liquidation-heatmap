@@ -40,9 +40,9 @@ python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
 | Refresh | Fetches again. |
 | Snapshot | Downloads a PNG of the canvas. |
 | Fullscreen | The chart card. |
-| Four color themes | Ember (purple to yellow), Tide, Magma, Glacier. Ember is the default. |
-| Liquidity threshold | Default 0.85. Client-side only. It compresses the color ramp so weak cells stay dark and shelves stay bright. It does not blank the chart. |
-| Liquidation map | Optional horizontal bars on the right. Green is resting long liquidity, red is resting short liquidity. Off by default. |
+| Five color themes | Aurora (purple, teal, green, yellow), Ember, Tide, Magma, Glacier. Aurora is the default. |
+| Liquidity threshold | Default 0.15, which keeps color about linear in USD up to the brightest line. Raising it compresses the ramp so weak cells stay dark. Client-side only. It does not blank the chart. |
+| Liquidation map | Optional panel on the right. Bars are the resting liquidity at each price. The green curve is the running total of shorts from price upward, and the red curve is the running total of longs from price downward. Off by default. |
 | Candles | Green up, red down, drawn on the heat. |
 | Axes | USD color scale on the left, price on the right, time along the bottom. Times are America/Bogota, labeled COT (UTC−5). |
 | Crosshair | Hover a line to see the bar's date and time, the price under the cursor, and the estimated liquidation value at that line. |
@@ -58,7 +58,7 @@ Exchanges do not publish each account's entry or leverage. `liqmap/model.py` is 
 
 1. Match each open-interest print to the candle whose open time is nearest that print. Ten minutes after an hourly open stays on that candle. Fifty minutes after that open uses the next candle. The entry is that bar's close.
 2. Count open interest in coins, one side of each contract. A rise of X coins is X coins of new longs and X coins of new shorts, valued at the entry. A price move with no new contracts adds nothing. Spread each side across a leverage mix. The weights in each model sum to 1.
-3. Park it at an isolated liquidation price. The zero-tier maintenance margin rate (MMR) is **0.005** (0.5%). Entry 100 at 10x is 90.4523 long and 109.4527 short.
+3. Park it at an isolated liquidation price. The heatmap uses a maintenance margin rate (MMR) of **0**, so a tier sits at `entry × (1 ± 1/leverage)`: entry 100 at 100x is 99 long and 101 short. That placement matched the reference screenshots best (see Calibration). `liqmap.model.liq_price` keeps the exchange formulas, with a 0.5% default MMR.
 
 ```
 long  = entry * (1 - 1/leverage) / (1 - MMR)
@@ -71,13 +71,33 @@ short = entry * (1 + 1/leverage) / (1 + MMR)
 
 | Model | Idea | Weights |
 | --- | --- | --- |
-| 1 Wide clusters | More weight on 5×–25×. Shelves sit further from price. No fade. | 5× 12%, 10× 28%, 25× 30%, 50× 20%, 100× 10% |
-| 2 Tight magnets | More weight on 25×–100×, a little volume churn, and a 72-hour half-life measured on the clock, so every range fades at the same rate per day. | 10× 8%, 25× 22%, 50× 35%, 75× 20%, 100× 15% |
-| 3 Flow skew | Same family of tiers, but new positions follow taker buy/sell when that data exists. | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% |
+| 1 Calibrated | Leverage mix fit to reference screenshots. No fade. | 20× 8%, 25× 12%, 40× 5%, 50× 21%, 75× 5%, 100× 41%, 125× 8% |
+| 2 Calibrated + fade | The same fit with a little volume churn and a 72-hour half-life measured on the clock, so every range fades at the same rate per day. | 20× 9%, 25× 13%, 40× 3%, 50× 25%, 75× 2%, 100× 48% |
+| 3 Calibrated + flow | The same fit, with taker buy/sell tilting new and closing positions when that data exists. | 20× 8%, 25× 13%, 50× 27%, 75× 2%, 100× 46%, 125× 4% |
 
 Models 1 and 2 give both sides the full rise in open interest. Model 3 tilts new and closing positions by the taker buy share: each side is scaled by twice its share, so an even share matches models 1 and 2.
 
 The same description is in the chart's "How this model works" disclosure, read from the model table so the page cannot drift from the code.
+
+Each price bin is 0.078% of the last price, about $62 for BTC at $80,000, and a line's value is the USD in one bin. That bin height matches the reference screenshots, so a hovered value is comparable to theirs.
+
+## Calibration
+
+`tools/calibrate.py` fits the leverage weights to screenshots of a reference heatmap. A JSON manifest per screenshot gives the venue, symbol, range, the UTC open of the last bar, and the pixel positions of the plot, the price axis, and the color bar. The tool reads the right-edge colors back into USD per price row, rebuilds the model for the same window, and solves a non-negative least squares fit for each model, because the resting profile is linear in the weights.
+
+```bash
+python tools/calibrate.py calibration/*.json
+```
+
+`calibration/` is git-ignored. Screenshots and manifests stay on your machine; only the fitted weights are committed. The current weights come from one Binance BTC/USDT 24 hour screenshot ending 27 Oct 2026 12:10 UTC:
+
+| Model | Correlation before | After |
+| --- | --- | --- |
+| 1 | 0.00 | 0.80 |
+| 2 | 0.47 | 0.82 |
+| 3 | 0.20 | 0.83 |
+
+Most shelves land within one or two bins of the reference at a similar USD value. The strongest single-bin line reads about half of the reference. The fit wanted about 1.2× more total size than the model deposits; that factor is not applied. One window is a small sample, so add screenshots from other days, coins, and ranges and refit.
 
 ## Data sources
 
@@ -119,12 +139,12 @@ The server is the Python standard library `ThreadingHTTPServer` on `0.0.0.0:8765
 python -m unittest tests.test_model -v
 ```
 
-The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. They also check that each new contract adds one long and one short, that a price move with no new contracts adds nothing, that a bar's own wick leaves the positions entered at its close, that model 3 at an even share closes like the even split, and that model 2 fades by the clock on 5-minute and 1-hour bars alike. Parser and combine tests do not touch the network.
+The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. They also check that each new contract adds one long and one short, that a price move with no new contracts adds nothing, that a bar's own wick leaves the positions entered at its close, that model 3 at an even share closes like the even split, and that model 2 fades by the clock on 5-minute and 1-hour bars alike. `tests/test_calibrate.py` checks that the screenshot reader recovers values from a synthetic color bar and that the fit recovers known weights. Parser and combine tests do not touch the network.
 
 ## Limitations
 
 - This is an estimate. It is not the exchange's liquidation engine and not anyone else's heatmap.
-- The leverage mix, the 0.5% zero-tier MMR, the close as entry, and the even long/short split (models 1 and 2) are assumptions. Candles are last price, not the mark price that triggers liquidation.
+- The leverage mix, the zero MMR placement, the close as entry, and the even long/short split (models 1 and 2) are assumptions. The mix is fit to one reference window. Candles are last price, not the mark price that triggers liquidation.
 - Cross margin, tiered maintenance, fees, and funding are available on `heatmap.liq_price` and are not the default map.
 - Binance from this kind of hosted network often cannot use the live futures API. The archive is delayed. Symbol mode drops that delayed book rather than painting yesterday's open interest on today's price.
 - Different venues and different models produce different shelves. Treat the map as context, not a target.

@@ -277,7 +277,7 @@ The distance formula is published by the exchange. The share of open interest th
 
 A uniform prior across every integer from 2 to 125 would look like a high-leverage prior even if that was not the intent. The integers from 50 through 125 inclusive number 76. At a 0.40 percent MMR their long distances run from 1.606 percent at 50× to 0.402 percent at 125×, so 50× sits outside 1.2 percent of the entry. The single 2× bucket sits 50 percent away by itself. Equal weight per leverage is equal weight per price only after you account for how the formula compresses the top of the ladder.
 
-Third-party-calibrated weights, including the Blocklens row, are someone else's fit to someone else's picture. They must not become this repository's defaults. A default here has to be an assumption this project states on its own. The three mixes in `liqmap/model.py` are listed in the README; they are not that fit, and none of them is a claim that it is the right prior.
+Third-party-calibrated weights, including the Blocklens row, are someone else's fit to someone else's picture. This note argued they should not become the repository's defaults. The owner chose otherwise: the three mixes in `liqmap/model.py` are now fit to screenshots of a reference heatmap with `tools/calibrate.py`, as the README's Calibration section describes. They match that picture; they are not a claim about what traders actually hold.
 
 ## A worked hour
 
@@ -412,17 +412,17 @@ Put the reasons in one place.
 - reads open interest in coins, one side of each contract (OKX `oiCcy`, Binance `sumOpenInterest` and the archive's `sum_open_interest`), so a price move with no new contracts adds nothing,
 - treats a rise of X coins as X coins of new longs and X coins of new shorts, valued at the entry; model 3 tilts that by twice the taker-buy share (clipped to 5–95 percent), so an even share gives the same split as models 1 and 2,
 - uses the bar's close as the entry, not the typical price,
-- splits each side across one of three published leverage mixes and places it with the cum=0 isolated form at a fixed 0.50% MMR, with no margin tiers,
+- splits each side across one of three leverage mixes fit to reference screenshots and places it at `entry × (1 ± 1/L)`, an MMR of zero, because that placement matched the reference best; the exchange formulas stay in `liq_price` for checks,
 - stores the book as USD notional at entry, not coin size,
 - per bar, erases first, then applies the open-interest change, then adds the bar's new positions, so this bar's wick cannot erase positions entered at this bar's close; a swept bin is zeroed whole, not split at the low or high,
 - multiplies both sides by `OI_now / OI_previous` when open interest falls (model 3 tilts which side shrinks by the taker share), treats missing and non-positive prints as missing, and limits one bar's change to the previous print,
 - fades the book only in model 2, with a 72-hour half-life measured on the clock, so a 24-hour map and a 1-year map fade at the same rate per day,
-- bins prices from `0.78 × min(low)` to `1.22 × max(high)` in 360 bins, which holds every tier down to 5×, and blurs each deposit with a small kernel,
+- bins prices from `0.78 × min(low)` to `1.22 × max(high)` in bins 0.078% of the last price tall (at most 1,000), which holds every tier the mixes use, and blurs each deposit with a small kernel,
 - in symbol mode sums coin open interest across OKX and Binance and takes candles from the freshest venue,
 - matches each open-interest timestamp to the nearest candle by `open_time`. Whether that candle is the one the reading belongs to depends on how the exchange aligns open-interest timestamps with candle opens; that is an alignment caveat, not a lookahead step,
-- and sets the color ceiling at the 99th percentile of positive cells in the command-line image and the 98.5th in the page.
+- and sets the color ceiling at the 99th percentile of positive cells in the command-line image and at the largest cell in the page.
 
-The long formula is `entry × (1 − 1/L) / (1 − MMR)`, the cum=0 isolated form at a fixed 0.50% MMR.
+The long formula is `entry × (1 − 1/L) / (1 − MMR)`, the cum=0 isolated form, used here with MMR set to zero.
 
 ## Sources
 
