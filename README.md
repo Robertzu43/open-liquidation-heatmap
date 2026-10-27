@@ -1,67 +1,134 @@
 # Open Liquidation Heatmap
 
-An educational, open-source implementation of a crypto perpetual futures **liquidation heatmap** model.
+An open estimate of a crypto perpetual **liquidation heatmap**. Bright shelves are prices where this model thinks leveraged positions would be forced out. The picture is built from public open interest and an assumed leverage mix.
 
-This is **not** affiliated with CoinGlass. It does **not** scrape CoinGlass, reverse-engineer their private endpoints, or redistribute their data. It re-implements the *publicly described idea* of estimating liquidation clusters from open interest changes and assumed leverage distributions, using only public exchange APIs.
+This project is **not** affiliated with CoinGlass. It does not scrape CoinGlass, call their private heatmap APIs, copy their code, or redistribute their data.
 
-## What a Liquidation Heatmap Is
+Not financial advice. A shelf is a model, not a print of exchange positions.
 
-A liquidation heatmap visualizes estimated price levels where large amounts of leveraged positions would be force-closed.
-
-- **Y-axis**: Price
-- **X-axis**: Time
-- **Color intensity**: Estimated density of liquidations at that price/time
-
-Bright bands below current price ≈ clusters of longs that liquidate on a drop.
-Bright bands above ≈ clusters of shorts that liquidate on a rise.
-
-**Important**: This is a *model / estimate*, not actual exchange position data. Exchanges do not publish individual entry prices or leverage. The model assumes how open interest is distributed across leverage tiers.
-
-## How the Model Works (Public Methodology)
-
-Based on widely discussed approaches (see independent write-ups of CoinGlass-style maps):
-
-1. Observe changes in aggregate Open Interest (OI) over time, along with price.
-2. When OI increases, treat the increase as new positions opened around that price.
-3. Distribute those new positions across common leverage levels (e.g. 10x, 20x, 50x, 100x), weighted more heavily toward lower leverage.
-4. Calculate the approximate liquidation price for each assumed leverage:
-   - Long: `entry * (1 - 1/leverage) / (1 - MMR)`
-   - Short: `entry * (1 + 1/leverage) / (1 + MMR)`
-   - MMR = maintenance margin rate (typically ~0.5% for BTC on major exchanges)
-5. Bin the resulting liquidation notional into a price/time grid.
-6. Optionally fade intensity as price later trades through a level (positions assumed cleared).
-
-Different models use different leverage weightings and decay assumptions. This repo starts with a simple, transparent version you can modify.
-
-## Data Sources
-
-- Public Binance Futures endpoints (no API key required for the historical data used here):
-  - Klines / candles
-  - Open Interest history
-
-You can extend it to Bybit, OKX, etc.
-
-## Quick Start
+## Run it
 
 ```bash
 pip install -r requirements.txt
-python heatmap.py --symbol BTCUSDT --interval 1h --lookback 3d
+python -m liqmap.server
 ```
 
-This generates a heatmap image (`heatmap.png`) and saves the raw grid (`heatmap_grid.npz`).
+Open http://127.0.0.1:8765 . The page defaults to a live OKX BTC/USDT pair, 24 hour window, model 1.
+
+Save a still image from the command line (matplotlib Agg backend, no window required):
+
+```bash
+python heatmap.py --exchange okx --symbol BTCUSDT --range 24h --model 1 --outfile heatmap.png
+```
+
+`--lookback` still works for older commands (`1d` maps to `24h`). `--range` wins if both are set. `--interval` is accepted and ignored, because each range picks its own bar size.
+
+Offline, with no exchange calls:
+
+```bash
+python heatmap.py --exchange demo --symbol ETHUSDT --range 7d --model 2
+```
+
+## What the chart shows
+
+| Control | Behavior |
+| --- | --- |
+| Model 1 / 2 / 3 | Three published leverage mixes. Model 1 is the default. Switching models reuses the cached series. |
+| Pair / Symbol | Pair is one venue. Symbol sums open interest across venues that are still fresh. |
+| Exchange | OKX, Binance, or Demo. |
+| Range | 12 hour, 24 hour, 3 day, 7 day, 30 day, 90 day, 180 day, 1 Year, 2 year. |
+| Refresh | Fetches again. |
+| Snapshot | Downloads a PNG of the canvas. |
+| Fullscreen | The chart card. |
+| Four color themes | Ember (purple to yellow), Tide, Magma, Glacier. Ember is the default. |
+| Liquidity threshold | Default 0.85. Client-side only. It compresses the color ramp so weak cells stay dark and shelves stay bright. It does not blank the chart. |
+| Liquidation map | Optional horizontal bars on the right. Green is resting long liquidity, red is resting short liquidity. Off by default. |
+| Candles | Green up, red down, drawn on the heat. |
+| Axes | USD color scale on the left, price on the right, time along the bottom. Times are America/Bogota, labeled COT (UTC−5). |
+| Crosshair | Price, time, estimated liquidity, and the candle. |
+| Zoom / pan | Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets. Fit uses the traded range. Wide shows the full model price domain. |
+| Analysis | Summary, nearest short shelf above, nearest long shelf below, 1/2/5/10% imbalance, and a level table. |
+| Auto-refresh | Off, 30s, 1m, or 5m. |
+
+Settings are stored in `localStorage`.
+
+## How the model works
+
+Exchanges do not publish each account's entry or leverage. `liqmap/model.py` is the whole model:
+
+1. Match each open-interest print to the candle whose open time is nearest that print. Ten minutes after an hourly open stays on that candle. Fifty minutes after that open uses the next candle. The entry is that bar's close.
+2. Spread that notional across a leverage mix. The weights in each model sum to 1.
+3. Park it at an isolated liquidation price. The zero-tier maintenance margin rate (MMR) is **0.005** (0.5%). Entry 100 at 10x is 90.4523 long and 109.4527 short.
+
+```
+long  = entry * (1 - 1/leverage) / (1 - MMR)
+short = entry * (1 + 1/leverage) / (1 + MMR)
+```
+
+4. A small kernel blurs each deposit across neighboring price bins so a tier reads as a shelf, not a one-pixel line.
+5. When a later candle trades through a liquidation price, that resting liquidity is removed. Longs below the bar's low survive. Shorts above the bar's high survive.
+6. Color is the resting notional at that price and time. The scale is relative to the window.
+
+| Model | Idea | Weights |
+| --- | --- | --- |
+| 1 Wide clusters | More weight on 5×–25×. Shelves sit further from price. No fade. | 5× 12%, 10× 28%, 25× 30%, 50× 20%, 100× 10% |
+| 2 Tight magnets | More weight on 25×–100×, a little volume churn, and a slow fade. | 10× 8%, 25× 22%, 50× 35%, 75× 20%, 100× 15% |
+| 3 Flow skew | Same family of tiers, but new positions follow taker buy/sell when that data exists. | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% |
+
+Models 1 and 2 split new open interest evenly between longs and shorts. Model 3 uses the taker buy fraction as the long share.
+
+The same description is in the chart's "How this model works" disclosure, read from the model table so the page cannot drift from the code.
+
+## Data sources
+
+Only public market data. No API key.
+
+| Venue | What we use |
+| --- | --- |
+| OKX | Swap candles, open-interest history, and taker volume for `COIN-USDT-SWAP`. This is the default because it is live. |
+| Binance | Live USDT-M klines and open interest when `fapi.binance.com` answers. If it does not (some networks get HTTP 451), the public [data.binance.vision](https://data.binance.vision) archive is used instead. Archive zips are cached under `.cache/`. The archive lags the live market by a day or two; the page shows an as-of banner in COT. |
+| Demo | A seeded synthetic series. No network. |
+| Symbol mode | OKX and Binance are fetched together. Price candles come from the freshest venue. Open interest is the sum. A stale Binance archive is left out, and the banner says so. |
+
+Symbols are normalized (`btc`, `BTCUSDT`, and `BTC-USDT` all mean BTC) and must match a short ticker pattern before they are placed in a URL.
+
+Bar size by range:
+
+| Range | Bar |
+| --- | --- |
+| 12h, 24h | 5m |
+| 3d | 15m |
+| 7d | 1h |
+| 30d, 90d | 4h |
+| 180d | 12h |
+| 1y, 2y | 1d |
+
+Series for the short ranges are cached briefly. Longer ranges are cached longer. The model run itself is not cached as a substitute for the series, so changing model 1 to model 2 does not download the market again.
+
+### HTTP API
+
+- `GET /api/heatmap?exchange&symbol&range&model&mode` — heatmap JSON. Price grids are little-endian float32, base64. `heat` is row-major with the price bin changing slowest.
+- `GET /api/status` — models, ranges, default view.
+- `GET /api/symbols` — the coin list and venues.
+
+The server is the Python standard library `ThreadingHTTPServer` on `0.0.0.0:8765`. JSON responses are gzip-compressed when the client asks.
+
+## Tests
+
+```bash
+python -m unittest tests.test_model -v
+```
+
+The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. Parser and combine tests do not touch the network.
 
 ## Limitations
 
-- Estimate only — not real order book or position data.
-- Assumes a leverage distribution that is not published by exchanges.
-- Ignores funding rates, fees, cross vs isolated, and exact maintenance margin tiers.
-- Different exchanges and different model assumptions produce different heatmaps.
-- For trading decisions, treat it as one contextual signal among many, never as a precise target.
+- This is an estimate. It is not the exchange's liquidation engine and not anyone else's heatmap.
+- The leverage mix, the 0.5% zero-tier MMR, and the even long/short split (models 1 and 2) are assumptions.
+- Cross margin, tiered maintenance, fees, and funding are available on `heatmap.liq_price` and are not the default map.
+- Binance from this kind of hosted network often cannot use the live futures API. The archive is delayed. Symbol mode drops that delayed book rather than painting yesterday's open interest on today's price.
+- Different venues and different models produce different shelves. Treat the map as context, not a target.
 
 ## License
 
-MIT — use freely, modify, and improve. Contributions welcome.
-
-## Disclaimer
-
-This is for educational and research purposes only. Not financial advice. Crypto futures are high risk.
+MIT. See [LICENSE](LICENSE).
