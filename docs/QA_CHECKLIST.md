@@ -2,7 +2,7 @@
 
 Manual pass for the Streamlit heatmap after the model rewrite is wired up. Run it against public Binance, Bybit, and OKX data. CoinGlass is out of scope: the page has no CoinGlass toggle, and the network panel shows no CoinGlass host.
 
-A Streamlit Community Cloud demo is in the United States, so Binance and Bybit REST answer HTTP 451 or 403. v0.1 on that host shows live OKX plus the `data.binance.vision` archive. Live Binance and Bybit need the planned non-US recorder. See `docs/DEPLOY.md`.
+A Streamlit Community Cloud app would run in the United States, so Binance and Bybit REST answer HTTP 451 or 403 from there. Not in this tree: a v0.1 page that shows live OKX plus the `data.binance.vision` archive. That is the intended demo after the app lands. Live Binance and Bybit need the planned non-US recorder. See `docs/DEPLOY.md`.
 
 Use one liquid symbol with a known trend, **BTCUSDT** (OKX: **BTC-USDT-SWAP**), and repeat a shorter pass on a quieter alt if the app offers one. Record the symbol, window, leverage filter, and exchanges with every screenshot.
 

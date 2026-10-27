@@ -16,7 +16,7 @@ From a US address, `fapi.binance.com` returns **HTTP 451** and Bybit often retur
 
 Not implemented in this tree: v0.1 reading live OKX plus the public `data.binance.vision` archive. `heatmap.py` still calls only `fapi.binance.com`. That archive is Binance historical klines and needs no API key. It is still Binance. It is not a live Binance order book or a live open-interest feed. The intended demo, once the app lands, uses the archive and live OKX from a US host.
 
-Live Binance and Bybit REST needs a host outside the United States. That host is a planned recorder (Frankfurt is the example region). It is not a self-hosted GitHub Actions runner. The nightly smoke job stays on GitHub-hosted runners, which are typically in the US, and skips a venue that answers 451 or 403. A skip is not a healthy result. See `.github/workflows/ci.yml`.
+Live Binance and Bybit REST needs a host outside the United States. That host is a planned recorder (Frankfurt is the example region). It is not a self-hosted GitHub Actions runner. The daily smoke job stays on GitHub-hosted runners, which are typically in the US, and skips a venue that answers 451 or 403. A skip is not a healthy result. See `.github/workflows/ci.yml`.
 
 Allowed hosts are `fapi.binance.com`, `data.binance.vision`, `api.bybit.com`, and `www.okx.com` (`tests/validation/net_allowlist.py`). Websocket hosts wait until the recorder exists. No other exchange is a heatmap source.
 
@@ -46,7 +46,7 @@ Render Free is the free container host. Pick **Frankfurt** during service creati
 3. Set the region to **Frankfurt** and the instance type to **Free**.
 4. Leave environment secrets empty.
 
-Frankfurt is outside the United States, so this host is a candidate for live Binance and Bybit REST once the recorder exists. v0.1 on Community Cloud does not get that path by changing a Cloud setting.
+Frankfurt is outside the United States, so this host is a candidate for live Binance and Bybit REST once the recorder exists. The intended Community Cloud demo does not get that path by changing a Cloud setting. That demo is not in this tree.
 
 To run the same image locally:
 

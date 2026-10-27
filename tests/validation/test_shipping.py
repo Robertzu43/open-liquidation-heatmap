@@ -73,6 +73,8 @@ def test_deploy_doc_covers_hosts_cache_and_has_no_wallet() -> None:
     assert "does not build the image" in text
     assert "500" in text
     lowered = text.lower()
+    assert "daily" in lowered
+    assert "nightly" not in lowered
     assert "one outbound" not in lowered
     assert "eu/apac" not in lowered
     assert "eu or apac" not in lowered
@@ -86,6 +88,7 @@ def test_qa_checklist_covers_windows_leverage_and_exchanges() -> None:
     for needle in ("12h", "90d", "2x", "125x", "Binance", "Bybit", "OKX"):
         assert needle in text
     assert ("Coin" + "Glass") in text
+    assert "intended demo after the app lands" in text
 
 
 def test_ci_runs_ruff_mypy_and_the_python_matrix() -> None:

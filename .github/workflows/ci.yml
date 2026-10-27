@@ -1,5 +1,5 @@
 # Ruff, mypy, and an offline pytest run on every push and pull request.
-# Sockets are disabled for that run. A nightly job (and any manual run) hits
+# Sockets are disabled for that run. A daily job (and any manual run) hits
 # live public Binance, Bybit, and OKX REST endpoints from a GitHub-hosted
 # runner. Those runners are typically in the US, so HTTP 451 or 403 skips
 # that venue instead of failing the job. Live Binance and Bybit checks from
