@@ -128,6 +128,13 @@ python -m unittest tests.test_model -v
 
 The tests check leverage weights, liquidation-price direction, that a bar which cannot reach the shelves keeps the deposited USD, that a later candle clears shorts after trading through them, that model 3 follows taker skew, and that the shelf finder sees a level above and below price. Parser and combine tests do not touch the network.
 
+`tools/ui_check.mjs` drives the page in headless Chrome: the Binance past view, replay steps and play, hover tiers, model switch and Live. It needs a server on `UI_BASE` (default `http://127.0.0.1:8791`), playwright-core and Chrome, and it reads the Binance archive for May 2021:
+
+```bash
+python -m liqmap.server --host 127.0.0.1 --port 8791 &
+UI_BASE=http://127.0.0.1:8791 PLAYWRIGHT_CORE=/path/to/playwright-core/index.mjs CHROME=/path/to/chrome node tools/ui_check.mjs
+```
+
 ## Limitations
 
 - This is an estimate. It is not the exchange's liquidation engine and not anyone else's heatmap.
