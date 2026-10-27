@@ -1,5 +1,7 @@
 # How liquidation heatmaps work
 
+**Where this repository is.** [The pipeline](#the-pipeline) and [How a level dies](#how-a-level-dies) describe the target model. The current `heatmap.py` does not carry levels forward, sweep or fade them, scale them when open interest falls, use the mark price, apply margin tiers, or tilt by taker share. What that script does today is in [Implementation status](#implementation-status).
+
 A liquidation heatmap is a picture of an estimate: at which prices a move would force leveraged perpetual positions to close, and how much size the model assigns to each price.
 
 The horizontal axis is time. The vertical axis is price. Color is the estimated notional (or coin size) whose liquidation price falls in that bin and is still open under the model's rules. Bands below the current price are estimated long liquidations. If the mark price trades down into them, those longs are sold. Bands above the current price are estimated short liquidations. If the mark price trades up into them, those shorts are bought back.
@@ -44,7 +46,7 @@ maintenance margin = notional × MMR − maintenance amount
 
 with the rate and the amount taken from the bracket the position's notional falls into ([Leverage and Margin of USDⓈ-M Futures](https://www.binance.com/en/support/faq/leverage-and-margin-of-usd%E2%93%A2-m-futures-360033162192)). The bracket applies to the whole position, not only to the slice above the previous cap. The maintenance amount exists so the dollar requirement does not jump at the boundary.
 
-This environment got HTTP 451 from `fapi.binance.com`, so the brackets below were not re-read live here. Two public write-ups that say they read Binance's bracket endpoint agree on the first BTCUSDT and ETHUSDT rungs. [Coinline](https://coinline.ai/academy/binance-maintenance-margin-liquidation-guide/) reports a read on 2026-10-18 (`updateTime` 2025-08-19). [The leverage calculator notes](https://cryptoleveragecalculator.app/binance-futures-calculator/) report a read on 2026-10-23 13:15 UTC. Both give:
+Verify the live brackets before relying on the table. `GET /fapi/v1/leverageBracket` returns them; the request is signed. Binance geo-restricts the futures API from some regions, so a call that fails on one network can succeed on another. The rows below are two public write-ups of that endpoint. [Coinline](https://coinline.ai/academy/binance-maintenance-margin-liquidation-guide/) reports a read on 2026-10-18 UTC (`updateTime` 2025-08-19 UTC). [The leverage calculator notes](https://cryptoleveragecalculator.app/binance-futures-calculator/) report a read on 2026-10-23 13:15 UTC. Both give:
 
 | Bracket | Notional (USDT) | Max leverage | MMR | Maintenance amount (USDT) |
 | --- | ---: | ---: | ---: | ---: |
@@ -59,7 +61,7 @@ ETHUSDT matches those rates on the first rungs; the upper notional caps differ. 
 
 Check the boundary so the maintenance amount is not a mystery. At 300,000 USDT, bracket 1 gives `300,000 × 0.004 − 0 = 1,200`. Bracket 2 gives `300,000 × 0.005 − 300 = 1,200`. Same dollars, higher marginal rate above the cut.
 
-Leverage chosen by the trader sets the **initial** margin (`notional / leverage`). It does not set the maintenance rate. A 10× position and a 100× position of the same small size sit in the same bracket and share the same MMR. The 100× position posts less collateral, so its liquidation price is closer to the entry. The bracket only bites in two ways: a large position is charged a higher MMR, and a position above a bracket's notional cap is not allowed to use that bracket's maximum leverage. On the snapshot above, 125× exists only inside bracket 1 (notional up to 300,000 USDT, cap 150×). A model that paints a 125× band for a multi-million-dollar slice is using a leverage that bracket cannot open.
+Leverage chosen by the trader sets the **initial** margin (`notional / leverage`). It does not set the maintenance rate. A 10× position and a 100× position of the same small size sit in the same bracket and share the same MMR. The 100× position posts less collateral, so its liquidation price is closer to the entry. The bracket does two further things: a larger position is charged a higher MMR, and the maximum leverage depends on the position-size bracket. On the snapshot above, BTCUSDT up to 300,000 USDT (bracket 1) may use up to 150×, so 125× is available only in that bracket. The following brackets cap leverage at 100×, 75×, 50×, 25×, and 20× as notional grows. A model that paints a 125× band for size sitting in a lower-cap bracket is using a leverage that bracket cannot open.
 
 ### Isolated liquidation price
 
@@ -126,7 +128,9 @@ Under cross margin the liquidation price moves whenever the wallet moves. Fundin
 
 ## The pipeline
 
-The usual public construction walks one bar at a time and keeps a book of estimated coin size by price bin and by side. [Blocklens publishes the procedure in full](https://docs.blocklens.co/lab/liquidation-map), including pseudocode. The diagram here is that procedure, written so the same-bar ordering is visible: the candle erases first, and positions opened on this bar are not erased by this bar's wick, because the archive does not say which happened first.
+This section is the **target model**, not the behavior of `heatmap.py`. The target keeps a stock of estimated coin size by price bin and by side, carries that stock forward, sweeps it, and scales it. The script does none of those updates; the gap is in [Implementation status](#implementation-status).
+
+The target walks one bar at a time. [Blocklens publishes one full version of this procedure](https://docs.blocklens.co/lab/liquidation-map), including pseudocode. The diagram is that shape, with the same-bar ordering made visible: the candle erases first, and positions opened on this bar are not erased by this bar's wick, because the archive does not say which happened first.
 
 ```mermaid
 flowchart TD
@@ -139,7 +143,7 @@ flowchart TD
   missing[OI missing or non-positive: leave the book, keep the erasure]
   entry[Entry at the bar typical price, side tilt from taker-buy share]
   ladder[Split each side across the leverage ladder]
-  place[Isolated liquidation price, bracket-1 MMR, cum = 0]
+  place[Isolated liquidation price from that size's MMR and cum]
   add[Add the coin size into the bin that contains that price]
   shrink[Multiply every bin by OI now over OI previous]
   snap[This column of the heatmap is a copy of the book]
@@ -160,7 +164,9 @@ flowchart TD
   snap --> color
 ```
 
-A second convention exists and looks different. The **deposit** chart paints the new liquidation notional only in the column of the bar that opened it, and never carries the book forward. That chart answers "where was new liquidation risk created?" The **stock** chart above answers "where does surviving risk still sit?" The pictures people mean by "liquidation heatmap" are stock charts: horizontal bands that start when the position is inferred and end when a later candle reaches them. [AlertaChart](https://www.alertachart.com/learn/liquidation-heatmap) draws that band explicitly. [Coinliqui](https://coinliqui.com/learn/liquidation-heatmap) fades it on a clock as well as on a sweep.
+The diagram is the stock chart people mean by a liquidation heatmap: horizontal bands that start when the position is inferred and end when a later candle reaches them. [AlertaChart](https://www.alertachart.com/learn/liquidation-heatmap) draws that band. [Coinliqui](https://coinliqui.com/learn/liquidation-heatmap) also fades it on a clock.
+
+A **deposit** chart is a different object. It paints new liquidation notional only in the column of the bar that opened it, and it never carries the book forward. It answers "where was new liquidation risk created?" `heatmap.py` is a deposit chart. It is not the target above.
 
 ## Inferring entries from open interest and volume
 
@@ -221,7 +227,7 @@ A model can do both, and the two removals answer different questions. The scale 
 
 ## Leverage, from 2× to 125×
 
-Any leverage `L` maps to a liquidation distance through the isolated formula above. The table uses an entry of 100,000 and an MMR of 0.40 percent, the bracket-1 BTCUSDT rate in the October 2026 snapshots. "Distance" is the adverse move from the entry to the exact isolated price. The additive columns are the approximation `entry × (1 ∓ 1/L ± MMR)`.
+Any leverage `L` maps to a liquidation distance through the isolated formula above. The table uses an entry of 100,000 and an MMR of 0.40 percent, the smallest-bracket BTCUSDT rate in the October 2026 UTC snapshots. That rate applies only while notional stays inside that bracket. "Distance" is the adverse move from the entry to the exact isolated price. The additive columns are the approximation `entry × (1 ∓ 1/L ± MMR)`.
 
 | Leverage | Long, exact | Long distance | Short, exact | Short distance | Long, additive | Short, additive |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -244,7 +250,7 @@ Any leverage `L` maps to a liquidation distance through the isolated formula abo
 | 100× | 99,397.59 | 0.602% | 100,597.61 | 0.598% | 99,400.00 | 100,600.00 |
 | 125× | 99,598.39 | 0.402% | 100,398.41 | 0.398% | 99,600.00 | 100,400.00 |
 
-For any other leverage in between, use the formula. The distance falls a little faster than `1/L` because of the MMR in the numerator: a 125× long has initial margin of 0.800 percent and only about 0.402 percent of price before maintenance, not 0.800 percent. At an MMR of 0.40 percent the buffer `1/L − MMR` is already gone by `L = 250`. Bracket 1 on the snapshot caps BTCUSDT at 150×, where `1/L` is 0.667 percent and the long distance is `(0.006667 − 0.004) / 0.996 ≈ 0.268` percent.
+For any other leverage in between, use the formula. The distance falls a little faster than `1/L` because of the MMR in the numerator: a 125× long has initial margin of 0.800 percent and only about 0.402 percent of price before maintenance, not 0.800 percent. At an MMR of 0.40 percent the buffer `1/L − MMR` is already gone by `L = 250`. Whether 125× or 150× can be opened is not a property of the symbol alone. It is the maximum of the position-size bracket. On the snapshot, bracket 1 allows 150× (`1/L` is 0.667 percent, and the long distance at a 0.40 percent MMR is about 0.268 percent). A position that sits in bracket 2 is capped at 100×, and larger brackets are capped lower, as in the table above.
 
 At an MMR of 0.50 percent, which is a common round assumption and bracket 2's rate, the same entries move slightly closer. A 10× long liquidates at 90,452.26 (9.548 percent away) and a 125× long at 99,698.49 (0.302 percent away).
 
@@ -265,17 +271,17 @@ The distance formula is published by the exchange. The share of open interest th
 
 | Source | What they place on the ladder |
 | --- | --- |
-| [Blocklens](https://docs.blocklens.co/lab/liquidation-map) | 3×, 4×, 5×, 10×, 20×, 25×, 50×, 100× with weights 1, 1, 3, 3, 1, 1, 1, 1. That is 8.3 percent each, except 5× and 10× at 25 percent. Leverages above the contract's maximum are dropped and the rest renormalized. Calibrated so that large clusters on reference BTC maps lined up with 3×–10× entries from prices where the market had spent time. |
+| [Blocklens](https://docs.blocklens.co/lab/liquidation-map) | 3×, 4×, 5×, 10×, 20×, 25×, 50×, 100× with weights 1, 1, 3, 3, 1, 1, 1, 1. That is 8.3 percent each, except 5× and 10× at 25 percent. Leverages above the contract's bracket maximum are dropped and the rest renormalized. The weights were calibrated so that large clusters on other published BTC maps lined up with 3×–10× entries from prices where the market had spent time. |
 | [AlertaChart](https://www.alertachart.com/learn/liquidation-heatmap) | 10× 18%, 20× 22%, 25× 22%, 50× 18%, 75× 10%, 100× 10%. No 2×–5×. A 0.5 percent MMR in the additive formula. |
 | [Coinliqui](https://coinliqui.com/learn/liquidation-heatmap) | Three named profiles on 2×, 5×, 10×, 20×, 25×, 40×. Aggressive puts 24 percent at 25× and 22 percent at 40×. Balanced puts 27 percent at 10×. Conservative puts 23 percent at 2× and 32 percent at 5×. Nothing above 40×. Levels above a contract's own cap are redistributed. |
 
 A uniform prior across every integer from 2 to 125 would look like a high-leverage prior even if that was not the intent. Sixty of those integers lie between 50 and 125, and all of them land inside a 1.2 percent band around the entry. The single 2× bucket sits 50 percent away by itself. Equal weight per leverage is equal weight per price only after you account for how the formula compresses the top of the ladder.
 
-The initial script in this repository uses a fourth prior, stated in code rather than fitted: 10× 40%, 20× 30%, 50× 20%, 100× 10%, and an MMR of 0.50 percent in the exact isolated formula. It has no 2×–5× mass, so it cannot show the far shelves a 3×–5× prior produces.
+Third-party-calibrated weights, including the Blocklens row, are someone else's fit to someone else's picture. They must not become this repository's defaults. A default here has to be an assumption this project states on its own. The weights currently hardcoded in `heatmap.py` are described in [Implementation status](#implementation-status); they are not that fit, and they are not a claim that 10×/20×/50×/100× is the right prior.
 
 ## A worked hour
 
-BTC-style linear contract, one hour, typical price 100,000, contract open interest up by 1,000 BTC, taker-buy share `b = 0.6`, MMR 0.40 percent, `cum = 0`, exact isolated formula, Blocklens's published weights so the side split and the ladder can be checked against a public source. The prices differ from theirs by the additive-versus-exact gap discussed above.
+BTC-style linear contract, one hour, typical price 100,000, contract open interest up by 1,000 BTC, taker-buy share `b = 0.6`, MMR 0.40 percent, `cum = 0`, exact isolated formula. The weights are Blocklens's published prior, so the side split and the ladder can be checked against a public source. The prices differ from theirs by the additive-versus-exact gap discussed above. Those weights are an illustration in this section. They must not be copied in as a default.
 
 ```text
 new longs  = 1,000 × min(1, 2 × 0.6) = 1,000 BTC
@@ -306,13 +312,13 @@ The same hour also shows why a large position does not use the 0.40 percent row.
 LP = (100,000 × (1 − 1/20) − 12,000/50) / (1 − 0.01) = 95,717.17
 ```
 
-which is 4.283 percent below the entry. The bracket-1 formula would have said 95,381.53, or 4.618 percent. The higher rate pulls the trigger closer. Dropping the maintenance amount as well would pull it to 95,959.60. The amount gives some of that distance back, which is what it is for. A heatmap that stamps every coin with the bracket-1 price is slightly wide of a whale's true trigger, and it is silent about Bybit-style and OKX-style partial cuts, which close the excess above the previous tier with an immediate-or-cancel order before the rest of the position is eligible for a full liquidation.
+which is 4.283 percent below the entry. The smallest-bracket formula (0.40 percent MMR, `cum = 0`) would have said 95,381.53, or 4.618 percent. The higher rate pulls the trigger closer. Dropping the maintenance amount as well would pull it to 95,959.60. The amount gives some of that distance back, which is what it is for. A heatmap that stamps every coin with the smallest-bracket price is slightly wide of a whale's true trigger, and it is silent about Bybit-style and OKX-style partial cuts, which close the excess above the previous tier with an immediate-or-cancel order before the rest of the position is eligible for a full liquidation.
 
 ## What the time window changes
 
 The map is a stock. The window is the moment the stock is initialized to empty. Lengthening it does not "zoom out" on the same positions. It admits cohorts the short window never saw, and then runs those cohorts through every later sweep and every later open-interest decline.
 
-Blocklens measured this on their own BTC and ETH maps. A 30-day window on 2026-10-03 held about 61 percent of the coin mass of a window that had been run for 180 days (about 39 percent was missing). The 90-day and 180-day maps on 2026-10-04 shared the same three largest clusters on each side. Extending the window from 180 days to 730 days did not change the profile: anything older had already been scaled down by open-interest declines or erased by price. They also report a survival curve fitted on Hyperliquid, where position age is observable, of `0.32 × e^(−t/2.1) + 0.68 × e^(−t/86)` with `t` in days: roughly 8 percent of positions still open after 180 days. That curve is a different venue. It is useful only as a warning that a real book has a long tail a 12-hour model is structurally unable to see.
+Blocklens measured this on their own BTC and ETH maps. A 30-day window on 2026-10-03 UTC held about 61 percent of the coin mass of a window that had been run for 180 days (about 39 percent was missing). The 90-day and 180-day maps on 2026-10-04 UTC shared the same three largest clusters on each side. Extending the window from 180 days to 730 days did not change the profile: anything older had already been scaled down by open-interest declines or erased by price. They also report a survival curve fitted on Hyperliquid, where position age is observable, of `0.32 × e^(−t/2.1) + 0.68 × e^(−t/86)` with `t` in days: roughly 8 percent of positions still open after 180 days. That curve is a different venue. It is useful only as a warning that a real book has a long tail a 12-hour model is structurally unable to see.
 
 | Window | What it is able to show | What it leaves out |
 | --- | --- | --- |
@@ -340,7 +346,7 @@ Bybit's open-interest history pages with a cursor and can be asked back to the l
 
 ## How a level dies
 
-Four mechanisms, and they are independent.
+This section is the **target model**. In that model a level leaves the book in four ways, and the four are independent. The current `heatmap.py` does not sweep, fade, or scale; it only deposits a level into the column where it was opened, and only if the price falls inside the clip described in [Implementation status](#implementation-status).
 
 1. **The price sweeps it.** After the bar, long bins at or above the bar's low are zero, and short bins at or below the bar's high are zero. Using the mark-price high and low matches the trigger. Using the last-price high and low matches the candle the eye sees. New positions of the current bar should survive the current bar, because the model does not know whether the wick happened before the open. They become eligible on the next bar.
 2. **Open interest falls.** Scaling by `OI_now / OI_previous` shrinks every survivor, including bins the price did not touch. A zero or negative open-interest print is a data error, not a close. Blocklens records Binance archive rows with open interest of 0 that would otherwise multiply the whole book by zero and then rebuild it from a single hour. Treat non-positive and non-finite prints as missing: erase with the candle, and compute the next delta against the last valid print.
@@ -349,7 +355,7 @@ Four mechanisms, and they are independent.
 
 Partial sweeps follow the binning. If a bin is 500 dollars wide and the low prints inside it, zeroing the whole bin overstates the liquidation, and keeping the whole bin understates it. Splitting the bin at the low is the consistent rule. A wick that only crosses the top of a wide bin should not delete the bottom of it.
 
-Realized liquidation prints are a check, not a replacement. Binance's `@forceOrder` stream has pushed at most one liquidation per symbol per second since the 2021-04-27 changelog entry, and the 2026-04-10 changelog (effective 2026-04-14) changed which one: the largest in that 1000 ms window, not the latest ([derivatives change log](https://developers.binance.com/docs/derivatives)). In a cascade the feed is a lower bound. A band that the price cuts through with no print may mean the positions were never there, or that they closed earlier, or that the prints were dropped. Absence from the feed does not falsify the band by itself. A print with no band does not validate a vendor's heatmap either. Blocklens's October 2026 comparison found third-party maps disagreeing with each other on the long side, and found only a weak association (rank correlation about 0.1 in the strongest fifth of 5-minute moves) between trading through a cluster and a larger open-interest drop. Over 530 days the price did not touch the largest clusters more often than random levels. The map is a description of where a move would be mechanically extended. It is not a magnet and not a target.
+Realized liquidation prints are a check, not a replacement. Binance's `@forceOrder` stream has pushed at most one liquidation per symbol per second since the 2021-04-27 UTC changelog entry, and the 2026-04-10 UTC changelog (effective 2026-04-14 UTC) changed which one: the largest in that 1000 ms window, not the latest ([derivatives change log](https://developers.binance.com/docs/derivatives)). In a cascade the feed is a lower bound. A band that the price cuts through with no print may mean the positions were never there, or that they closed earlier, or that the prints were dropped. Absence from the feed does not falsify the band by itself. A print with no band does not validate a vendor's heatmap either. Blocklens's October 2026 UTC comparison found third-party maps disagreeing with each other on the long side, and found only a weak association (rank correlation about 0.1 in the strongest fifth of 5-minute moves) between trading through a cluster and a larger open-interest drop. Over 530 days the price did not touch the largest clusters more often than random levels. The map is a description of where a move would be mechanically extended. It is not a magnet and not a target.
 
 ## Color
 
@@ -388,7 +394,7 @@ Put the reasons in one place.
 ## Limitations, collected
 
 - **The leverage mix is assumed** and is applied the same way to every bar and both sides. Real leverage depends on who is trading, the regime, and the side.
-- **Isolated, bracket 1, no extra margin, no fees.** Cross margin, portfolio margin, added margin, the closing fee, and higher brackets all move the trigger. The 5,000,000 USDT example above is the size of the bracket effect at 20×: a few tenths of a percent of price. Funding over a quarter can be larger than that.
+- **Isolated, one MMR, no extra margin, no fees.** The maximum leverage and the MMR both depend on the position-size bracket. Cross margin, portfolio margin, added margin, the closing fee, and higher brackets all move the trigger. The 5,000,000 USDT example above is the size of the bracket effect at 20×: a few tenths of a percent of price. Funding over a quarter can be larger than that.
 - **One entry price per bar.** The path inside the bar is collapsed.
 - **Closes are anonymous.** Proportional scaling and sweep-only removal are both wrong in a way the data cannot fix.
 - **The window left-censors the book.** Short windows miss the far, low-leverage, long-lived positions. Very long windows stop adding information only after sweeps and open-interest declines have done their work, and they still miss positions that survived by a path the model does not represent.
@@ -398,23 +404,25 @@ Put the reasons in one place.
 - **Color is relative** to the normalization of that figure. It does not travel across symbols, venues, or windows.
 - **The map is not a forecast.** A public test of this family of models found a weak acceleration effect and no magnet effect. Treat a band as a conditional statement about forced flow if the price gets there.
 
-## How this relates to the initial script
+## Implementation status
 
-`heatmap.py` in the initial implementation is a teaching sketch of the public idea, not the pipeline drawn above. As of that sketch it:
+`heatmap.py` is a teaching sketch of the public idea. It is not the target in [The pipeline](#the-pipeline) or [How a level dies](#how-a-level-dies). As of this note the script:
 
-- pulls Binance USDⓈ-M klines and `openInterestHist`,
+- pulls Binance USDⓈ-M last-price klines and `openInterestHist`, and does not use the mark price,
 - differences `sumOpenInterestValue` rather than contract open interest,
 - keeps four leverages (10×, 20×, 50×, 100×) at weights 40, 30, 20, and 10 percent,
-- uses the exact isolated formula at a fixed MMR of 0.50 percent,
-- assigns half of each open-interest increase to longs and half to shorts,
-- deposits that notional only into the time column of the open, with no carry-forward, no proportional close, and no sweep,
+- uses the cum=0 isolated form at a fixed 0.50% MMR, and does not apply margin tiers,
+- assigns half of each open-interest increase to longs and half to shorts, with no taker-share tilt,
+- deposits that notional only into the time column of the open: it does not carry levels forward, sweep or fade them, or scale them when open interest falls,
+- drops any liquidation price outside `0.95 * min(low)` … `1.05 * max(high)` of the loaded candles, so levels past that band are clipped away rather than drawn,
+- takes the entry as the close of the kline whose `open_time` is nearest the open-interest timestamp, which looks one candle ahead,
 - and sets the color ceiling at the 95th percentile of the positive cells.
 
-A reader comparing a stock-style heatmap to that script should expect different pictures from the same data, for the reasons in the pipeline section. The script is still a useful check of the arithmetic: its long formula is `entry × (1 − 1/L) / (1 − MMR)`, which is the bracket-1 isolated result derived above.
+A reader comparing a stock-style heatmap to that script should expect different pictures from the same data. The script is still a check of the arithmetic: its long formula is `entry × (1 − 1/L) / (1 − MMR)`, the cum=0 isolated form at a fixed 0.50% MMR.
 
 ## Sources
 
-All of these were public pages, read for this note on 2026-10-27 unless the source itself carries an earlier review date.
+All of these were public pages, read for this note on 2026-10-27 UTC unless the source itself carries an earlier review date.
 
 Exchange rules and market data:
 
@@ -426,26 +434,26 @@ Exchange rules and market data:
 - Binance, [Open Interest Statistics](https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Open-Interest-Statistics). Latest month, `sumOpenInterest`, `sumOpenInterestValue`.
 - Binance, [Kline Candlestick Data](https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Kline-Candlestick-Data). Taker-buy volume fields.
 - Binance, [Top Trader Long/Short Position Ratio](https://developers.binance.com/docs/derivatives/usds-margined-futures/market-data/rest-api/Top-Trader-Long-Short-Ratio).
-- Binance, [derivatives change log](https://developers.binance.com/docs/derivatives). `@forceOrder` snapshot cadence (2021-04-27) and the largest-in-1000ms description (2026-04-10).
+- Binance, [derivatives change log](https://developers.binance.com/docs/derivatives). `@forceOrder` snapshot cadence (2021-04-27 UTC) and the largest-in-1000ms description (2026-04-10 UTC).
 - Binance, [10 most frequently asked questions about Binance Futures](https://www.binance.com/en/blog/futures/10-most-frequently-asked-questions-about-binance-futures-421499824684903916). Funding and multi-asset collateral move the liquidation price.
 - Binance, [binance-public-data](https://github.com/binance/binance-public-data) and the [metrics archive](https://data.binance.vision/?prefix=data/futures/um/daily/metrics/BTCUSDT/).
-- Bybit, [UTA liquidation process](https://www.bybit.com/en/help-center/article/UTA-Trading-Rules-Liquidation-Process), updated 2026-10-15. Isolated formula, mark price, tiered partial close.
+- Bybit, [UTA liquidation process](https://www.bybit.com/en/help-center/article/UTA-Trading-Rules-Liquidation-Process), updated 2026-10-15 UTC. Isolated formula, mark price, tiered partial close.
 - Bybit, [Get Open Interest](https://bybit-exchange.github.io/docs/v5/market/open-interest). One side versus both sides.
-- OKX, [Isolated margin mode](https://www.okx.com/en-us/help/vii-introduction-to-the-isolated-mode-of-single-multi-currency-portfolio-margin), updated 2026-09-30.
+- OKX, [Isolated margin mode](https://www.okx.com/en-us/help/vii-introduction-to-the-isolated-mode-of-single-multi-currency-portfolio-margin), updated 2026-09-30 UTC.
 - OKX, [Liquidation FAQ](https://www.okx.com/en-sg/help/liquidation-faq). Estimated price versus the mark-price trigger.
 - OKX, [v5 public data](https://www.okx.com/docs-v5/en/#public-data-rest-api-get-open-interest). Open interest and the trading-statistics history endpoints.
 
 Published heatmap methodologies, none of them used as a data source:
 
 - Blocklens, [Liquidation Map Methodology](https://docs.blocklens.co/lab/liquidation-map). Formulas, weights, sweep ordering, proportional closes, window study, Hyperliquid contrast.
-- AlertaChart, [Liquidation heatmap: estimated levels vs real liquidations](https://www.alertachart.com/learn/liquidation-heatmap), reviewed 2026-10-05.
+- AlertaChart, [Liquidation heatmap: estimated levels vs real liquidations](https://www.alertachart.com/learn/liquidation-heatmap), reviewed 2026-10-05 UTC.
 - Coinliqui, [What a liquidation heatmap actually shows](https://coinliqui.com/learn/liquidation-heatmap).
 - Bitsgap, [Crypto Liquidation Heatmap Explained](https://bitsgap.com/blog/crypto-liquidation-heatmap-explained).
 - WinCAlgo, [What Is a Liquidation Heatmap?](https://wincalgo.com/en/guides/liquidation-heatmap).
 
-Bracket snapshots used because the futures API was geo-blocked from this environment:
+Bracket snapshots. Confirm them with `GET /fapi/v1/leverageBracket`. Binance geo-restricts that API from some regions:
 
-- Coinline, [maintenance margin and liquidation price](https://coinline.ai/academy/binance-maintenance-margin-liquidation-guide/), bracket read 2026-10-18.
-- [Binance futures calculator notes](https://cryptoleveragecalculator.app/binance-futures-calculator/), bracket read 2026-10-23.
+- Coinline, [maintenance margin and liquidation price](https://coinline.ai/academy/binance-maintenance-margin-liquidation-guide/), bracket read 2026-10-18 UTC.
+- [Binance futures calculator notes](https://cryptoleveragecalculator.app/binance-futures-calculator/), bracket read 2026-10-23 13:15 UTC.
 
 The arithmetic in the tables was recomputed for this note from the formulas above. Where a published example is cited, the citation carries the number and this note's own figure is labeled as such.
