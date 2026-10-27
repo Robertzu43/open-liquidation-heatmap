@@ -1,0 +1,16 @@
+.git
+.github
+**/__pycache__
+**/*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.venv
+venv
+heatmap.png
+heatmap_grid.npz
+tests
+docs
+*.md
+.coverage
+coverage.xml
