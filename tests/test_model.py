@@ -22,10 +22,7 @@ from liqmap.data import (
 from liqmap.model import (
     MODELS,
     MarketSeries,
-    bin_intensity,
     build_heatmap,
-    fade_swept,
-    liq_price,
     liq_price_long,
     liq_price_short,
 )
@@ -63,21 +60,9 @@ class ModelTests(unittest.TestCase):
             self.assertAlmostEqual(sum(spec["kernel"]), 1.0)
             self.assertGreater(len(spec["weights"]), 0)
 
-    def test_zero_tier_golden_and_non_finite(self):
+    def test_zero_tier_golden(self):
         self.assertAlmostEqual(liq_price_long(100, 10, 0.005), 90.4522613065, places=4)
         self.assertAlmostEqual(liq_price_short(100, 10, 0.005), 109.4527363184, places=4)
-        self.assertAlmostEqual(liq_price(100, 10, "long", 0.005), 90.4522613065, places=4)
-        with self.assertRaisesRegex(ValueError, "inputs must be finite"):
-            liq_price(float("nan"), 10, "long", 0.005)
-        with self.assertRaisesRegex(ValueError, "inputs must be finite"):
-            liq_price(100, float("inf"), "short", 0.005)
-
-    def test_fade_and_bins(self):
-        kept = fade_swept([(90.0, 5.0, "long"), (110.0, 4.0, "short")], [(100.0, 95.0)])
-        self.assertEqual(kept, [(90.0, 5.0, "long"), (110.0, 4.0, "short")])
-        swept = fade_swept([(90.0, 5.0, "long"), (110.0, 4.0, "short")], [(112.0, 89.0)])
-        self.assertEqual(swept, [])
-        self.assertEqual(bin_intensity([1.0, 2.0, 3.0], [10.0, 1.0, 4.0], [0.0, 2.0, 3.0]), [10.0, 5.0])
 
     def test_open_interest_joins_the_nearest_candle_open(self):
         grid = np.array([0, 3_600_000, 7_200_000], dtype=np.int64)

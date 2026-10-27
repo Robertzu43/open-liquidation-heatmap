@@ -141,7 +141,7 @@ UI_BASE=http://127.0.0.1:8791 PLAYWRIGHT_CORE=/path/to/playwright-core/index.mjs
 
 - This is an estimate. It is not the exchange's liquidation engine and not anyone else's heatmap.
 - The leverage mix, the 0.5% zero-tier MMR, and the even long/short split (models 1 and 2) are assumptions.
-- Cross margin, tiered maintenance, fees, and funding are available on `liqmap.model.liq_price` and are not the default map.
+- Cross margin, tiered maintenance, fees, and funding are not modeled. Venue-specific liquidation formulas are not in this repo.
 - Binance from this kind of hosted network often cannot use the live futures API. The archive is delayed. Symbol mode drops that delayed book rather than painting yesterday's open interest on today's price.
 - Different venues and different models produce different shelves. Treat the map as context, not a target.
 - Sweeps use last-price candles, not the mark price that triggers a real liquidation. There is one fixed 0.5% MMR and no position-size brackets.

@@ -1,16 +1,13 @@
 """Pytest hooks for the validation suite.
 
-Network tests stay skipped unless ``RUN_NETWORK=1``. The daily CI smoke job
-sets that variable; a normal ``pytest`` run does not.
+Network tests stay skipped unless ``RUN_NETWORK=1``.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
 
 import pytest
 from hypothesis import HealthCheck, settings
@@ -52,62 +49,3 @@ def pytest_collection_modifyitems(
         if "network" in item.keywords:
             item.add_marker(skip)
 
-
-@pytest.fixture(params=["oracle", "model"])
-def price_of(request: pytest.FixtureRequest) -> Callable[..., float]:
-    """Oracle formula, or the bound production function (skips if unbound)."""
-    from tests.validation import adapter, oracle
-
-    if request.param == "oracle":
-        return oracle.liq_price
-
-    def _model(*args: Any, **kwargs: Any) -> float:
-        try:
-            return adapter.liq_price(*args, **kwargs)
-        except adapter.InterfaceGap as exc:
-            pytest.skip(str(exc))
-
-    return _model
-
-
-@pytest.fixture(params=["oracle", "model"])
-def fade_of(
-    request: pytest.FixtureRequest,
-) -> Callable[..., list[tuple[float, float, str]]]:
-    """Spec fade, or the production function once it is exported."""
-    from tests.validation import adapter, oracle
-
-    if request.param == "oracle":
-        return oracle.fade_swept
-
-    def _model(
-        levels: Sequence[tuple[float, float, str]],
-        bars: Sequence[tuple[float, float]],
-    ) -> list[tuple[float, float, str]]:
-        try:
-            return adapter.fade_swept(levels, bars)
-        except adapter.InterfaceGap as exc:
-            pytest.skip(str(exc))
-
-    return _model
-
-
-@pytest.fixture(params=["oracle", "model"])
-def bin_of(request: pytest.FixtureRequest) -> Callable[..., list[float]]:
-    """Spec binner, or the production function once it is exported."""
-    from tests.validation import adapter, oracle
-
-    if request.param == "oracle":
-        return oracle.bin_intensity
-
-    def _model(
-        prices: Sequence[float],
-        intensities: Sequence[float],
-        edges: Sequence[float],
-    ) -> list[float]:
-        try:
-            return adapter.bin_intensity(prices, intensities, edges)
-        except adapter.InterfaceGap as exc:
-            pytest.skip(str(exc))
-
-    return _model
