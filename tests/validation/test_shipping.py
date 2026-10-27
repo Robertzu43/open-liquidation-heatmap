@@ -19,14 +19,23 @@ def _text(relative: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_dockerfile_text_names_streamlit_and_the_listen_port() -> None:
+def test_dockerfile_text_has_no_unpinned_install() -> None:
     """Static Dockerfile lint. This does not build or start the image."""
-    text = _text("Dockerfile").lower()
-    assert "python:3.12" in text
-    assert "streamlit" in text
-    assert "plotly" in text
+    text = _text("Dockerfile")
+    lowered = text.lower()
+    assert "python:3.12" in lowered
     assert "7860" in text
-    assert ("coin" + "glass") not in text
+    assert ">=" not in text
+    assert ("coin" + "glass") not in lowered
+
+
+def test_requirements_use_exact_pins() -> None:
+    for line in _text("requirements.txt").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        assert "==" in stripped
+        assert ">=" not in stripped
 
 
 def test_entrypoint_shell_syntax() -> None:
@@ -55,7 +64,11 @@ def test_deploy_doc_covers_hosts_cache_and_has_no_wallet() -> None:
     assert "403" in text
     assert "v0.1" in text
     assert "data.binance.vision" in text
-    assert "liqmap.model" in text
+    assert "streamlit_app.py" in text
+    assert "src/olh" in text
+    assert "liqmap" not in text
+    assert "streamlit==1.66.1" in _text("requirements.txt")
+    assert "plotly==5.24.1" in _text("requirements.txt")
     assert "latest 1 month" in text
     assert "does not build the image" in text
     assert "500" in text

@@ -6,7 +6,7 @@ port="${PORT:-7860}"
 app="${STREAMLIT_APP:-}"
 
 if [ -z "$app" ]; then
-  for candidate in app.py streamlit_app.py heatmap_app.py; do
+  for candidate in streamlit_app.py app.py heatmap_app.py; do
     if [ -f "/app/$candidate" ]; then
       app="$candidate"
       break
@@ -16,7 +16,7 @@ fi
 
 if [ -z "$app" ] || [ ! -f "/app/$app" ]; then
   echo "No Streamlit entrypoint found in /app." >&2
-  echo "Expected app.py, streamlit_app.py, or heatmap_app.py, or set STREAMLIT_APP." >&2
+  echo "Expected streamlit_app.py, app.py, or heatmap_app.py, or set STREAMLIT_APP." >&2
   exit 1
 fi
 

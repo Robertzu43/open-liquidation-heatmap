@@ -1,6 +1,6 @@
-"""Fail the build on a CoinGlass URL, import, or key, and on a stray host.
+"""Fail the build on a prohibited vendor URL, import, or key, and on a stray host.
 
-Documentation may name CoinGlass when saying the project does not use it.
+Documentation may name that vendor when saying the project does not use it.
 A URL, an import, or a key name is a failure. Python code strings, excluding
 docstrings, may only use ``ALLOWED_EXCHANGE_HOSTS``.
 """
@@ -110,7 +110,7 @@ def test_repository_has_no_forbidden_url_key_or_import() -> None:
         text = path.read_text(encoding="utf-8")
         for hit in forbidden_hits(text):
             problems.append(f"{path.relative_to(ROOT)}: {hit}")
-    assert not problems, "forbidden CoinGlass reference:\n" + "\n".join(problems)
+    assert not problems, "forbidden vendor reference:\n" + "\n".join(problems)
 
 
 def _code_strings(path: Path) -> list[str]:

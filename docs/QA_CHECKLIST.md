@@ -15,7 +15,7 @@ The model is an estimate from open interest and an assumed leverage distribution
 - [ ] The color scale has a legend with units or a label for estimated liquidation intensity.
 - [ ] The first fetch shows a spinner or other progress, then settles. A second interaction with the same symbol and window does not start a long refetch (cache).
 - [ ] The UI lists Binance, Bybit, and OKX. It does not list CoinGlass or any other exchange.
-- [ ] Liquidation prices come from `liqmap.model` (re-exported as `heatmap.liq_price`). The page does not contain a second formula.
+- [ ] Liquidation prices come from the `olh` package (`src/olh`) used by `streamlit_app.py`. The page does not contain a second formula. Neither file is on main yet.
 
 ## 2. Time windows
 

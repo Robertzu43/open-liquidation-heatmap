@@ -1,10 +1,10 @@
 # Deploying the heatmap
 
-The app reads public market data. CoinGlass is out of scope: do not add CoinGlass hosts, API keys, or exported datasets to the deployment.
+This repository does not yet contain a Streamlit app. CoinGlass is out of scope: do not add CoinGlass hosts, API keys, or exported datasets to the deployment.
 
-The Streamlit entrypoint (`app.py`, `streamlit_app.py`, or `heatmap_app.py`) lands with the model rewrite. This document is the hosting side. Set `STREAMLIT_APP` if the file uses another name.
+Not in this tree: `streamlit_app.py` and the `olh` package under `src/olh`. Those are the model rewrite's names. `heatmap.py` on main is still the Binance script. This branch does not add an entrypoint, does not re-export `liq_price`, `fade_swept`, or `bin_intensity`, and does not import `olh`. When that viewer lands, it should call `olh` rather than a second liquidation formula.
 
-The Streamlit app and the browser chart both call `liqmap.model`. `heatmap.liq_price`, `heatmap.fade_swept`, and `heatmap.bin_intensity` re-export that module. Do not keep a second liquidation formula in the UI.
+The hosting notes below apply after `streamlit_app.py` exists. Set `STREAMLIT_APP` if the file uses another name.
 
 Public open interest does not need an exchange API key. Do not put a key in the repository, in CI, or in the image. A person who connects a read-only exchange account does that on their own machine, through the process environment. The app does not store that key, and it does not use the key as a second heatmap.
 
@@ -12,13 +12,15 @@ Public open interest does not need an exchange API key. Do not put a key in the 
 
 [Streamlit Community Cloud](https://docs.streamlit.io/deploy/streamlit-community-cloud/status) hosts every app in the United States. That region is not configurable.
 
-From a US address, `fapi.binance.com` returns **HTTP 451** and Bybit often returns **HTTP 403**. A Community Cloud demo cannot call Binance or Bybit REST. **v0.1 uses live OKX plus the public `data.binance.vision` archive.** That archive is Binance historical klines and needs no API key. It is still Binance. It is not a live Binance order book or a live open-interest feed.
+From a US address, `fapi.binance.com` returns **HTTP 451** and Bybit often returns **HTTP 403**. A Community Cloud demo cannot call Binance or Bybit REST.
+
+Not implemented in this tree: v0.1 reading live OKX plus the public `data.binance.vision` archive. `heatmap.py` still calls only `fapi.binance.com`. That archive is Binance historical klines and needs no API key. It is still Binance. It is not a live Binance order book or a live open-interest feed. The intended demo, once the app lands, uses the archive and live OKX from a US host.
 
 Live Binance and Bybit REST needs a host outside the United States. That host is a planned recorder (Frankfurt is the example region). It is not a self-hosted GitHub Actions runner. The nightly smoke job stays on GitHub-hosted runners, which are typically in the US, and skips a venue that answers 451 or 403. A skip is not a healthy result. See `.github/workflows/ci.yml`.
 
 Allowed hosts are `fapi.binance.com`, `data.binance.vision`, `api.bybit.com`, and `www.okx.com` (`tests/validation/net_allowlist.py`). Websocket hosts wait until the recorder exists. No other exchange is a heatmap source.
 
-When a venue returns 451 or a country block, the app should name that venue and keep drawing the venues that responded.
+Not implemented until the app lands: naming a venue that returns 451 or a country block, and still drawing the venues that responded.
 
 ## Streamlit Community Cloud
 
@@ -26,12 +28,12 @@ Community Cloud installs `requirements.txt` and ignores the `Dockerfile`.
 
 1. Push the repository to GitHub. The default branch needs the Streamlit file and `requirements.txt`.
 2. Open [share.streamlit.io](https://share.streamlit.io), choose **Create app**, and pick this repository and branch.
-3. Set **Main file path** to the entrypoint (`app.py` or `streamlit_app.py`).
+3. Set **Main file path** to `streamlit_app.py`. That file is not in this tree yet.
 4. In **Advanced settings**, select **Python 3.12**.
 5. Leave secrets empty. Public klines and open interest do not need an exchange API key.
-6. Add `streamlit` and `plotly` to `requirements.txt` before the first Cloud deploy. The Docker image installs them when they are missing; Community Cloud will not.
+6. `requirements.txt` pins `streamlit==1.66.1` and `plotly==5.24.1`. The image installs only that file. It does not add a version range.
 
-Expect this deploy to show OKX and the Binance archive. Do not treat a Binance or Bybit 451/403 as a bug in the plot.
+Not implemented until the entrypoint lands: a page that shows OKX and the Binance archive. Do not treat a Binance or Bybit 451/403 as a bug in the plot.
 
 The [status page](https://docs.streamlit.io/deploy/streamlit-community-cloud/status) lists several egress addresses for Community Cloud, and it warns that the list can change without notice. This doc does not copy that list or state a count. Caching (below) is what keeps those shared egress addresses inside exchange rate limits.
 
@@ -78,13 +80,11 @@ Official limit references, which change without notice:
 - Bybit v5: [Rate limit](https://bybit-exchange.github.io/docs/v5/rate-limit)
 - OKX v5: [Rate limits](https://www.okx.com/docs-v5/en/#overview-rate-limits)
 
-Client behavior that stays inside those limits:
-
-- Cache each response with `@st.cache_data` on the key `(exchange, symbol, interval, window)`. A TTL of 60–300 seconds is enough for a heatmap and collapses a rerun, a leverage toggle, and a second viewer onto one fetch.
+Not implemented. There is no Streamlit app here, and nothing in this tree calls `@st.cache_data`. When a viewer fetches public market data, cache each response on `(exchange, symbol, interval, window)`. A TTL of 60–300 seconds is enough for a heatmap and collapses a rerun, a leverage toggle, and a second viewer onto one fetch.
 - Paginate once per cache fill. Binance klines return at most 1500 rows. Binance open-interest history returns at most 500 rows per call and only about the latest month, so a 90-day Binance window must say that the rest is outside public retention instead of failing the page. Bybit and OKX pages are smaller, and their retention differs; treat a short history the same way.
 - On HTTP 429 or 418, or on an exchange rate-limit code, wait and render the cached frame with the time it was fetched. Do not retry in a tight loop.
 - Keep the cache process-wide so every session shares it.
-- A venue that returns HTTP 451 or a country block is unreachable from a US host. Name the venue and keep the venues that responded. On Community Cloud that means OKX plus `data.binance.vision`.
+- A venue that returns HTTP 451 or a country block is unreachable from a US host. Not implemented until the app lands: naming that venue and keeping the venues that responded. On Community Cloud the intended sources are OKX plus `data.binance.vision`.
 
 ```python
 @st.cache_data(ttl=120, show_spinner=False)
