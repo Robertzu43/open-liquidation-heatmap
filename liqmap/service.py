@@ -16,7 +16,9 @@ from liqmap.data import (
     DataError,
     exchange_name,
     load_market,
+    load_span,
     normalize_symbol,
+    parse_asof,
     range_spec,
     resolve_view,
 )
@@ -35,7 +37,11 @@ SERIES_TTL = {
     "2y": 1800,
 }
 
+# A replay span lives this long after its last frame.
+SPAN_TTL = 1800
+
 _cache: dict[tuple, tuple[float, object]] = {}
+_spans: dict[tuple, list] = {}
 _locks: dict[tuple, threading.Lock] = {}
 _guard = threading.Lock()
 
@@ -72,9 +78,65 @@ def _evict(now: float) -> None:
                     _locks.pop(key, None)
 
 
-def get_series(exchange: str, symbol: str, range_key: str, mode: str = "pair", asof: str | None = None, bar: str | None = None):
+class ReplayExpired(DataError):
+    """A replay frame whose span is no longer loaded. Frames never fall back to the network."""
+
+
+def _span_for(coin: str, spec: dict, end_open: int):
+    now = time.time()
+    with _guard:
+        for key, (used, _span) in list(_spans.items()):
+            if now - used >= SPAN_TTL:
+                _spans.pop(key, None)
+        hit = _spans.get((coin, spec["bar"], spec["key"]))
+        if hit is None or not hit[1].covers(end_open):
+            return None
+        hit[0] = now
+        return hit[1]
+
+
+def replay_payload(symbol: str, range_key: str, bar: str, start: str, end: str = "") -> dict:
+    """Load a replay span once; frames are then /api/heatmap with asof and replay=1."""
+    coin, pair = normalize_symbol(symbol)
+    spec, first = resolve_view("binance", "pair", range_key, start, bar)
+    if first is None:
+        raise DataError("Replay needs a start time in the past.")
+    span = load_span(coin, pair, spec, parse_asof(start), parse_asof(end))
+    with _guard:
+        _spans[(coin, spec["bar"], spec["key"])] = [time.time(), span]
+    bar_ms = int(spec["bar_seconds"]) * 1000
+    return {
+        "coin": coin,
+        "range": spec["key"],
+        "bar": spec["bar"],
+        "bar_seconds": int(spec["bar_seconds"]),
+        "first_asof": span.first_end_open * 1000 + bar_ms,
+        "last_asof": span.last_end_open * 1000 + bar_ms,
+        "frames": span.frames,
+        "days": span.days,
+        "note": span.note,
+    }
+
+
+def get_series(
+    exchange: str,
+    symbol: str,
+    range_key: str,
+    mode: str = "pair",
+    asof: str | None = None,
+    bar: str | None = None,
+    replay: bool = False,
+):
     exchange_key, coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
     spec, end_open = resolve_view(exchange_key, mode_key, range_name, asof, bar)
+    if replay:
+        if end_open is None:
+            raise DataError("A replay frame needs asof.")
+        span = _span_for(coin, spec, end_open)
+        if span is None:
+            raise ReplayExpired("This replay is no longer loaded. Load it again.")
+        # Frames are cut from the span on demand; they are not cached one by one.
+        return span.frame(end_open)
     key = (exchange_key, coin, range_name, mode_key, spec["bar"], end_open)
     lock = _key_lock(key)
     with lock:
@@ -144,13 +206,14 @@ def load_heatmap(
     mode: str = "pair",
     asof: str | None = None,
     bar: str | None = None,
+    replay: bool = False,
 ) -> dict:
     try:
         model_id = int(model)
     except (TypeError, ValueError):
         raise DataError("Model must be 1, 2, or 3.") from None
     model_meta = public_model(model_id)
-    loaded = get_series(exchange, symbol, range_key, mode, asof, bar)
+    loaded = get_series(exchange, symbol, range_key, mode, asof, bar, replay)
     heat = build_heatmap(loaded.series, model_id)
     series = loaded.series
     exchange_key, _coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
@@ -168,6 +231,7 @@ def load_heatmap(
         "bar": spec["bar"],
         "bar_seconds": int(series.bar_seconds),
         "asof": None if end_open is None else (end_open + int(spec["bar_seconds"])) * 1000,
+        "replay": bool(replay),
         "model": model_meta,
         "source": loaded.source,
         "venues": list(loaded.venues),
@@ -187,8 +251,52 @@ def load_heatmap(
         "bins": int(grid.shape[0]),
         "profile_long": _f32(heat.profile_long),
         "profile_short": _f32(heat.profile_short),
+        "tiers": [int(lev) for lev in heat.tiers],
+        "profile_long_tiers": _f32(heat.profile_long_tiers),
+        "profile_short_tiers": _f32(heat.profile_short_tiers),
         "price_view": [float(view_lo), float(view_hi)],
         "analysis": _scrub(heat.analysis),
+    }
+
+
+def levels_payload(
+    exchange: str,
+    symbol: str,
+    range_key: str,
+    model,
+    mode: str,
+    asof: str | None,
+    bar: str | None,
+    replay: bool,
+    t: str,
+    price: str,
+) -> dict:
+    """Leverage tiers at one bar and price, from the same series as the map."""
+    try:
+        model_id = int(model)
+        t_ms = int(t)
+        price_f = float(price)
+    except (TypeError, ValueError):
+        raise DataError("levels needs model, t (bar open in ms) and price.") from None
+    if model_id not in MODELS or not math.isfinite(price_f):
+        raise DataError("levels needs a known model and a finite price.")
+    series = get_series(exchange, symbol, range_key, mode, asof, bar, replay).series
+    hits = np.flatnonzero(series.times == t_ms)
+    if not len(hits):
+        raise DataError("t is not a bar open in this map.")
+    column = int(hits[0])
+    heat = build_heatmap(series, model_id, tier_column=column)
+    b = int(np.argmin(np.abs(heat.centers - price_f)))
+    tiers = [
+        {"leverage": int(lev), "long_usd": float(heat.long_tier_column[k, b]), "short_usd": float(heat.short_tier_column[k, b])}
+        for k, lev in enumerate(heat.tiers)
+    ]
+    return {
+        "t": t_ms,
+        "price": float(heat.centers[b]),
+        "tiers": tiers,
+        "long_usd": float(heat.long_heat[b, column]),
+        "short_usd": float(heat.short_heat[b, column]),
     }
 
 

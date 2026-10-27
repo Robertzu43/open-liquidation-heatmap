@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 from liqmap import data, service
+from liqmap.model import MODELS
 from liqmap.data import (
     METRICS_START_S,
     DataError,
@@ -239,6 +240,54 @@ class CacheTests(unittest.TestCase):
         payload = service.load_heatmap("demo", "BTC", "24h", 1, "pair")
         self.assertEqual(payload["bar"], "5m")
         self.assertIsNone(payload["asof"])
+
+
+class ReplayServiceTests(unittest.TestCase):
+    def setUp(self):
+        service._cache.clear()
+        service._spans.clear()
+        stubs = ReplaySpanTests()._stubs()
+        self.patches = [
+            mock.patch.object(data, "_load_vision_klines", side_effect=stubs[0]),
+            mock.patch.object(data, "_load_vision_metrics", side_effect=stubs[1]),
+            mock.patch.object(data, "_fold_binance_live", return_value=None),
+        ]
+        self.mocks = [p.start() for p in self.patches]
+
+    def tearDown(self):
+        for p in self.patches:
+            p.stop()
+        service._spans.clear()
+
+    def test_frames_come_from_the_span_and_expire_to_409(self):
+        meta = service.replay_payload("BTC", "24h", "15m", str(T_2021 - 2 * 86_400), str(T_2021))
+        self.assertEqual(meta["last_asof"], (history_end_open(T_2021, 900) + 900) * 1000)
+        self.assertGreater(meta["frames"], 1)
+        calls = sum(m.call_count for m in self.mocks)
+        frame_asof = str(meta["last_asof"] // 1000)
+        payload = service.load_heatmap("binance", "BTC", "24h", 1, "pair", frame_asof, "15m", True)
+        self.assertTrue(payload["replay"])
+        self.assertEqual(payload["source"], "binance-vision")
+        self.assertEqual(len(payload["tiers"]), len(MODELS[1]["weights"]))
+        self.assertEqual(sum(m.call_count for m in self.mocks), calls, "a frame must not load anything")
+        self.assertEqual(len(service._cache), 0, "frames are not cached one by one")
+
+        # Levels: tier sums equal the map at that cell.
+        t = payload["times"][-3]
+        levels = service.levels_payload("binance", "BTC", "24h", 1, "pair", frame_asof, "15m", True, str(t), str(payload["analysis"]["price"] * 0.99))
+        self.assertAlmostEqual(sum(row["long_usd"] for row in levels["tiers"]), levels["long_usd"], delta=1e-6 * max(1.0, levels["long_usd"]))
+        self.assertAlmostEqual(sum(row["short_usd"] for row in levels["tiers"]), levels["short_usd"], delta=1e-6 * max(1.0, levels["short_usd"]))
+        with self.assertRaises(DataError):
+            service.levels_payload("binance", "BTC", "24h", 1, "pair", frame_asof, "15m", True, str(t + 1), "100")
+
+        for key in service._spans:
+            service._spans[key][0] = 0.0
+        with self.assertRaises(service.ReplayExpired):
+            service.load_heatmap("binance", "BTC", "24h", 1, "pair", frame_asof, "15m", True)
+
+    def test_replay_refuses_bars_over_the_frame_cap(self):
+        with self.assertRaises(DataError):
+            service.replay_payload("BTC", "2y", "5m", str(T_2021), "")
 
 
 @unittest.skipUnless(os.environ.get("RUN_NETWORK") == "1", "network test; set RUN_NETWORK=1")
