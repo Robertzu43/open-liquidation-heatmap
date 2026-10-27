@@ -131,6 +131,7 @@ def get_series(
     bar: str | None = None,
     replay: bool = False,
 ):
+    """The series for one view, with the view's spec and window end (None for live)."""
     exchange_key, coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
     spec, end_open = resolve_view(exchange_key, mode_key, range_name, asof, bar)
     if replay:
@@ -140,18 +141,18 @@ def get_series(
         if span is None:
             raise ReplayExpired("This replay is no longer loaded. Load it again.")
         # Frames are cut from the span on demand; they are not cached one by one.
-        return span.frame(end_open)
+        return span.frame(end_open), spec, end_open
     key = (exchange_key, coin, range_name, mode_key, spec["bar"], end_open)
     lock = _key_lock(key)
     with lock:
         now = time.time()
         hit = _cache.get(key)
         if hit is not None and now - hit[0] < SERIES_TTL.get(range_name, 120):
-            return hit[1]
+            return hit[1], spec, end_open
         loaded = load_market(exchange_key, coin, range_name, mode_key, asof=asof, bar=bar)
         _evict(now)
         _cache[key] = (time.time(), loaded)
-        return loaded
+        return loaded, spec, end_open
 
 
 def public_model(model_id: int) -> dict:
@@ -217,11 +218,10 @@ def load_heatmap(
     except (TypeError, ValueError):
         raise DataError("Model must be 1, 2, or 3.") from None
     model_meta = public_model(model_id)
-    loaded = get_series(exchange, symbol, range_key, mode, asof, bar, replay)
+    loaded, spec, end_open = get_series(exchange, symbol, range_key, mode, asof, bar, replay)
     heat = build_heatmap(loaded.series, model_id)
     series = loaded.series
-    exchange_key, _coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
-    spec, end_open = resolve_view(exchange_key, mode_key, range_name, asof, bar)
+    _exchange, _coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
     view_lo, view_hi = suggest_view(series)
     grid = np.ascontiguousarray(heat.long_heat + heat.short_heat, dtype=np.float64)
     return {
@@ -284,7 +284,7 @@ def levels_payload(
         raise DataError("levels needs model, t (bar open in ms) and price.") from None
     if model_id not in MODELS or not math.isfinite(price_f):
         raise DataError("levels needs a known model and a finite price.")
-    series = get_series(exchange, symbol, range_key, mode, asof, bar, replay).series
+    series = get_series(exchange, symbol, range_key, mode, asof, bar, replay)[0].series
     hits = np.flatnonzero(series.times == t_ms)
     if not len(hits):
         raise DataError("t is not a bar open in this map.")

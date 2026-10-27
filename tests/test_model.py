@@ -182,6 +182,22 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(len(_shift_to_open(np.array([]))), 0)
         np.testing.assert_array_equal(_shift_to_open(np.array([5.0])), [np.nan])
 
+    def test_page_tables_match_the_server(self):
+        import json
+        import re
+        from pathlib import Path
+
+        from liqmap.data import BAR_SECONDS, RANGES
+
+        js = (Path(__file__).resolve().parents[1] / "web" / "app.js").read_text()
+
+        def table(name):
+            body = re.search(rf"const {name} = (\{{[^}}]*\}});", js).group(1)
+            return json.loads(re.sub(r'(\w+|"[^"]+")\s*:', lambda m: f'"{m.group(1).strip(chr(34))}":', body))
+
+        self.assertEqual(table("BAR_S"), BAR_SECONDS)
+        self.assertEqual(table("RANGE_S"), {key: spec["seconds"] for key, spec in RANGES.items()})
+
     def test_readme_model_table_matches_models(self):
         from pathlib import Path
 

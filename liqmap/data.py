@@ -387,16 +387,29 @@ def _limited_ffill(values: np.ndarray, limit: int) -> np.ndarray:
     return out
 
 
+@dataclass
+class RawSeries:
+    """Folded bars of one source on one grid, before finalize_series."""
+
+    source: str
+    grid: np.ndarray
+    open: np.ndarray
+    high: np.ndarray
+    low: np.ndarray
+    close: np.ndarray
+    volume: np.ndarray
+    oi: np.ndarray
+    share: np.ndarray
+
+    @property
+    def last_candle_ms(self) -> int | None:
+        finite = np.flatnonzero(np.isfinite(self.close))
+        return int(self.grid[finite[-1]]) if len(finite) else None
+
+
 def finalize_series(
+    raw: RawSeries,
     *,
-    times: np.ndarray,
-    open_: np.ndarray,
-    high: np.ndarray,
-    low: np.ndarray,
-    close: np.ndarray,
-    volume: np.ndarray,
-    oi: np.ndarray,
-    share: np.ndarray,
     exchange: str,
     symbol: str,
     coin: str,
@@ -407,19 +420,20 @@ def finalize_series(
     venues: list[str] | None = None,
     now_s: float | None = None,
 ) -> LoadedSeries:
+    open_, high, low, close = raw.open, raw.high, raw.low, raw.close
     finite = np.isfinite(close) & (close > 0) & np.isfinite(high) & np.isfinite(low) & np.isfinite(open_)
     if int(finite.sum()) < 2:
         raise DataError(f"Not enough {exchange_name(exchange)} candles for {symbol} in this window.")
     idx = np.flatnonzero(finite)
     sl = slice(int(idx[0]), int(idx[-1]) + 1)
-    times_s = np.asarray(times[sl], dtype=np.int64)
+    times_s = np.asarray(raw.grid[sl], dtype=np.int64)
     open_s = np.asarray(open_[sl], dtype=np.float64)
     high_s = np.asarray(high[sl], dtype=np.float64)
     low_s = np.asarray(low[sl], dtype=np.float64)
     close_s = np.asarray(close[sl], dtype=np.float64)
-    volume_s = np.nan_to_num(np.asarray(volume[sl], dtype=np.float64), nan=0.0)
-    oi_s = _limited_ffill(np.asarray(oi[sl], dtype=np.float64), limit=3)
-    share_s = _limited_ffill(np.asarray(share[sl], dtype=np.float64), limit=3)
+    volume_s = np.nan_to_num(np.asarray(raw.volume[sl], dtype=np.float64), nan=0.0)
+    oi_s = _limited_ffill(np.asarray(raw.oi[sl], dtype=np.float64), limit=3)
+    share_s = _limited_ffill(np.asarray(raw.share[sl], dtype=np.float64), limit=3)
     for i in range(len(close_s)):
         if math.isfinite(close_s[i]) and close_s[i] > 0:
             continue
@@ -473,38 +487,29 @@ def _fmt_cot(ms: int) -> str:
     return stamp.strftime("%d %b %Y, %H:%M COT")
 
 
-def _records_from_series(series: MarketSeries) -> tuple[list[tuple], list[tuple]]:
-    candles = []
-    ois = []
-    for i in range(len(series.times)):
-        candles.append(
-            (
-                int(series.times[i]),
-                float(series.open[i]),
-                float(series.high[i]),
-                float(series.low[i]),
-                float(series.close[i]),
-                float(series.volume_usd[i]),
-            )
-        )
-        share = float(series.long_share[i])
-        ois.append((int(series.times[i]), float(series.oi_usd[i]), share))
-    return candles, ois
-
-
 def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: int, coin: str) -> MarketSeries:
     """Sum open interest onto one grid. Candles come from the freshest, busiest venue."""
     if not parts:
         raise DataError("No exchange series were available to combine.")
-    bar_ms = int(bar_seconds) * 1000
+    grid_ms = np.asarray(grid_ms, dtype=np.int64)
     n = len(grid_ms)
+
+    def place(series: MarketSeries) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Grid index of each bar, which bars land exactly on the grid, and which of those have a full candle."""
+        times = np.asarray(series.times, dtype=np.int64)
+        idx = np.searchsorted(grid_ms, times)
+        ok = (idx < n) & (grid_ms[np.minimum(idx, n - 1)] == times) if n else np.zeros(len(times), dtype=bool)
+        candle = ok & np.isfinite(series.open) & np.isfinite(series.high) & np.isfinite(series.low) & np.isfinite(series.close)
+        return idx, ok, candle
 
     def rank(series: MarketSeries) -> tuple:
         return (int(series.times[-1]), float(np.nansum(series.volume_usd)))
 
     donor = max(parts, key=rank)
-    donor_candles, _ = _records_from_series(donor)
-    open_, high, low, close, _donor_vol = fold_candles(donor_candles, grid_ms, bar_ms)
+    idx, _ok, candle = place(donor)
+    open_, high, low, close = (np.full(n, np.nan) for _ in range(4))
+    for out, values in ((open_, donor.open), (high, donor.high), (low, donor.low), (close, donor.close)):
+        out[idx[candle]] = np.asarray(values, dtype=np.float64)[candle]
     oi_sum = np.zeros(n, dtype=np.float64)
     oi_seen = np.zeros(n, dtype=bool)
     share_acc = np.zeros(n, dtype=np.float64)
@@ -512,19 +517,21 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
     volume = np.zeros(n, dtype=np.float64)
     used = []
     for part in parts:
-        candles, ois = _records_from_series(part)
-        _o, _h, _l, _cl, vol = fold_candles(candles, grid_ms, bar_ms)
-        oi, share = fold_oi(ois, grid_ms, bar_ms)
-        present = np.isfinite(oi)
-        if not present.any() and not np.isfinite(_cl).any():
+        idx, ok, candle = place(part)
+        oi_part = np.asarray(part.oi_usd, dtype=np.float64)
+        share_part = np.asarray(part.long_share, dtype=np.float64)
+        vol_part = np.asarray(part.volume_usd, dtype=np.float64)
+        present = ok & np.isfinite(oi_part) & (oi_part >= 0)
+        if not present.any() and not candle.any():
             continue
         used.append(part.exchange)
-        oi_sum[present] += oi[present]
-        oi_seen |= present
-        volume += vol
-        both = present & np.isfinite(share)
-        share_acc[both] += share[both] * oi[both]
-        share_w[both] += oi[both]
+        oi_sum[idx[present]] += oi_part[present]
+        oi_seen[idx[present]] = True
+        counted = candle & np.isfinite(vol_part) & (vol_part > 0)
+        volume[idx[counted]] += vol_part[counted]
+        both = present & np.isfinite(share_part)
+        share_acc[idx[both]] += share_part[both] * oi_part[both]
+        share_w[idx[both]] += oi_part[both]
     if not used:
         raise DataError("The exchanges returned no overlapping candles or open interest.")
     oi_out = np.where(oi_seen, oi_sum, np.nan)
@@ -533,7 +540,7 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
     share_out[good] = share_acc[good] / share_w[good]
     names = ", ".join(exchange_name(item) for item in used)
     return MarketSeries(
-        times=np.asarray(grid_ms, dtype=np.int64),
+        times=grid_ms,
         open=open_,
         high=high,
         low=low,
@@ -719,14 +726,7 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
     # Taker flow in bar i opened the positions that first show at bar i+1's open.
     oi, share = _shift_to_open(oi), _shift_to_open(share)
     loaded = finalize_series(
-        times=grid,
-        open_=open_,
-        high=high,
-        low=low,
-        close=close,
-        volume=volume,
-        oi=oi,
-        share=share,
+        RawSeries("okx", grid, open_, high, low, close, volume, oi, share),
         exchange="okx",
         symbol=pair,
         coin=coin,
@@ -901,26 +901,6 @@ def _latest_archive_day(symbol: str, interval: str) -> datetime | None:
     return None
 
 
-@dataclass
-class RawSeries:
-    """Folded bars of one Binance source on one grid, before finalize_series."""
-
-    source: str
-    grid: np.ndarray
-    open: np.ndarray
-    high: np.ndarray
-    low: np.ndarray
-    close: np.ndarray
-    volume: np.ndarray
-    oi: np.ndarray
-    share: np.ndarray
-
-    @property
-    def last_candle_ms(self) -> int | None:
-        finite = np.flatnonzero(np.isfinite(self.close))
-        return int(self.grid[finite[-1]]) if len(finite) else None
-
-
 def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | None:
     """Live klines, open interest and taker share on ``grid``. None when the API is unavailable."""
     bar_ms = int(grid[1] - grid[0]) if len(grid) > 1 else BAR_SECONDS[bar] * 1000
@@ -1039,14 +1019,7 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
         return None
     try:
         loaded = finalize_series(
-            times=raw.grid,
-            open_=raw.open,
-            high=raw.high,
-            low=raw.low,
-            close=raw.close,
-            volume=raw.volume,
-            oi=raw.oi,
-            share=raw.share,
+            raw,
             exchange="binance",
             symbol=pair,
             coin=coin,
@@ -1081,14 +1054,7 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
     if int(np.isfinite(raw.oi).sum()) < 2:
         raise DataError(f"Binance archive has no {pair} open-interest metrics for this window.")
     loaded = finalize_series(
-        times=raw.grid,
-        open_=raw.open,
-        high=raw.high,
-        low=raw.low,
-        close=raw.close,
-        volume=raw.volume,
-        oi=raw.oi,
-        share=raw.share,
+        raw,
         exchange="binance",
         symbol=pair,
         coin=coin,
@@ -1126,15 +1092,9 @@ def finish_history(raw: RawSeries, end_open_s: int, spec: dict, coin: str, pair:
     if int(keep.sum()) < 2:
         raise DataError(f"Binance has no {pair} bars for this window.")
     live = raw.source == "binance-live"
+    cut = RawSeries(raw.source, raw.grid[keep], raw.open[keep], raw.high[keep], raw.low[keep], raw.close[keep], raw.volume[keep], raw.oi[keep], raw.share[keep])
     loaded = finalize_series(
-        times=raw.grid[keep],
-        open_=raw.open[keep],
-        high=raw.high[keep],
-        low=raw.low[keep],
-        close=raw.close[keep],
-        volume=raw.volume[keep],
-        oi=raw.oi[keep],
-        share=raw.share[keep],
+        cut,
         exchange="binance",
         symbol=pair,
         coin=coin,
@@ -1271,14 +1231,7 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
     share = 0.5 + 0.2 * np.sin(np.linspace(0, 5.5, n))
     volume = steps * rng.uniform(6.0, 16.0, size=n)
     loaded = finalize_series(
-        times=grid,
-        open_=open_,
-        high=high,
-        low=low,
-        close=close,
-        volume=volume,
-        oi=oi,
-        share=share,
+        RawSeries("demo", grid, open_, high, low, close, volume, oi, share),
         exchange="demo",
         symbol=pair,
         coin=coin,
@@ -1342,14 +1295,7 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
     names = ", ".join(exchange_name(item) for item in venues)
     note = f"Symbol aggregate of {names}. Price candles are {exchange_name(donor.series.exchange)}; open interest is the sum."
     loaded = finalize_series(
-        times=combined.times,
-        open_=combined.open,
-        high=combined.high,
-        low=combined.low,
-        close=combined.close,
-        volume=combined.volume_usd,
-        oi=combined.oi_usd,
-        share=combined.long_share,
+        RawSeries("aggregate", combined.times, combined.open, combined.high, combined.low, combined.close, combined.volume_usd, combined.oi_usd, combined.long_share),
         exchange="aggregate",
         symbol=pair,
         coin=coin,
