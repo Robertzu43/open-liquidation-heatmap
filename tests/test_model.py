@@ -262,6 +262,59 @@ class ModelTests(unittest.TestCase):
         peak = heat.centers[np.argmax(heat.profile_long_tiers[0])]
         self.assertLess(abs(peak - expected) / expected, 0.01)
 
+    def test_fade_depends_on_time_not_bar_count(self):
+        # One deposit at loop step 1, then the fade runs at the end of steps 1..n-1.
+        # 288 steps of 5m and 24 steps of 1h are both exactly 24 hours.
+        def remaining(n, bar_seconds):
+            oi = np.full(n, 2_000_000.0)
+            oi[0] = 1_000_000.0
+            s = _series(np.full(n, 100.0), oi)
+            s.bar_seconds = bar_seconds
+            heat = build_heatmap(s, 2)
+            return float(heat.profile_long.sum() + heat.profile_short.sum())
+
+        five_minute = remaining(289, 300)
+        hourly = remaining(25, 3600)
+        expected = 1_000_000.0 * 0.5 ** (24 / 72)
+        self.assertAlmostEqual(five_minute / hourly, 1.0, delta=0.01)
+        self.assertAlmostEqual(five_minute / expected, 1.0, delta=0.01)
+        self.assertAlmostEqual(hourly / expected, 1.0, delta=0.01)
+
+    def test_wick_into_a_bin_removes_only_the_crossed_part(self):
+        price = np.full(3, 100.0)
+        oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0])
+        # Bar 0 pins the grid (its low and high set the padded range) in both runs.
+        anchor_low = np.array([95.0, 99.95, 99.95])
+        base = build_heatmap(_series(price, oi, low=anchor_low), 1)
+        tier = 3
+        k = int(np.argmax(base.profile_long_tiers[tier]))
+        width = float(base.centers[1] - base.centers[0])
+        lo_edge = float(base.centers[k]) - width / 2
+        low = np.array([95.0, 99.95, lo_edge + 0.25 * width])
+        cut = build_heatmap(_series(price, oi, low=low), 1)
+        before = base.profile_long_tiers[tier]
+        after = cut.profile_long_tiers[tier]
+        self.assertAlmostEqual(float(after[k]), 0.25 * float(before[k]), delta=1e-6 * float(before[k]))
+        self.assertTrue(np.all(after[k + 1 :] == 0.0))
+        np.testing.assert_allclose(after[:k], before[:k])
+
+    def test_wick_into_a_bin_removes_only_the_crossed_part_for_shorts(self):
+        price = np.full(3, 100.0)
+        oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0])
+        anchor_high = np.array([105.0, 100.05, 100.05])
+        base = build_heatmap(_series(price, oi, high=anchor_high), 1)
+        tier = 3
+        k = int(np.argmax(base.profile_short_tiers[tier]))
+        width = float(base.centers[1] - base.centers[0])
+        hi_edge = float(base.centers[k]) + width / 2
+        high = np.array([105.0, 100.05, hi_edge - 0.25 * width])
+        cut = build_heatmap(_series(price, oi, high=high), 1)
+        before = base.profile_short_tiers[tier]
+        after = cut.profile_short_tiers[tier]
+        self.assertAlmostEqual(float(after[k]), 0.25 * float(before[k]), delta=1e-6 * float(before[k]))
+        self.assertTrue(np.all(after[:k] == 0.0))
+        np.testing.assert_allclose(after[k + 1 :], before[k + 1 :])
+
 
 class TierTests(unittest.TestCase):
     def test_tier_books_sum_to_totals(self):

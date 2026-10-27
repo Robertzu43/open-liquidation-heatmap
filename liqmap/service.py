@@ -159,7 +159,7 @@ def public_model(model_id: int) -> dict:
         "name": spec["name"],
         "blurb": spec["blurb"],
         "weights": [{"leverage": int(lev), "weight": float(weight)} for lev, weight in spec["weights"]],
-        "decay": float(spec["decay"]),
+        "half_life_hours": float(spec["half_life_hours"]) if spec.get("half_life_hours") else None,
         "churn": float(spec["churn"]),
         "kernel": [float(value) for value in spec["kernel"]],
         "flow": bool(spec["flow"]),

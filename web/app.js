@@ -486,7 +486,7 @@ function renderHow(model) {
     <p>${flow} A later candle removes a shelf when price trades through it.</p>
     <p>Leverage mix</p>
     <ul>${weights}</ul>
-    <p>Per-bar decay ${model.decay}. Volume churn ${model.churn}. Kernel ${model.kernel.map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
+    <p>${model.half_life_hours ? `Fades with a ${Number(model.half_life_hours)}-hour half-life.` : "No time fade."} Volume churn ${model.churn}. Kernel ${model.kernel.map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
     <p>The color scale is relative to this window. It is not a count of real liquidations.</p>`;
 }
 

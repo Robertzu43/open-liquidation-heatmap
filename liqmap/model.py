@@ -24,7 +24,6 @@ MODELS: dict[int, dict] = {
         "name": "Wide clusters",
         "blurb": "Most weight on 50x–60x, with a far 5x tier. Shelves sit about 1–2% from price and stay until price trades through them.",
         "weights": ((5, 0.12), (20, 0.10), (50, 0.25), (60, 0.53)),
-        "decay": 1.0,
         "churn": 0.0,
         "kernel": (0.15, 0.70, 0.15),
         "flow": False,
@@ -34,7 +33,7 @@ MODELS: dict[int, dict] = {
         "name": "Tight magnets",
         "blurb": "Two tiers, 20x and 60x, a little turnover from volume, and a slow fade. Shelves hug price.",
         "weights": ((20, 0.30), (60, 0.70)),
-        "decay": 0.9992,
+        "half_life_hours": 72.0,
         "churn": 0.015,
         "kernel": (0.06, 0.24, 0.40, 0.24, 0.06),
         "flow": False,
@@ -44,7 +43,6 @@ MODELS: dict[int, dict] = {
         "name": "Flow skew",
         "blurb": "Same family of tiers, but new positions follow taker buy/sell when that data exists.",
         "weights": ((10, 0.15), (20, 0.20), (25, 0.20), (50, 0.25), (100, 0.20)),
-        "decay": 1.0,
         "churn": 0.0,
         "kernel": (0.10, 0.25, 0.30, 0.25, 0.10),
         "flow": True,
@@ -588,15 +586,29 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
         long_heat[:, i] = long_book.sum(axis=0)
         short_heat[:, i] = short_book.sum(axis=0)
 
+        # A bin the wick only partly crossed keeps the part it did not reach.
         low_i = float(series.low[i])
         high_i = float(series.high[i])
-        long_book[:, int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
-        short_book[:, : int(np.searchsorted(centers, high_i, side="right"))] = 0.0
+        if np.isfinite(low_i):
+            k = int(np.searchsorted(edges, low_i, side="right")) - 1
+            if k < 0:
+                long_book[:] = 0.0
+            elif k < n_bins:
+                long_book[:, k + 1 :] = 0.0
+                long_book[:, k] *= (low_i - edges[k]) / (edges[k + 1] - edges[k])
+        if np.isfinite(high_i):
+            k = int(np.searchsorted(edges, high_i, side="right")) - 1
+            if k >= n_bins:
+                short_book[:] = 0.0
+            elif k >= 0:
+                short_book[:, :k] = 0.0
+                short_book[:, k] *= (edges[k + 1] - high_i) / (edges[k + 1] - edges[k])
 
-        decay = float(spec["decay"])
-        if decay != 1.0:
-            long_book *= decay
-            short_book *= decay
+        half_life = spec.get("half_life_hours")
+        if half_life:
+            factor = 0.5 ** (series.bar_seconds / (float(half_life) * 3600.0))
+            long_book *= factor
+            short_book *= factor
 
     spot = float(series.close[-1])
     profile_long = long_book.sum(axis=0)
