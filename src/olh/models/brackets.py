@@ -60,13 +60,43 @@ def brackets_for(symbol: str, table: dict | None = None) -> SymbolBrackets:
     )
 
 
-def mmr_for_leverage(leverage: float, schedule: SymbolBrackets, mode: str, constant_mmr: float | None) -> tuple[float, float]:
+def bracket_for_notional(schedule: SymbolBrackets, notional: float | None) -> Bracket:
+    """Tier for a typical position, or the tier that contains ``notional``.
+
+    With no quantity the position is treated as small, so the first bracket
+    (lowest notional) applies. A notional at or above the next floor uses
+    that higher bracket. Leverage above the returned tier's maximum is the
+    caller's to cap.
+    """
+    rows = tuple(sorted(schedule.brackets, key=lambda row: (row.notional_floor, row.notional_cap)))
+    if not rows:
+        raise ValueError("schedule has no brackets")
+    if notional is None or notional <= rows[0].notional_floor:
+        return rows[0]
+    chosen = rows[0]
+    for row in rows:
+        if notional >= row.notional_floor:
+            chosen = row
+        else:
+            break
+    return chosen
+
+
+def mmr_for_leverage(
+    leverage: float,
+    schedule: SymbolBrackets,
+    mode: str,
+    constant_mmr: float | None,
+    notional: float | None = None,
+) -> tuple[float, float]:
     """Return ``(mmr, maintenance_amount)`` for one assumed leverage.
 
-    ``bracket`` uses the tightest published tier that still allows the
-    leverage. ``constant`` uses ``constant_mmr`` or, if that is omitted, the
-    lowest-notional tier.
+    ``bracket`` uses the lowest-notional tier unless ``notional`` falls in a
+    higher one. ``constant`` uses ``constant_mmr`` or, if that is omitted, the
+    lowest-notional tier, and it does not apply a maintenance amount.
+    ``leverage`` does not choose the tier. Callers cap it at the tier maximum.
     """
+    del leverage  # tier follows position size, not the assumed rung
     if not schedule.brackets:
         if constant_mmr is None:
             raise ValueError("no brackets and no constant mmr")
@@ -77,8 +107,5 @@ def mmr_for_leverage(leverage: float, schedule: SymbolBrackets, mode: str, const
         return rate, 0.0
     if key != "bracket":
         raise ValueError("mmr mode must be constant or bracket")
-    eligible = [row for row in schedule.brackets if row.max_leverage + 1e-9 >= leverage]
-    if not eligible:
-        return (constant_mmr if constant_mmr is not None else schedule.brackets[0].mmr), 0.0
-    tier = min(eligible, key=lambda row: row.max_leverage)
+    tier = bracket_for_notional(schedule, notional)
     return tier.mmr, tier.maintenance_amount

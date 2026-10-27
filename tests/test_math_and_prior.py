@@ -63,13 +63,20 @@ def test_lognormal_peaks_near_15_and_a_filter_does_not_renormalize():
     assert sum(kept.values()) < 0.5
 
 
-def test_bracket_mode_selects_the_tightest_tier_that_allows_the_leverage():
+def test_bracket_mode_uses_the_lowest_notional_tier_unless_size_says_otherwise():
     schedule = brackets_for("BTCUSDT")
-    mmr, cum = mmr_for_leverage(100, schedule, "bracket", None)
-    assert mmr == 0.005
-    assert cum == 50
-    ten, _ = mmr_for_leverage(10, schedule, "bracket", None)
-    assert ten == 0.05
+    lowest = schedule.brackets[0]
+    mmr, cum = mmr_for_leverage(10, schedule, "bracket", None)
+    assert mmr == lowest.mmr == 0.004
+    assert cum == 0
+    # 100x on a small position stays on that same tier. It does not jump to the 100x band.
+    still, still_cum = mmr_for_leverage(100, schedule, "bracket", None)
+    assert still == 0.004
+    assert still_cum == 0
+    # 6_000_000 notional is the BTC band whose maximum leverage is 10x.
+    large, large_cum = mmr_for_leverage(25, schedule, "bracket", None, notional=6_000_000)
+    assert large == 0.05
+    assert large_cum == 141300
     constant, amount = mmr_for_leverage(10, schedule, "constant", 0.005)
     assert constant == 0.005
     assert amount == 0

@@ -12,7 +12,7 @@ import pytest
 
 from olh.features.align import align_book
 from olh.models import get_model
-from olh.models.brackets import brackets_for
+from olh.models.brackets import brackets_for, mmr_for_leverage
 from olh.models.leverage import build_leverage_weights, resolve_ladder
 from olh.models.mathutil import liq_price_long
 
@@ -201,3 +201,73 @@ def test_entry_is_the_same_candle_and_mark_wins_over_close():
     assert min(abs(center - expected) for center in long_centers) < 0.15
     assert min(abs(center - not_close) for center in long_centers) > 1
     assert min(abs(center - not_future) for center in long_centers) > 1
+
+
+def test_default_btc_10x_uses_the_lowest_notional_maintenance_tier():
+    """Default bracket mode prices a typical BTC 10x position on the first tier.
+
+    The bundled schedule's first band is 0.40% maintenance, not the 5% band
+    that only applies once notional is in the millions.
+    """
+    schedule = brackets_for("BTCUSDT")
+    mmr, cum = mmr_for_leverage(10, schedule, "bracket", None)
+    assert mmr == schedule.brackets[0].mmr == 0.004
+    assert cum == 0
+    expected = liq_price_long(100, 10, mmr)
+    assert expected == pytest.approx(90.361445783, rel=1e-9)
+    t0 = "2026-10-25T00:00:00+00:00"
+    t1 = "2026-10-25T00:15:00+00:00"
+    frame = _frame(
+        [
+            dict(open_time=t0, open=100, high=100.2, low=99.5, close=100, mark=100, oi_contracts=100, oi_usd=10000, oi_delta=np.nan),
+            dict(open_time=t1, open=100, high=100.2, low=99.5, close=100, mark=100, oi_contracts=110, oi_usd=11000, oi_delta=10),
+        ]
+    )
+    contract = _build(
+        frame,
+        mmr_mode="bracket",
+        mmr=None,
+        assumed_qty=None,
+        leverages=[10],
+        ladder="standard",
+        bin_mode="absolute",
+        bin_size=0.02,
+    )
+    birth = [cell for cell in _at(contract, t1) if cell["side"] == "long" and cell["leverage"] == 10]
+    assert birth
+    center = contract["axes"]["price"][birth[0]["p"]]
+    assert center == pytest.approx(expected, abs=0.02)
+
+
+def test_assumed_quantity_moves_the_tier_and_caps_leverage_at_that_maximum():
+    # entry 100 and qty 60_000 is 6_000_000 notional: BTC max leverage 10, mmr 5%, cum 141300.
+    schedule = brackets_for("BTCUSDT")
+    mmr, cum = mmr_for_leverage(25, schedule, "bracket", None, notional=6_000_000)
+    assert mmr == 0.05
+    assert cum == 141300
+    t0 = "2026-10-25T00:00:00+00:00"
+    t1 = "2026-10-25T00:15:00+00:00"
+    frame = _frame(
+        [
+            dict(open_time=t0, open=100, high=101, low=99, close=100, mark=100, oi_contracts=10, oi_usd=1000, oi_delta=np.nan),
+            dict(open_time=t1, open=100, high=101, low=99, close=100, mark=100, oi_contracts=20, oi_usd=2000, oi_delta=10),
+        ]
+    )
+    contract = _build(
+        frame,
+        mmr_mode="bracket",
+        mmr=None,
+        assumed_qty=60_000,
+        leverages=[10, 25],
+        ladder="standard",
+        bin_mode="absolute",
+        bin_size=0.02,
+    )
+    assert contract["cells"]
+    assert max(cell["leverage"] for cell in contract["cells"]) <= 10
+    expected = liq_price_long(100, 10, mmr, cum, 60_000)
+    center = contract["axes"]["price"][next(cell["p"] for cell in _at(contract, t1) if cell["side"] == "long")]
+    assert center == pytest.approx(expected, abs=0.02)
+    weights = build_leverage_weights(resolve_ladder("standard", 125), "lognormal")
+    kept = {lev: weight for lev, weight in weights.items() if lev in (10.0, 25.0)}
+    assert contract["metadata"]["notional_placed"] == pytest.approx(10 * 100 * sum(kept.values()))

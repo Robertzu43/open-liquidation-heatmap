@@ -126,7 +126,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--ladder", default=None, choices=["full", "standard", "classic"])
     parser.add_argument("--leverages", default=None, help="comma-separated rungs to keep, without renormalizing")
     parser.add_argument("--mmr", type=float, default=None)
-    parser.add_argument("--mmr-mode", dest="mmr_mode", default=None, choices=["constant", "bracket"])
+    parser.add_argument(
+        "--mmr-mode",
+        dest="mmr_mode",
+        default=None,
+        choices=["constant", "bracket"],
+        help="bracket uses the lowest-notional tier unless --assumed-qty selects a higher one",
+    )
     parser.add_argument("--fade", dest="fade", action="store_true")
     parser.add_argument("--no-fade", dest="fade", action="store_false")
     parser.add_argument("--decay", type=float, default=None)
@@ -136,7 +142,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--smooth", type=float, default=None)
     parser.add_argument("--y-span", dest="y_span", type=float, default=None, help="view-only percent band around the last price")
     parser.add_argument("--split", default=None, choices=["even", "metrics"])
-    parser.add_argument("--assumed-qty", dest="assumed_qty", type=float, default=None)
+    parser.add_argument(
+        "--assumed-qty",
+        dest="assumed_qty",
+        type=float,
+        default=None,
+        help="base-asset size; quantity times entry selects the maintenance tier",
+    )
     parser.add_argument("--config", default=None)
     parser.add_argument("--outfile", default="heatmap.png")
     parser.add_argument("--html", default="heatmap.html")

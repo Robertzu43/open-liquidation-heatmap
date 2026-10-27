@@ -37,7 +37,7 @@ For each exchange, for each candle:
     long:  `P = (entry * (1 - 1/L) - cum/qty) / (1 - mmr)`
     short: `P = (entry * (1 + 1/L) + cum/qty) / (1 + mmr)`
 
-   `cum` is applied only when `--assumed-qty` is set. Otherwise it is 0. A long price at or above the entry is dropped. Brackets come from `data/brackets/binance_usdm_v1.json`, a partial snapshot of Binance's public leverage and margin page. The signed `GET /fapi/v1/leverageBracket` endpoint is not called. `--mmr-mode bracket` (the default) uses the tightest tier that still allows the assumed leverage. `--mmr-mode constant --mmr 0.005` forces the 0.50% check: entry 100 at 10x is about 90.4523 long and 109.4527 short.
+   `cum` is applied only when `--assumed-qty` is set. Otherwise it is 0. A long price at or above the entry is dropped. Brackets come from `data/brackets/binance_usdm_v1.json`, a partial snapshot of Binance's public leverage and margin page. The signed `GET /fapi/v1/leverageBracket` endpoint is not called. `--mmr-mode bracket` (the default) uses the first bracket, the lowest notional band, which is the tier for a typical position. BTC at 10x therefore uses that band's maintenance rate, 0.40% in the bundled snapshot: entry 100 liquidates near 90.3614 long and 109.5618 short. `--assumed-qty` selects the band that contains quantity times the entry price, and any rung above that band's maximum leverage is capped at the maximum. `--mmr-mode constant --mmr 0.005` forces the 0.50% check: entry 100 at 10x is about 90.4523 long and 109.4527 short.
 
 6. A level stays on later candles until price trades through it or the book shrinks. An open-interest decrease scales every still-open level by `new_contracts / previous_contracts`. With fade on and `--decay 0` (the default), the sweep candle keeps full intensity and later candles drop that level. The entry candle does not sweep a level opened on it. `--age-half-life` is off unless you set it.
 
@@ -86,7 +86,7 @@ Symbol scope for the snapshot is the top 20 USDT perpetuals by trailing 30-day q
 
 - Exchanges do not publish who is long, at what leverage, or in which margin mode. The ladder, the 50/50 split, and the maintenance schedule are assumptions.
 - The bundled bracket file is a partial public snapshot, shared across venues so the formula is comparable. It is not Bybit's risk-limit table or OKX's position tiers, and it is not the live signed Binance bracket endpoint.
-- Without an assumed quantity, the maintenance amount is 0. A real position large enough to change tiers would liquidate at a different price.
+- Without an assumed quantity, the model uses the lowest-notional maintenance tier and a maintenance amount of 0. Pass `--assumed-qty` when the position is large enough to sit in a higher band.
 - Positions opened before the window are invisible. A later decrease scales only the book this run has been tracking.
 - A printed open interest of 0 is treated as a missing print, not a full unwind.
 - Binance vision lags about a day, so a 24h "now" view on a US host is often OKX alone.

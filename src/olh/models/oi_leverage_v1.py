@@ -19,7 +19,7 @@ import pandas as pd
 from olh.core.text import DISCLAIMER, ESTIMATE_LABEL, MODEL_NAME, MODEL_VERSION, SCHEMA
 from olh.features.binning import bin_centers, bin_index, make_price_grid
 from olh.features.splits import long_fraction
-from olh.models.brackets import SymbolBrackets, mmr_for_leverage
+from olh.models.brackets import SymbolBrackets, bracket_for_notional, mmr_for_leverage
 from olh.models.leverage import build_leverage_weights, filter_weights, resolve_ladder
 from olh.models.mathutil import liq_price_long, liq_price_short
 
@@ -159,22 +159,29 @@ def _simulate(exchange, frame, weights, schedule, config) -> tuple[list[dict], f
                     count_long_short_ratio=_opt(row, "count_long_short_ratio"),
                     taker_long_short_ratio=_opt(row, "sum_taker_long_short_vol_ratio"),
                 )
+                position_notional = None if qty is None else float(qty) * entry
+                tier_cap = None
+                if str(mmr_mode).lower() == "bracket":
+                    tier_cap = bracket_for_notional(schedule, position_notional).max_leverage
                 for lev, weight in weights.items():
-                    mmr, cum = mmr_for_leverage(lev, schedule, mmr_mode, constant)
+                    applied = float(lev)
+                    if tier_cap is not None and applied > tier_cap:
+                        applied = float(tier_cap)
+                    mmr, cum = mmr_for_leverage(applied, schedule, mmr_mode, constant, position_notional)
                     piece = fresh_notional * weight
                     for side, share in (("long", long_share), ("short", 1.0 - long_share)):
                         if share <= 0 or piece <= 0:
                             continue
                         price = (
-                            liq_price_long(entry, lev, mmr, cum, qty)
+                            liq_price_long(entry, applied, mmr, cum, qty)
                             if side == "long"
-                            else liq_price_short(entry, lev, mmr, cum, qty)
+                            else liq_price_short(entry, applied, mmr, cum, qty)
                         )
                         if price is None:
                             continue
                         lot = {
                             "side": side,
-                            "leverage": float(lev),
+                            "leverage": applied,
                             "price": float(price),
                             "notional": piece * share,
                             "exchange": exchange,
@@ -315,7 +322,7 @@ def _assumptions(config: dict, schedule: SymbolBrackets) -> list[str]:
         "Only the change in contract count opens or closes estimated positions. A move in the USD value of open interest does not.",
         "New contracts are valued at the mark price of the same candle when a mark print exists, otherwise at that candle's close. The next candle is not used.",
         "The default leverage prior is log-normal over 2x through the symbol maximum, centered near 15x, and it includes 25x.",
-        f"Maintenance margin follows bracket version {schedule.version} ({config.get('mmr_mode', 'bracket')} mode). The maintenance amount is applied only when an assumed quantity is set.",
+        f"Maintenance margin follows bracket version {schedule.version} ({config.get('mmr_mode', 'bracket')} mode). The default tier is the lowest notional band. An assumed quantity selects the band that contains quantity times entry, and leverage above that band's maximum is capped there. The maintenance amount is applied only when an assumed quantity is set.",
         "Open interest that falls scales every still-open level by the same fraction. Levels then stay on the map until price trades through them or age decay is enabled.",
         "The even long/short split is the default. The metrics split is optional and uses public account and taker ratios when those columns exist.",
         DISCLAIMER,
