@@ -29,8 +29,11 @@ https://github.com/Robertzu43/open-liquidation-heatmap.
 Use an existing checkout if available; otherwise clone the repository without
 overwriting any files. Check for Python 3.11 or newer, create or reuse a virtual
 environment, install the project, and start the server on 127.0.0.1:8765. If
-that port is in use, check whether Open Liq is already running; otherwise use an
-available local port. Keep the server running while I test it.
+that port is in use, check whether Open Liq is already running and whether its
+reported version matches the checkout. If it does not match, use an available
+local port instead; do not stop or modify someone else's process. Report the
+checkout revision, and do not overwrite local changes. Keep the server running
+while I test it.
 
 Verify the health endpoint and load the offline demo, then give me the exact
 browser URL. If you can open a browser on this same computer, open it. If you
@@ -173,6 +176,18 @@ The [CI workflow](.github/workflows/ci.yml) covers Python tests, wheel installat
 Open Liq gives you inspectable modeling and control of your research inputs. It is **not a drop-in replacement** for a provider-specific strategy: coverage, timing, definitions and estimates differ. Compare authorized, timestamp-aligned datasets; freeze parameters; evaluate held-out outcomes after costs; and shadow-run before deciding. No provider dataset or prospective trading evidence was available for this release.
 
 [Migration](docs/MIGRATION.md) · [Operations](docs/OPERATIONS.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
+
+## Support continued development
+
+If Open Liq is useful and you would like to support its development, a voluntary donation of **1 USDT** is appreciated.
+
+**Asset:** USDT · **Network:** Tron (TRC-20)
+
+<img src="docs/assets/usdt-trc20.png" width="220" alt="QR code for the USDT donation address on Tron TRC-20">
+
+**Address:** `TPj94QSBd141u2gNpCHPFP9DAUwewqWTTs`
+
+The QR code contains the address only; enter the amount in your wallet. Send **USDT using the Tron (TRC-20) network** and verify the address and network before sending.
 
 ## License
 
