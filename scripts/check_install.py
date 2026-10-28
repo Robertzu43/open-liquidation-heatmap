@@ -25,12 +25,20 @@ def main():
         wheel = next(temp.glob("open_liquidation_heatmap-*.whl"))
         venv.create(temp / "venv", with_pip=True, system_site_packages=True)
         python = temp / "venv/bin/python"
-        subprocess.run([str(python), "-m", "pip", "install", "--no-deps", str(wheel)], check=True)
+        # CI already exposes this version through inherited site-packages. Always
+        # install the wheel and its console scripts into the disposable venv.
+        subprocess.run([str(python), "-m", "pip", "install", "--ignore-installed", "--no-deps", str(wheel)], check=True)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         env = dict(os.environ)
         env.pop("PYTHONPATH", None)
+        subprocess.run([
+            str(python), "-c",
+            "from pathlib import Path; import sys, liqmap, liqmap_web; "
+            "assert all(Path(module.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()) "
+            "for module in (liqmap, liqmap_web)), 'Smoke test imported an inherited package'",
+        ], cwd=temp, env=env, check=True)
         with (temp / "server.log").open("w+") as log:
             process = subprocess.Popen([str(temp / "venv/bin/liqmap"), "--port", str(port)], cwd=temp, env=env, stdout=log, stderr=log)
             try:

@@ -22,6 +22,8 @@ Final integration verification after the scanner correction: **318 tests passed,
 - Benchmark chart and raw samples are in [assets/benchmark.json](assets/benchmark.json). Nine model/range cases each have seven cached-source repetitions and exclude exchange/HTTP latency. A separate fresh local server records a cold request, five warm repeats, an eight-client burst, status/error counts, transfer sizes and Linux process memory. Hardware, workload, predeclared local budgets and child cleanup are recorded. These are small synthetic workloads, not model-accuracy or maximum-load evidence.
 - OpenAPI response schema was checked against an actual synthetic feature envelope. CI is configured in source; remote CI execution is a separate event.
 
+Before merging PR #10, hosted CI passed the Python application suites and Chromium checks but exposed an install-smoke setup defect: the child environment inherited the already installed application, so pip skipped installing its local console script. The same failure was reproduced locally. The harness now explicitly installs the wheel into the disposable environment and verifies both application packages load from that environment outside the checkout. The corrected smoke passed with the application already installed in the parent; final hosted results are attached to the pull request.
+
 ## Recorded local workload
 
 Final benchmark source revision: `96f28b7`; working tree clean when measured. This is demo BTC/12h/model 1 over loopback, with startup measured separately and no exchange access.
