@@ -18,32 +18,9 @@ Open Liq turns public perpetual-market candles and open interest into **inspecta
 
 **A heatmap is an estimate, not exchange position records.** This project does not demonstrate a trading edge or claim numerical equivalence to CoinGlass. It is independent of CoinGlass, does not scrape its heatmaps, and does not redistribute its data.
 
-![Open Liq desktop interface with live OKX BTC/USDT market data](docs/assets/desktop.png)
-
-*Screenshot captured from live OKX BTC/USDT on October 28, 2026. Market prices are real observations; the liquidation exposure is modeled.*
-
-## Quickstart
-
-Python 3.11 or newer. On macOS and Linux:
-
-```bash
-git clone https://github.com/Robertzu43/open-liquidation-heatmap.git
-cd open-liquidation-heatmap
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install .
-liqmap
-```
-
-Open **http://127.0.0.1:8765**. The default market is live OKX BTC/USDT. The server binds to your local machine unless explicitly configured otherwise.
-
-For offline exploration, open **http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1**. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
-
-On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
-
 ## Run with a coding agent
 
-Copy this prompt into a coding agent that has access to the computer where you want to use Open Liq:
+**Copy and paste this prompt:** Click the copy button at the top-right of the box, then paste it into a coding agent that has access to the computer where you want to run Open Liq.
 
 ```text
 Help me run Open Liq, the open-source liquidation heatmap at
@@ -71,6 +48,29 @@ Open Liq uses free public market endpoints from OKX and Binance, plus Binance's
 public archives. It does not need an exchange account or read your account
 positions. The exchanges receive normal network requests, including your IP
 address, and may impose rate limits or geographic restrictions.
+
+![Open Liq desktop interface with live OKX BTC/USDT market data](docs/assets/desktop.png)
+
+*Screenshot captured from live OKX BTC/USDT on October 28, 2026. Market prices are real observations; the liquidation exposure is modeled.*
+
+## Quickstart
+
+Python 3.11 or newer. On macOS and Linux:
+
+```bash
+git clone https://github.com/Robertzu43/open-liquidation-heatmap.git
+cd open-liquidation-heatmap
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install .
+liqmap
+```
+
+Open **http://127.0.0.1:8765**. The default market is live OKX BTC/USDT. The server binds to your local machine unless explicitly configured otherwise.
+
+For offline exploration, open **http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1**. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
+
+On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
 
 ## Built for research
 
