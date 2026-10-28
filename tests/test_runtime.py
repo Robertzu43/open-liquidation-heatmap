@@ -461,3 +461,19 @@ def test_live_stale_quality_explains_freshness_warning():
     loaded.as_of -= 30 * 60 * 1000
     loaded.series.warnings.clear()
     assert any('stale' in warning.lower() for warning in service._quality(loaded)['warnings'])
+
+
+def test_daily_live_aggregate_does_not_expire_before_two_daily_bars():
+    from liqmap import data
+    now = 20000 * 86400 + 20 * 3600
+    with mock.patch.object(data.time, 'time', return_value=now):
+        first = data.fetch_demo('BTC', 'BTCUSDT', range_spec('1y'))
+        second = data.fetch_demo('BTC', 'BTCUSDT', range_spec('1y'))
+        first.series.exchange, first.source = 'okx', 'okx'
+        second.series.exchange, second.source = 'binance', 'binance-live'
+        first.stale = data.is_stale(first.as_of, 86400)
+        second.stale = data.is_stale(second.as_of, 86400)
+        with mock.patch.object(data, 'fetch_okx', return_value=first), mock.patch.object(data, 'fetch_binance', return_value=second):
+            loaded = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('1y'))
+        assert loaded.venues == ['okx', 'binance']
+        assert service._quality(first)['stale'] is False

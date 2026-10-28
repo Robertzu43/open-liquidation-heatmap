@@ -17,7 +17,7 @@ Run `python -m liqmap.server` and use `http://127.0.0.1:8765`. No API key is nee
 | `GET /healthz` | Process liveness; no exchange request |
 | `GET /readyz` | Cached default live-market observation; no exchange request |
 
-Each `/api/v1/...` route has a legacy `/api/...` compatibility alias. Existing heatmap fields remain. These aliases use the corrected model and include its version; numerical output changes from the previous release. A schema version describes the envelope; a model version describes numerical semantics. Pin both for research. Unknown routes return 404.
+Each `/api/v1/...` route has a legacy `/api/...` compatibility alias. Existing heatmap fields remain. Heatmap, features, and levels use the corrected model; numerical output changes from the previous release. Heatmap and features include schema and model versions, but levels does not. A schema version describes the envelope; a model version describes numerical semantics. Record both from the corresponding heatmap or features response for research. Unknown routes return 404.
 
 Heatmap, features and levels share these query parameters:
 

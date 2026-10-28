@@ -294,9 +294,10 @@ def _quality(loaded, *, historical: bool = False) -> dict:
     series = loaded.series
     provenance = getattr(series, "provenance", {})
     synthetic = loaded.source == "demo" or series.exchange == "demo" or provenance.get("history_kind") == "synthetic"
-    stale = bool(loaded.stale)
-    if not historical and loaded.source in {"okx", "binance-live", "binance-vision", "aggregate"}:
-        stale = stale or is_stale(loaded.as_of, series.bar_seconds, limit_s=2 * int(series.bar_seconds)) or live_component_stale(series)
+    live_source = loaded.source in {"okx", "binance-live", "binance-vision", "aggregate"}
+    stale = bool(loaded.stale) if historical or not live_source else (
+        is_stale(loaded.as_of, series.bar_seconds, limit_s=2 * int(series.bar_seconds)) or live_component_stale(series)
+    )
     coverage = {}
     for name in ("candle_observed", "oi_observed", "flow_observed"):
         mask = getattr(series, name, None)
