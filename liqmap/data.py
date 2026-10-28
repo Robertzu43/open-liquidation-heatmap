@@ -252,6 +252,13 @@ def is_stale(last_open_ms: int, bar_seconds: int, now_s: float | None = None, li
     return (now - covered_until) > limit_s
 
 
+def live_component_stale(series: MarketSeries, now_s: float | None = None) -> bool:
+    """Require a recent bar with both observed candles and open interest."""
+    observed = np.asarray(series.candle_observed, dtype=bool) & np.asarray(series.oi_observed, dtype=bool)
+    indices = np.flatnonzero(observed)
+    return not len(indices) or is_stale(int(series.times[indices[-1]]), series.bar_seconds, now_s, 2 * int(series.bar_seconds))
+
+
 def ratio_to_share(ratio: float | str | None) -> float:
     """Convert a long/short ratio into the long fraction. Non-positive is missing."""
     try:
@@ -1213,7 +1220,7 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
     end_open_now = history_end_open(int(time.time()), bar_s)
     day_last = int(latest.timestamp()) + 86400 - bar_s
     end_open = min(end_open_now, day_last)
-    if not allow_stale and is_stale(end_open * 1000, bar_s):
+    if not allow_stale and is_stale(end_open * 1000, bar_s, limit_s=2 * bar_s):
         when = _fmt_cot((end_open + bar_s) * 1000)
         raise DataError(
             f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when})."
@@ -1242,6 +1249,7 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
         note="Built from the public Binance market archive because the live futures API was unavailable.",
         warnings=[],
     )
+    loaded.stale = live_component_stale(loaded.series)
     if loaded.stale:
         when = _fmt_cot(loaded.as_of + bar_s * 1000)
         loaded.series.warnings.append(
@@ -1255,9 +1263,9 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
 
 def fetch_binance(coin: str, pair: str, spec: dict, *, allow_stale: bool = True) -> LoadedSeries:
     live = _try_binance_live(coin, pair, spec)
-    if live is not None and (allow_stale or not live.stale):
+    if live is not None and (allow_stale or not live_component_stale(live.series)):
         return live
-    if live is not None and live.stale and not allow_stale:
+    if live is not None and not allow_stale:
         raise DataError("Binance data is behind the live market.")
     return fetch_binance_vision(coin, pair, spec, allow_stale=allow_stale)
 
@@ -1472,9 +1480,9 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
                 errors.append(f"{exchange_name(name)}: {exc.__class__.__name__}")
     fresh = []
     for part in loaded_parts:
-        if part.source == "binance-vision" and part.stale:
+        if live_component_stale(part.series):
             when = _fmt_cot(part.as_of + part.series.bar_seconds * 1000)
-            errors.append(f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when}).")
+            errors.append(f"{exchange_name(part.series.exchange)} was left out of this aggregate because its data lags the live market (last bar ends {when}).")
             continue
         fresh.append(part)
     if not fresh:

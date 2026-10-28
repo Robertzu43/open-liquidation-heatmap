@@ -250,7 +250,7 @@ def test_live_quality_uses_two_bar_age_budget_without_relabeling_history(source)
         assert historical['stale'] is False
     loaded.source = 'binance-vision'
     loaded.series.provenance['history_kind'] = 'reconstructed_archive'
-    assert service._quality(loaded)['stale'] is False
+    assert service._quality(loaded, historical=True)['stale'] is False
 
 
 def test_client_disconnect_while_sending_response_does_not_report_internal_error(caplog):
@@ -382,3 +382,98 @@ def test_idle_keepalive_timeout_is_not_logged_as_a_request_error(monkeypatch, ca
         app.shutdown()
         app.server_close()
         thread.join(timeout=3)
+
+
+def test_live_archive_fallback_is_stale_but_historical_view_is_not():
+    loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    loaded.source = 'binance-vision'
+    loaded.series.exchange = 'binance'
+    loaded.series.provenance['history_kind'] = 'reconstructed_archive'
+    loaded.as_of -= 30 * 60 * 1000
+    loaded.stale = False
+    assert service._quality(loaded)['stale'] is True
+    assert service._quality(loaded, historical=True)['stale'] is False
+
+
+def test_aggregate_excludes_old_venue_and_reports_degraded_quality():
+    from liqmap import data
+    fresh = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    fresh.series.exchange, fresh.source = 'okx', 'okx'
+    old = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    old.series.exchange, old.source = 'binance', 'binance-vision'
+    old.series.times -= 30 * 60 * 1000
+    old.as_of = int(old.series.times[-1])
+    old.stale = False
+    with mock.patch.object(data, 'fetch_okx', return_value=fresh), mock.patch.object(data, 'fetch_binance', return_value=old):
+        loaded = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('24h'))
+    assert loaded.venues == ['okx']
+    quality = service._quality(loaded)
+    assert quality['status'] == 'degraded'
+    assert any('Binance' in warning for warning in quality['warnings'])
+
+
+def test_aggregate_partial_component_coverage_is_degraded():
+    from liqmap import data
+    first = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    second = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    first.series.exchange, first.source = 'okx', 'okx'
+    second.series.exchange, second.source = 'binance', 'binance-live'
+    second.series.oi_observed[5] = False
+    with mock.patch.object(data, 'fetch_okx', return_value=first), mock.patch.object(data, 'fetch_binance', return_value=second):
+        loaded = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('24h'))
+    quality = service._quality(loaded)
+    assert quality['status'] == 'degraded'
+    assert any('coverage' in warning.lower() for warning in quality['warnings'])
+
+
+def test_cached_aggregate_is_reloaded_when_one_component_ages_out():
+    from liqmap import data
+    first = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    second = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    first.series.exchange, first.source = 'okx', 'okx'
+    second.series.exchange, second.source = 'binance', 'binance-live'
+    second.series.times -= (9 * 60 + 45) * 1000
+    second.as_of = int(second.series.times[-1])
+    now = int(first.series.times[-1] / 1000) + first.series.bar_seconds
+    with mock.patch.object(data.time, 'time', return_value=now), mock.patch.object(data, 'fetch_okx', return_value=first), mock.patch.object(data, 'fetch_binance', return_value=second):
+        aggregate = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('24h'))
+    with mock.patch.object(service.time, 'time', return_value=now) as clock, mock.patch.object(service, 'load_market', return_value=aggregate) as load:
+        service.get_series('aggregate', 'BTC', '24h', 'symbol')
+        clock.return_value = now + 30
+        service.get_series('aggregate', 'BTC', '24h', 'symbol')
+    assert load.call_count == 2
+
+
+def test_live_quality_detects_old_open_interest_even_with_new_candles():
+    loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    loaded.source = 'okx'
+    loaded.series.exchange = 'okx'
+    loaded.series.provenance['history_kind'] = 'exchange_history'
+    loaded.series.oi_observed[-5:] = False
+    assert service._quality(loaded)['stale'] is True
+
+
+def test_live_stale_quality_explains_freshness_warning():
+    loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    loaded.source = 'binance-vision'
+    loaded.series.exchange = 'binance'
+    loaded.series.provenance['history_kind'] = 'reconstructed_archive'
+    loaded.as_of -= 30 * 60 * 1000
+    loaded.series.warnings.clear()
+    assert any('stale' in warning.lower() for warning in service._quality(loaded)['warnings'])
+
+
+def test_daily_live_aggregate_does_not_expire_before_two_daily_bars():
+    from liqmap import data
+    now = 20000 * 86400 + 20 * 3600
+    with mock.patch.object(data.time, 'time', return_value=now):
+        first = data.fetch_demo('BTC', 'BTCUSDT', range_spec('1y'))
+        second = data.fetch_demo('BTC', 'BTCUSDT', range_spec('1y'))
+        first.series.exchange, first.source = 'okx', 'okx'
+        second.series.exchange, second.source = 'binance', 'binance-live'
+        first.stale = data.is_stale(first.as_of, 86400)
+        second.stale = data.is_stale(second.as_of, 86400)
+        with mock.patch.object(data, 'fetch_okx', return_value=first), mock.patch.object(data, 'fetch_binance', return_value=second):
+            loaded = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('1y'))
+        assert loaded.venues == ['okx', 'binance']
+        assert service._quality(first)['stale'] is False
