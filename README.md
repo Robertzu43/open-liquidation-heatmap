@@ -11,7 +11,7 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-e2b15a"></a>
 </p>
 <p align="center">
-  <a href="#quickstart">Quickstart</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a> · <a href="docs/RELEASE_REVIEW.md">Release evidence</a>
+  <a href="#quickstart">Quickstart</a> · <a href="#run-with-a-coding-agent">For coding agents</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a> · <a href="docs/RELEASE_REVIEW.md">Release evidence</a>
 </p>
 
 Open Liq turns public perpetual-market candles and open interest into **inspectable liquidation scenarios**. Use the chart to explore price concentrations, or the local API to record exact model features for algorithmic research. No exchange API key is required.
@@ -40,6 +40,37 @@ Open **http://127.0.0.1:8765**. The default market is live OKX BTC/USDT. The ser
 For offline exploration, open **http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1**. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
 
 On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
+
+## Run with a coding agent
+
+Copy this prompt into a coding agent that has access to the computer where you want to use Open Liq:
+
+```text
+Help me run Open Liq, the open-source liquidation heatmap at
+https://github.com/Robertzu43/open-liquidation-heatmap.
+
+Use an existing checkout if available; otherwise clone the repository without
+overwriting any files. Check for Python 3.11 or newer, create or reuse a virtual
+environment, install the project, and start the server on 127.0.0.1:8765. If
+that port is in use, check whether Open Liq is already running; otherwise use an
+available local port. Keep the server running while I test it.
+
+Verify the health endpoint and load the offline demo, then give me the exact
+browser URL. If you can open a browser on this same computer, open it. If you
+are running remotely, explain how I can access the server through an available
+port-forwarding or preview feature; do not assume your localhost is mine.
+Help me switch to the public live market data and use the local API if I ask.
+
+Use only the public, keyless data sources. Do not request my exchange API keys,
+passwords, or account details, and do not connect to my trading account or
+place orders. Explain that liquidation exposure is a model estimate, not my
+account positions or a record of actual liquidations.
+```
+
+Open Liq uses free public market endpoints from OKX and Binance, plus Binance's
+public archives. It does not need an exchange account or read your account
+positions. The exchanges receive normal network requests, including your IP
+address, and may impose rate limits or geographic restrictions.
 
 ## Built for research
 
