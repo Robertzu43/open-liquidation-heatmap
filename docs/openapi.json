@@ -1,0 +1,678 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Open Liq Research API",
+    "version": "1.0",
+    "description": "Application0.3.0/model2.0.0. Estimated entry-notional exposure; not exchange positions. Detailed field semantics and operational caps in API.md. Legacy /api aliases remain."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765"
+    }
+  ],
+  "paths": {
+    "/api/v1/heatmap": {
+      "get": {
+        "summary": "Heatmap with versioned provenance and exact features",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "okx",
+              "enum": [
+                "okx",
+                "binance",
+                "demo",
+                "aggregate"
+              ]
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "24h",
+              "enum": [
+                "12h",
+                "24h",
+                "3d",
+                "7d",
+                "30d",
+                "90d",
+                "180d",
+                "1y",
+                "2y"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pair",
+              "enum": [
+                "pair",
+                "symbol"
+              ]
+            }
+          },
+          {
+            "name": "asof",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bar",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "5m",
+                "15m",
+                "1h",
+                "4h",
+                "12h",
+                "1d"
+              ]
+            }
+          },
+          {
+            "name": "visible_bars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 3000
+            }
+          },
+          {
+            "name": "replay",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful versioned response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "409": {
+            "description": "Replay span expired"
+          },
+          "503": {
+            "description": "Data unavailable, worker limit or cooperative deadline reached"
+          },
+          "429": {
+            "description": "Expensive-work admission limit reached; Retry-After supplied"
+          }
+        }
+      }
+    },
+    "/api/v1/features": {
+      "get": {
+        "summary": "Features with versioned provenance and exact features",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "okx",
+              "enum": [
+                "okx",
+                "binance",
+                "demo",
+                "aggregate"
+              ]
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "24h",
+              "enum": [
+                "12h",
+                "24h",
+                "3d",
+                "7d",
+                "30d",
+                "90d",
+                "180d",
+                "1y",
+                "2y"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pair",
+              "enum": [
+                "pair",
+                "symbol"
+              ]
+            }
+          },
+          {
+            "name": "asof",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bar",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "5m",
+                "15m",
+                "1h",
+                "4h",
+                "12h",
+                "1d"
+              ]
+            }
+          },
+          {
+            "name": "visible_bars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 3000
+            }
+          },
+          {
+            "name": "replay",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful versioned response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "409": {
+            "description": "Replay span expired"
+          },
+          "503": {
+            "description": "Data unavailable, worker limit or cooperative deadline reached"
+          },
+          "429": {
+            "description": "Expensive-work admission limit reached; Retry-After supplied"
+          }
+        }
+      }
+    },
+    "/api/v1/status": {
+      "get": {
+        "summary": "Status",
+        "responses": {
+          "200": {
+            "description": "Supported capabilities"
+          }
+        }
+      }
+    },
+    "/api/v1/symbols": {
+      "get": {
+        "summary": "Symbols",
+        "responses": {
+          "200": {
+            "description": "Supported capabilities"
+          }
+        }
+      }
+    },
+    "/api/v1/levels": {
+      "get": {
+        "summary": "Display-bin leverage decomposition, not exact logical price cohorts",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "okx",
+              "enum": [
+                "okx",
+                "binance",
+                "demo",
+                "aggregate"
+              ]
+            }
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "24h",
+              "enum": [
+                "12h",
+                "24h",
+                "3d",
+                "7d",
+                "30d",
+                "90d",
+                "180d",
+                "1y",
+                "2y"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pair",
+              "enum": [
+                "pair",
+                "symbol"
+              ]
+            }
+          },
+          {
+            "name": "asof",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "bar",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "5m",
+                "15m",
+                "1h",
+                "4h",
+                "12h",
+                "1d"
+              ]
+            }
+          },
+          {
+            "name": "visible_bars",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 2,
+              "maximum": 3000
+            }
+          },
+          {
+            "name": "replay",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 0,
+              "enum": [
+                0,
+                1
+              ]
+            }
+          },
+          {
+            "name": "t",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "Bar-open Unix milliseconds from times"
+          },
+          {
+            "name": "price",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Leverage tier amounts"
+          },
+          "400": {
+            "description": "Invalid query"
+          }
+        }
+      }
+    },
+    "/api/v1/replay": {
+      "get": {
+        "summary": "Load a bounded Binance replay span",
+        "parameters": [
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC"
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "24h",
+              "enum": [
+                "12h",
+                "24h",
+                "3d",
+                "7d",
+                "30d",
+                "90d",
+                "180d",
+                "1y",
+                "2y"
+              ]
+            }
+          },
+          {
+            "name": "bar",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "5m",
+                "15m",
+                "1h",
+                "4h",
+                "12h",
+                "1d"
+              ]
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Replay frame metadata"
+          },
+          "400": {
+            "description": "Invalid range or request"
+          },
+          "503": {
+            "description": "Unavailable or work budget exceeded"
+          }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "summary": "Process health",
+        "responses": {
+          "200": {
+            "description": "Healthy/ready"
+          },
+          "503": {
+            "description": "Not ready"
+          }
+        }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Cached default-live-market readiness, independent of process liveness",
+        "responses": {
+          "200": {
+            "description": "Healthy/ready"
+          },
+          "503": {
+            "description": "Not ready"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ResearchEnvelope": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "model_version",
+          "data_fingerprint",
+          "quality",
+          "features",
+          "feature_as_of",
+          "exchange",
+          "symbol",
+          "as_of",
+          "units",
+          "time_semantics",
+          "model_metadata"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          },
+          "model_version": {
+            "type": "string"
+          },
+          "data_fingerprint": {
+            "type": "string",
+            "pattern": "^sha256:[a-f0-9]{64}$"
+          },
+          "exchange": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "as_of": {
+            "type": "integer"
+          },
+          "feature_as_of": {
+            "type": "integer"
+          },
+          "quality": {
+            "type": "object",
+            "required": [
+              "status",
+              "synthetic",
+              "stale",
+              "coverage",
+              "historical_availability"
+            ],
+            "properties": {
+              "status": {
+                "enum": [
+                  "synthetic",
+                  "stale",
+                  "degraded",
+                  "observed",
+                  "unknown"
+                ]
+              },
+              "synthetic": {
+                "type": "boolean"
+              },
+              "stale": {
+                "type": "boolean"
+              },
+              "historical_availability": {
+                "enum": [
+                  "known",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "features": {
+            "type": "object"
+          },
+          "units": {
+            "type": "object"
+          },
+          "time_semantics": {
+            "type": "object"
+          },
+          "model_metadata": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

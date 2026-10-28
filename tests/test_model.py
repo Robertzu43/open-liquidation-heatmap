@@ -78,14 +78,14 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(swept, [])
         self.assertEqual(bin_intensity([1.0, 2.0, 3.0], [10.0, 1.0, 4.0], [0.0, 2.0, 3.0]), [10.0, 5.0])
 
-    def test_open_interest_joins_the_nearest_candle_open(self):
+    def test_open_interest_joins_its_closed_bar_interval(self):
         grid = np.array([0, 3_600_000, 7_200_000], dtype=np.int64)
         early, _share = fold_oi([(600_000, 100.0, 0.5)], grid, 3_600_000)
         self.assertEqual(early[0], 100.0)
         self.assertTrue(np.isnan(early[1]))
         later, _share = fold_oi([(3_000_000, 600.0, 0.5)], grid, 3_600_000)
-        self.assertTrue(np.isnan(later[0]))
-        self.assertEqual(later[1], 600.0)
+        self.assertEqual(later[0], 600.0)
+        self.assertTrue(np.isnan(later[1]))
 
     def test_liq_price_direction(self):
         entry = 100.0

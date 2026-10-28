@@ -4,44 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <title>Open Liquidation Heatmap</title>
+  <meta name="description" content="Explore estimated liquidation exposure from public market data. Open source, local first, transparent assumptions.">
+  <title>Open Liq · Liquidation research</title>
+  <link rel="icon" href="/assets/logo.png" type="image/png">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <div class="app">
+  <a class="skip-link" href="#chart">Skip to chart</a>
+  <main class="app">
     <header class="top">
-      <div class="brand">
-        <span class="mark" aria-hidden="true"></span>
-        <div>
-          <strong>Open Liq</strong>
-          <em>public-data estimate</em>
-        </div>
-      </div>
-      <div class="heading">
-        <h1 id="title">OKX BTC/USDT Liquidation Heatmap</h1>
-        <p id="asof" class="asof">Loading the latest public candles…</p>
-      </div>
+      <a class="brand" href="/" aria-label="Open Liq home"><img src="/assets/logo.png" alt="" width="40" height="40"><div><strong>Open Liq<span class="brand-dot">.</span></strong><em>LIQUIDATION RESEARCH</em></div></a>
+      <div class="heading"><h1 id="title">Estimated liquidation exposure</h1><p id="asof" class="asof">Waiting for market data…</p></div>
+      <span class="status" id="data-status" role="status" aria-live="polite">Connecting</span>
     </header>
-
-    <div class="toolbar">
-      <div class="models" role="tablist" aria-label="Liquidation model">
-        <button type="button" class="tab on" data-model="1" role="tab" aria-selected="true">Model 1</button>
-        <button type="button" class="tab" data-model="2" role="tab" aria-selected="false">Model 2</button>
-        <button type="button" class="tab" data-model="3" role="tab" aria-selected="false">Model 3</button>
-      </div>
-      <div class="seg" id="mode-toggle" role="group" aria-label="Pair or symbol">
-        <button type="button" class="on" data-mode="pair">Pair</button>
-        <button type="button" data-mode="symbol">Symbol</button>
-      </div>
-      <label class="field" id="exchange-field">Exchange
-        <select id="exchange">
-          <option value="okx" selected>OKX</option>
-          <option value="binance">Binance</option>
-          <option value="demo">Demo</option>
-        </select>
-      </label>
-      <label class="field">Coin
-        <input id="coin" list="coins" value="BTC" spellcheck="false" autocomplete="off" aria-label="Coin">
+    <section class="toolbar" aria-label="Market controls">
+      <label class="field">Asset
+        <input id="coin" list="coins" value="BTC" spellcheck="false" autocomplete="off" aria-label="Asset">
       </label>
       <datalist id="coins">
         <option value="BTC"></option>
@@ -51,6 +29,14 @@
         <option value="DOGE"></option>
         <option value="BNB"></option>
       </datalist>
+      <label class="field" id="exchange-field">Venue
+        <select id="exchange">
+          <option value="okx" selected>OKX</option>
+          <option value="binance">Binance</option>
+          <option value="demo">Demo</option>
+          <option value="aggregate" disabled hidden>All venues</option>
+        </select>
+      </label>
       <label class="field">Range
         <select id="range">
           <option value="12h">12 hour</option>
@@ -64,6 +50,42 @@
           <option value="2y">2 year</option>
         </select>
       </label>
+        <button type="button" id="refresh" title="Refresh" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
+        </button>
+    </section>
+    <div class="advanced" aria-label="Research settings">
+      <details id="model-settings"><summary>Model <span id="model-name">Wide clusters</span></summary><div class="settings-body"><p class="settings-intro">Choose an assumption, then compare the resulting exposure. These scenarios estimate positions; they do not observe exchange accounts.</p>
+      <div class="models" role="group" aria-label="Liquidation model">
+        <button type="button" class="tab on" data-model="1" aria-pressed="true"><b>Wide clusters</b><small>5×–60× · weighted to 60×</small></button>
+        <button type="button" class="tab" data-model="2" aria-pressed="false"><b>Tight magnets</b><small>20× / 60× · turnover and slow fade</small></button>
+        <button type="button" class="tab" data-model="3" aria-pressed="false"><b>Flow skew</b><small>10×–100× · flow prior or neutral fallback</small></button>
+      </div>
+      </div></details>
+      <details id="display-settings"><summary>Display</summary><div class="settings-body">
+    <div class="sub">
+      <label class="threshold">Band contrast <b id="th-val">0.85</b>
+        <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.85">
+      </label>
+      <label class="check"><input id="liqmap" type="checkbox"> Exposure profile</label>
+      <label class="check"><input id="candles" type="checkbox" checked> Candles</label>
+      <label class="field slim">Auto-refresh
+        <select id="auto">
+          <option value="0">Off</option>
+          <option value="30">30s</option>
+          <option value="60">1m</option>
+          <option value="300">5m</option>
+        </select>
+      </label>
+    </div>
+        <div class="display-row"><label class="field">Time zone<select id="timezone"><option value="utc">UTC</option><option value="local">Local time</option></select></label><span id="timezone-note" class="muted">UTC · event times</span><div class="swatches" id="themes" role="group" aria-label="Color theme"></div></div>
+      </div></details>
+      <details id="research-settings"><summary>Research</summary><div class="settings-body"><div class="research-top">
+      <div class="seg" id="mode-toggle" role="group" aria-label="Venue coverage">
+        <button type="button" class="on" data-mode="pair">Single venue</button>
+        <button type="button" data-mode="symbol">Aggregate</button>
+      </div>
+        <button type="button" id="share">Copy settings link</button><button type="button" id="export">Export research JSON</button></div><p id="history-note" class="muted">Historical as-of and replay are available for Binance single-venue data. Choose Binance to explore reconstructed history.</p><div id="history-controls" hidden><div class="history-fields">
       <label class="field" id="bar-field">Bar
         <select id="bar">
           <option value="" selected>Auto</option>
@@ -75,26 +97,13 @@
           <option value="1d">1d</option>
         </select>
       </label>
-      <label class="field" id="asof-field">As of (COT)
+      <label class="field" id="asof-field">As of (<span class="tz-label">UTC</span>)
         <input id="asof-input" type="datetime-local" step="300">
       </label>
       <button type="button" id="live" class="live-btn" title="Back to the live map">Live</button>
-      <div class="icon-btns">
-        <button type="button" id="refresh" title="Refresh" aria-label="Refresh">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
-        </button>
-        <button type="button" id="shot" title="Save PNG snapshot" aria-label="Save PNG snapshot">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
-        </button>
-        <button type="button" id="full" title="Fullscreen" aria-label="Fullscreen">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
-        </button>
-      </div>
-      <div class="swatches" id="themes" role="group" aria-label="Color theme"></div>
-    </div>
-
+        </div>
     <div class="player" id="player" role="group" aria-label="Replay">
-      <label class="field" id="to-field">To (COT)
+      <label class="field" id="to-field">To (<span class="tz-label">UTC</span>)
         <input id="to-input" type="datetime-local" step="300">
       </label>
       <button type="button" id="rp-load" class="live-btn" title="Load a replay from As of to To">Load replay</button>
@@ -113,71 +122,51 @@
       <span id="rp-time" class="rp-time">Set As of, then Load replay</span>
     </div>
 
-    <div class="sub">
-      <label class="threshold">Liquidity Threshold = <b id="th-val">0.85</b>
-        <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.85">
-      </label>
-      <label class="check"><input id="liqmap" type="checkbox"> Liquidation map</label>
-      <label class="check"><input id="candles" type="checkbox" checked> Candles</label>
-      <label class="field slim">Auto-refresh
-        <select id="auto">
-          <option value="0">Off</option>
-          <option value="30">30s</option>
-          <option value="60">1m</option>
-          <option value="300">5m</option>
-        </select>
-      </label>
-      <div class="zoom-btns">
-        <button type="button" id="fit">Fit</button>
-        <button type="button" id="wide">Wide</button>
-      </div>
+        </div></div></details>
     </div>
-
-    <div id="banner" class="banner" role="alert" hidden></div>
-
     <div class="stage">
-      <section class="chart-card" id="chart-card">
-        <div class="chart-head">
-          <div class="legend">
-            <span><i class="grad" id="legend-grad"></i> Estimated liquidity</span>
-            <span><i class="candle up"></i><i class="candle down"></i> Candles</span>
-          </div>
-          <div class="tags" id="tags"></div>
-        </div>
-        <div class="chart-wrap" id="wrap">
-          <canvas id="chart" aria-label="Liquidation heatmap"></canvas>
-          <div id="tip" class="tip" hidden></div>
-          <div id="loading" class="loading" hidden>Loading…</div>
-        </div>
-        <p class="caption">Color is relative estimated liquidity in this window, dark for low and bright for high. <span class="hint">Wheel zooms price, shift-wheel zooms time, drag pans, double-click resets.</span></p>
+      <section class="chart-card" id="chart-card" aria-label="Liquidation exposure chart">
+        <div class="chart-head"><div><p class="eyebrow">PUBLIC DATA · MODELED EXPOSURE</p><h2>Liquidation heatmap <span id="chart-price"></span></h2></div>      <div class="icon-btns">
+        <button type="button" id="shot" title="Save PNG snapshot" aria-label="Save PNG snapshot">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
+        </button>
+        <button type="button" id="full" title="Fullscreen" aria-label="Fullscreen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+        </button>
+      </div>
+</div>
+        <div class="chart-meta"><div class="legend"><span><i class="grad" id="legend-grad"></i> Low → high exposure</span><span><i class="candle up"></i><i class="candle down"></i> Price</span></div><span id="chart-context">24 hours · UTC</span></div>
+        <div class="chart-wrap" id="wrap"><canvas id="chart" tabindex="0" role="img" aria-label="Estimated liquidation heatmap" aria-describedby="chart-help"></canvas><div id="tip" class="tip" hidden></div><div id="loading" class="loading" hidden>Loading…</div></div>
+        <div class="chart-tools"><p id="chart-help"><span class="pointer-hint">Drag to pan · + / − zoom · 0 reset</span><span class="touch-hint">Swipe sideways to pan · scroll vertically · tap + / − to zoom</span><span class="desktop-hint"> · shift-wheel zooms time</span></p><div class="zoom-btns"><select id="zoom-axis" aria-label="Zoom axis"><option value="price">Price</option><option value="time">Time</option></select><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="reset">Reset</button><button type="button" id="fit">Fit</button><button type="button" id="wide">Wide</button></div></div>
+        <div class="tags" id="tags" aria-label="Focus an estimated level"></div>
+        <p class="caption">Bright bands indicate higher <strong>estimated liquidation exposure</strong>, relative to this window. Above price: vulnerable shorts. Below price: vulnerable longs. These are scenarios, not measured positions.</p>
       </section>
-
       <aside class="panel" id="panel">
-        <h2>Reading the shelves</h2>
+        <h2>Around the current price</h2>
         <p id="summary" class="summary">The estimate appears here after the first book is built.</p>
         <div class="cards">
           <article>
-            <h3>Nearest short above</h3>
+            <h3>Short exposure above</h3>
             <p id="above" class="stat">—</p>
           </article>
           <article>
-            <h3>Nearest long below</h3>
+            <h3>Long exposure below</h3>
             <p id="below" class="stat">—</p>
           </article>
         </div>
-        <h3 class="section">Imbalance around price</h3>
-        <table class="grid" id="imbalance">
-          <thead><tr><th>Window</th><th>Long</th><th>Short</th><th>S/L</th></tr></thead>
+        <details class="table-details"><summary>Exposure by distance</summary>
+        <table class="grid" id="imbalance" aria-label="Estimated exposure by distance">
+          <thead><tr><th scope="col">Window</th><th scope="col">Long</th><th scope="col">Short</th><th scope="col">S/L</th></tr></thead>
           <tbody></tbody>
         </table>
-        <h3 class="section">Resting levels</h3>
+        </details><details class="table-details"><summary>Estimated levels · table</summary>
         <div class="table-scroll">
-          <table class="grid" id="levels">
-            <thead><tr><th>Side</th><th>Price</th><th>Dist</th><th>USD</th></tr></thead>
+          <table class="grid" id="levels" aria-label="Estimated liquidation levels">
+            <thead><tr><th scope="col">Side</th><th scope="col">Price</th><th scope="col">Dist</th><th scope="col">Est. USD</th></tr></thead>
             <tbody></tbody>
           </table>
         </div>
-        <p id="resting" class="resting"></p>
+        </details><p id="resting" class="resting"></p>
         <details id="how">
           <summary>How this model works</summary>
           <div id="how-body"></div>
@@ -185,8 +174,11 @@
       </aside>
     </div>
 
-    <footer>Not financial advice. These shelves are a model, not exchange position records.</footer>
-  </div>
+    <div id="banner" class="banner" role="alert" hidden></div>
+    <section class="source-note" aria-label="Data provenance"><span class="eyebrow">SOURCE &amp; QUALITY</span><p id="provenance">Source and observation details appear after the first map loads.</p><p id="quality-detail"></p></section>
+    <footer><span>Open data. Visible assumptions.</span><span>Research estimates · not financial advice or exchange position records.</span></footer>
+    <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+  </main>
   <script src="/app.js"></script>
 </body>
 </html>

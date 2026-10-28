@@ -34,6 +34,10 @@ SKIP_DIRS = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    ".superpowers",
+    ".worktrees",
+    "build",
+    "dist",
 }
 URL_RE = re.compile(r"https?://([^/\s\"'`<>]+)")
 
@@ -98,7 +102,7 @@ def unlisted_python_hosts(text: str) -> list[str]:
 def _iter_files() -> list[Path]:
     files: list[Path] = []
     for path in ROOT.rglob("*"):
-        if any(part in SKIP_DIRS for part in path.parts):
+        if any(part in SKIP_DIRS for part in path.relative_to(ROOT).parts):
             continue
         if not path.is_file():
             continue
@@ -200,3 +204,16 @@ def test_binance_archive_is_allowed_and_a_fourth_venue_is_not() -> None:
     assert unlisted_python_hosts(text) == [fourth]
     archive = f"url = '{scheme}data.binance.vision/data/futures/um/'\n"
     assert unlisted_python_hosts(archive) == []
+
+
+def test_file_scan_keeps_source_when_checkout_has_an_ignored_ancestor(tmp_path, monkeypatch) -> None:
+    checkout = tmp_path / ".worktrees" / "checkout"
+    source = checkout / "liqmap" / "model.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("value = 1\n")
+    for directory in (".git", ".worktrees", ".superpowers", "build"):
+        ignored = checkout / directory / "nested.py"
+        ignored.parent.mkdir(parents=True)
+        ignored.write_text("value = 2\n")
+    monkeypatch.setitem(globals(), "ROOT", checkout)
+    assert _iter_files() == [source]

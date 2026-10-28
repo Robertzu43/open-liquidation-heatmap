@@ -5,3 +5,11 @@ __pycache__/
 *.npz
 .venv/
 .pytest_cache/
+.worktrees/
+.superpowers/
+.hypothesis/
+build/
+dist/
+*.egg-info/
+!web/assets/*.png
+!docs/assets/*.png

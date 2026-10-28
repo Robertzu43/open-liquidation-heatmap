@@ -28,7 +28,7 @@ def _klines(start_ms, end_ms, bar_ms):
 
 def _metrics(start_ms, end_ms):
     # Open interest is the print's own timestamp, so a test can tell which print was kept.
-    return [(t, float(t), 0.5) for t in range(start_ms, end_ms, 300_000)]
+    return [(t, float(t), 0.5, float(t) / 100.0) for t in range(start_ms, end_ms, 300_000)]
 
 
 class WindowTests(unittest.TestCase):
@@ -301,3 +301,157 @@ class NetworkHistoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_expired_request_budget_prevents_network(monkeypatch):
+    import pytest
+    monkeypatch.setattr(data.time, 'monotonic', lambda: 100.)
+    token = data.request_deadline.set(99.)
+    try:
+        monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: pytest.fail('expired request made network call'))
+        with pytest.raises(data.RequestDeadlineExceeded):
+            data._get_json('http://127.0.0.1')
+    finally:
+        data.request_deadline.reset(token)
+
+
+def test_streamed_response_stops_when_request_budget_expires(monkeypatch):
+    import pytest
+    clock = [100.]
+    monkeypatch.setattr(data.time, 'monotonic', lambda: clock[0])
+    class Response:
+        status_code = 200
+        closed = False
+        def iter_content(self, chunk_size):
+            yield b'{"ok":'
+            clock[0] = 102.
+            yield b'true}'
+        def close(self):
+            self.closed = True
+    response = Response()
+    observed = {}
+    def get(*args, **kwargs):
+        observed.update(kwargs)
+        return response
+    monkeypatch.setattr(data._SESSION, 'get', get)
+    token = data.request_deadline.set(101.)
+    try:
+        with pytest.raises(data.RequestDeadlineExceeded):
+            data._get_json('http://127.0.0.1')
+        assert observed['stream'] is True
+        assert observed['timeout'].total == 1.
+        assert response.closed
+    finally:
+        data.request_deadline.reset(token)
+
+
+def test_archive_workers_inherit_request_budget(monkeypatch):
+    import pytest
+    clock = [100.]
+    monkeypatch.setattr(data.time, 'monotonic', lambda: clock[0])
+    def cached(*args):
+        assert data.request_deadline.get() == 101.
+        clock[0] = 102.
+        data.check_deadline()
+    monkeypatch.setattr(data, '_cached_zip', cached)
+    token = data.request_deadline.set(101.)
+    try:
+        with pytest.raises(data.RequestDeadlineExceeded):
+            data._load_vision_metrics('BTCUSDT', 0, 4*86400*1000)
+    finally:
+        data.request_deadline.reset(token)
+
+
+def test_source_fallback_does_not_swallow_request_deadline(monkeypatch):
+    import numpy as np
+    import pytest
+    def expired(*args, **kwargs):
+        raise data.RequestDeadlineExceeded('expired fixture budget')
+    monkeypatch.setattr(data, '_get_json', expired)
+    with pytest.raises(data.RequestDeadlineExceeded):
+        data._fold_binance_live('BTCUSDT','5m',np.array([300000,600000]))
+
+
+def test_archive_cache_uses_user_writable_location_and_explicit_override(monkeypatch, tmp_path):
+    monkeypatch.delenv('LIQMAP_CACHE_DIR', raising=False)
+    monkeypatch.delenv('XDG_CACHE_HOME', raising=False)
+    monkeypatch.setattr(data.Path, 'home', lambda: tmp_path)
+    assert data._cache_root() == tmp_path / '.cache' / 'open-liq'
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'xdg'))
+    assert data._cache_root() == tmp_path / 'xdg' / 'open-liq'
+    monkeypatch.setenv('LIQMAP_CACHE_DIR', str(tmp_path / 'explicit'))
+    assert data._cache_root() == tmp_path / 'explicit'
+    assert data._cache_root().is_dir()
+
+
+def test_archive_file_lock_cardinality_is_bounded():
+    locks = [data._file_lock(f'fixture/{i}.zip') for i in range(2048)]
+    assert len({id(lock) for lock in locks}) <= 64
+    assert data._file_lock('same.zip') is data._file_lock('same.zip')
+
+
+def test_remote_metadata_caches_evict_old_entries(monkeypatch, tmp_path):
+    monkeypatch.setattr(data, 'MAX_METADATA_CACHE_ENTRIES', 4, raising=False)
+    monkeypatch.setattr(data, '_HEAD_CACHE', {})
+    monkeypatch.setattr(data, '_NEG_ZIP', {})
+    monkeypatch.setattr(data, '_cache_root', lambda: tmp_path)
+    class Response:
+        headers = {'content-length': '100'}
+        def __init__(self,status):
+            self.status_code = status
+        def close(self):
+            pass
+        def iter_content(self,chunk_size):
+            yield b'missing'
+    monkeypatch.setattr(data._SESSION, 'head', lambda *args, **kwargs: Response(200))
+    monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: Response(404))
+    for i in range(6):
+        url = f'http://127.0.0.1/{i}.zip'
+        assert data._head_ok(url)
+        assert data._cached_zip(url,f'{i}.zip') is None
+    assert len(data._HEAD_CACHE) == len(data._NEG_ZIP) == 4
+    assert 'http://127.0.0.1/0.zip' not in data._HEAD_CACHE
+    assert 'http://127.0.0.1/0.zip' not in data._NEG_ZIP
+
+
+def test_response_body_limit_stops_stream_and_closes_response(monkeypatch):
+    import pytest
+    monkeypatch.setattr(data,'MAX_RESPONSE_BYTES',8,raising=False)
+    class Response:
+        closed = False
+        def iter_content(self,chunk_size):
+            yield b'12345'
+            yield b'67890'
+            pytest.fail('read continued after response limit')
+        def close(self):
+            self.closed = True
+    response = Response()
+    with pytest.raises(data.DataError,match='size limit'):
+        data._response_bytes(response)
+    assert response.closed
+
+
+def test_zip_member_limit_prevents_inflating_oversized_archive(monkeypatch):
+    import io
+    import zipfile
+    import pytest
+    monkeypatch.setattr(data,'MAX_ZIP_MEMBER_BYTES',8,raising=False)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf,'w',compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr('fixture.csv','x'*1000)
+    with pytest.raises(data.DataError,match='size limit'):
+        data._zip_text(buf.getvalue())
+    monkeypatch.setattr(data,'MAX_ZIP_MEMBER_BYTES',1000)
+    assert data._zip_text(buf.getvalue()) == 'x'*1000
+
+
+def test_cached_archive_size_limit_applies_before_reading(monkeypatch,tmp_path):
+    import pytest
+    monkeypatch.setattr(data,'MAX_RESPONSE_BYTES',40,raising=False)
+    monkeypatch.setattr(data,'_cache_root',lambda:tmp_path)
+    (tmp_path/'fixture.zip').write_bytes(b'PK'+b'x'*100)
+    with pytest.raises(data.DataError,match='size limit'):
+        data._cached_zip('http://127.0.0.1/fixture.zip','fixture.zip')
+    allowed = b'PK'+b'x'*38
+    (tmp_path/'fixture.zip').write_bytes(allowed)
+    assert data._cached_zip('http://127.0.0.1/fixture.zip','fixture.zip') == allowed
