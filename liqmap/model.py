@@ -581,7 +581,7 @@ def _visible_series(series: MarketSeries, start_ms: int) -> MarketSeries:
                    provenance=dict(series.provenance), warnings=list(series.warnings))
 
 
-def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_column: int | None = None,
+def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 720, tier_column: int | None = None,
                   visible_bars: int | None = None) -> Heatmap:
     """Causal post-close inventory. Native OI changes are valued at entry close.
 

@@ -183,8 +183,8 @@ def test_replay_bound_checked_before_grid_allocation(monkeypatch):
     def forbidden(*args):
         pytest.fail('oversized replay allocated a grid')
     monkeypatch.setattr(data, 'make_grid', forbidden)
-    with pytest.raises(data.DataError,match='31 days'):
-        data.load_span('BTC','BTCUSDT',{'bar_seconds':300,'seconds':3600},0,32*86400)
+    with pytest.raises(data.DataError,match='730 days'):
+        data.load_span('BTC','BTCUSDT',{'bar_seconds':300,'seconds':3600},0,731*86400)
 
 
 def test_invalid_native_okx_observation_is_missing_not_an_exception(monkeypatch):
@@ -325,3 +325,21 @@ def test_okx_statistics_use_matching_utc_intervals_without_borrowing_flow(monkey
     loaded = data.fetch_okx('BTC','BTCUSDT',{'key':'fixture','bar':'1d','bar_seconds':seconds,'seconds':seconds*4})
     np.testing.assert_array_equal(loaded.series.oi_observed,[True,True,False,True])
     np.testing.assert_array_equal(loaded.series.flow_observed,[True,False,False,True])
+
+
+def test_replay_source_window_limit_precedes_grid_allocation(monkeypatch):
+    from liqmap import data
+    monkeypatch.setattr(data, 'make_grid', lambda *args: pytest.fail('oversized source window allocated a grid'))
+    with pytest.raises(data.DataError, match='1100 days'):
+        data.load_span('BTC', 'BTCUSDT', {'bar_seconds': 86400, 'seconds': 730*86400}, 0, 400*86400)
+
+
+@pytest.mark.parametrize('model_id', [1, 2, 3])
+def test_default_chart_resolution_preserves_exact_economic_features(model_id):
+    data = series([1000, 2000, 3000, 4000], base=[10, 12, 13, 15])
+    old = build_heatmap(data, model_id, n_bins=360)
+    sharp = build_heatmap(data, model_id)
+    assert len(sharp.centers) == 720
+    assert sharp.features == old.features
+    np.testing.assert_allclose(sharp.logical_totals['resting_long_usd'], old.logical_totals['resting_long_usd'])
+    np.testing.assert_allclose(sharp.logical_totals['resting_short_usd'], old.logical_totals['resting_short_usd'])

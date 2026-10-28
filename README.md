@@ -4,32 +4,34 @@
 <h1 align="center">Open Liq</h1>
 <p align="center"><strong>Public data. Visible assumptions. Reproducible liquidation research.</strong></p>
 <p align="center">
-  <img alt="Version 0.3.0" src="https://img.shields.io/badge/version-0.3.0-e2b15a">
+  <img alt="Version 0.3.1" src="https://img.shields.io/badge/version-0.3.1-e2b15a">
   <img alt="Python 3.11 or newer" src="https://img.shields.io/badge/python-3.11%2B-58b8aa">
   <img alt="API schema 1.0" src="https://img.shields.io/badge/API-1.0-b2a0da">
   <img alt="Model version 2.0.0" src="https://img.shields.io/badge/model-2.0.0-58b8aa">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-e2b15a"></a>
 </p>
 <p align="center">
-  <a href="#quickstart">Quickstart</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a> · <a href="docs/RELEASE_REVIEW.md">Release evidence</a>
+  <a href="#quickstart">Quickstart</a> · <a href="#run-with-a-coding-agent">For coding agents</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a> · <a href="docs/RELEASE_REVIEW.md">Release evidence</a>
 </p>
 
 Open Liq turns public perpetual-market candles and open interest into **inspectable liquidation scenarios**. Use the chart to explore price concentrations, or the local API to record exact model features for algorithmic research. No exchange API key is required.
 
 **A heatmap is an estimate, not exchange position records.** This project does not demonstrate a trading edge or claim numerical equivalence to CoinGlass. It is independent of CoinGlass, does not scrape its heatmaps, and does not redistribute its data.
 
-![Open Liq desktop interface using synthetic demonstration data](docs/assets/desktop.png)
+![Open Liq desktop interface with live OKX BTC/USDT market data](docs/assets/desktop.png)
+
+*Screenshot captured from live OKX BTC/USDT on October 28, 2026. Market prices are real observations; the liquidation exposure is modeled.*
 
 ## Quickstart
 
-Python 3.11 or newer:
+Python 3.11 or newer. On macOS and Linux:
 
 ```bash
 git clone https://github.com/Robertzu43/open-liquidation-heatmap.git
 cd open-liquidation-heatmap
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install .
+python3 -m pip install .
 liqmap
 ```
 
@@ -37,7 +39,38 @@ Open **http://127.0.0.1:8765**. The default market is live OKX BTC/USDT. The ser
 
 For offline exploration, open **http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1**. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
 
-On Windows, activate with `.venv\Scripts\activate`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
+On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
+
+## Run with a coding agent
+
+Copy this prompt into a coding agent that has access to the computer where you want to use Open Liq:
+
+```text
+Help me run Open Liq, the open-source liquidation heatmap at
+https://github.com/Robertzu43/open-liquidation-heatmap.
+
+Use an existing checkout if available; otherwise clone the repository without
+overwriting any files. Check for Python 3.11 or newer, create or reuse a virtual
+environment, install the project, and start the server on 127.0.0.1:8765. If
+that port is in use, check whether Open Liq is already running; otherwise use an
+available local port. Keep the server running while I test it.
+
+Verify the health endpoint and load the offline demo, then give me the exact
+browser URL. If you can open a browser on this same computer, open it. If you
+are running remotely, explain how I can access the server through an available
+port-forwarding or preview feature; do not assume your localhost is mine.
+Help me switch to the public live market data and use the local API if I ask.
+
+Use only the public, keyless data sources. Do not request my exchange API keys,
+passwords, or account details, and do not connect to my trading account or
+place orders. Explain that liquidation exposure is a model estimate, not my
+account positions or a record of actual liquidations.
+```
+
+Open Liq uses free public market endpoints from OKX and Binance, plus Binance's
+public archives. It does not need an exchange account or read your account
+positions. The exchanges receive normal network requests, including your IP
+address, and may impose rate limits or geographic restrictions.
 
 ## Built for research
 
@@ -53,15 +86,17 @@ On Windows, activate with `.venv\Scripts\activate`. Running directly from the ch
 | Responsive chart | Compact phone layout, keyboard/touch controls, UTC/local display, shareable views, PNG and JSON exports |
 | Local-first installation | Wheel packaging, console commands, offline demo, no paid runtime service |
 
-Read [what changed in 0.3.0](CHANGELOG.md) before reusing thresholds from an older model. **Application 0.3.0, API 1.0 and model 2.0.0 are separate versions.**
+Read [what changed in 0.3.1](CHANGELOG.md) before reusing thresholds from an older model. **Application 0.3.1, API 1.0 and model 2.0.0 are separate versions.**
 
 ## Read the chart
 
 Bright bands mean higher **estimated liquidation exposure relative to this window**. Above price, they represent vulnerable short scenarios; below price, vulnerable long scenarios. They are not resting bids/asks or guaranteed price magnets.
 
-Choose an asset, venue and range first. The **Model**, **Display** and **Research** panels hold advanced controls. Hover or tap to inspect, use the Price/Time zoom selector and +/− buttons, and reset with `0`. Keyboard and touch affordances are described alongside the chart. Mobile vertical gestures scroll the page; horizontal gestures pan the chart.
+Choose an asset, venue and range first. The **Model**, **Display** and **Research** panels hold advanced controls. Hover or tap to inspect, use the Price/Time zoom selector and +/− buttons, and reset with `0`. Zoomed heatmaps show crisp bin boundaries; finer display bins do not prove greater model accuracy. Keyboard and touch affordances are described alongside the chart. Mobile vertical gestures scroll the page; horizontal gestures pan the chart.
 
-<p align="center"><img src="docs/assets/mobile.png" width="320" alt="Open Liq mobile chart and analysis, using synthetic data"></p>
+<p align="center"><img src="docs/assets/mobile.png" width="320" alt="Open Liq mobile chart and analysis with live OKX BTC/USDT market data"></p>
+
+[View a historical replay screenshot](docs/assets/replay.png). It was captured from the Binance archive using the 58-day BTC/USDT replay interval reported by a user. Price and exposure appear as each historical bar arrives; the empty area is future time. Earlier modeled exposure can change as the lookback window moves.
 
 Source and quality information distinguishes synthetic, stale, degraded, observed and unknown data. Response generation time does not establish source freshness. The sidebar's shelves summarize display bins; use the API's exact economic features for research independent of chart resolution.
 
@@ -106,7 +141,7 @@ The [research guide](docs/VALIDATION.md) explains tamper-evident hashes, normali
 | Aggregate | Available fresh OKX/Binance venue inventories; excluded or missing sources remain explicit |
 | Demo | Seeded synthetic series, no exchange calls |
 
-Ranges run from 12 hours to 2 years, with bar sizes selected by range and upstream availability. A requested long range does not guarantee that a venue has complete OI history. Time travel and custom bar selection are Binance pair features. Operational caps and cache behavior are in [OPERATIONS.md](docs/OPERATIONS.md).
+Ranges run from 12 hours to 2 years, with bar sizes selected by range and upstream availability. Replay begins at the left and reveals price and modeled exposure as bars arrive; earlier exposure may change as the lookback window moves. A requested long range does not guarantee that a venue has complete OI history. Time travel and custom bar selection are Binance pair features. Operational caps and cache behavior are in [OPERATIONS.md](docs/OPERATIONS.md).
 
 The model assumes leverage allocations, simplified isolated maintenance margin and close entries. Trade-price candles approximate mark-price liquidation triggers. Positions that predate the observation anchor are unknown. Historical archives do not reveal account collateral or prove point-in-time data availability. These limitations are carried in metadata and [explained in the methodology](docs/HOW_IT_WORKS.md).
 

@@ -25,6 +25,11 @@ OVERLOAD_SEND_TIMEOUT_S = 0.1
 MAX_EXPENSIVE_REQUESTS = 4
 _expensive = threading.BoundedSemaphore(MAX_EXPENSIVE_REQUESTS)
 
+
+class ClientDisconnected(Exception):
+    """The browser closed its connection while a response was being sent."""
+
+
 def web_root() -> Path:
     checkout = Path(__file__).resolve().parent.parent / "web"
     return checkout if checkout.is_dir() else Path(resources.files("liqmap_web"))
@@ -90,6 +95,20 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
         log.info("%s %s", self.address_string(), fmt % args)
 
+    def log_error(self, fmt: str, *args) -> None:
+        # Browsers routinely leave keep-alive sockets idle after a response.
+        if fmt.startswith("Request timed out:"):
+            log.debug("%s %s", self.address_string(), fmt % args)
+        else:
+            super().log_error(fmt, *args)
+
+    def handle(self) -> None:
+        try:
+            super().handle()
+        except (ClientDisconnected, BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # The browser can cancel while waiting for or receiving a response.
+            self.close_connection = True
+
     def do_GET(self) -> None:  # noqa: N802 — stdlib handler name
         token = request_deadline.set(time.monotonic() + REQUEST_DEADLINE_S)
         try:
@@ -101,9 +120,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             parsed = urlparse(self.path)
             if parsed.path == "/favicon.ico":
-                self.send_response(204)
-                self.send_header("Content-Length", "0")
-                self.end_headers()
+                self._send_bytes(b"", status=204, content_type="image/x-icon", cache="no-cache")
                 return
             if parsed.path == "/healthz":
                 self._send_json({"ok": True, "process": "healthy"})
@@ -140,7 +157,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": str(exc), "code": "source_unavailable"}, status=503)
         except DataError as exc:
             self._send_json({"error": str(exc), "code": "invalid_request"}, status=400)
-        except BrokenPipeError:
+        except ClientDisconnected:
+            self.close_connection = True
             return
         except Exception:
             log.exception("request failed")
@@ -243,8 +261,11 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Retry-After", "5")
         if encoding:
             self.send_header("Content-Encoding", encoding)
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError) as exc:
+            raise ClientDisconnected() from exc
 
 
 def main(argv: list[str] | None = None) -> None:

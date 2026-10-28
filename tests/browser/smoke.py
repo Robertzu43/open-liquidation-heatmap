@@ -183,6 +183,56 @@ def export_identity_regressions(context, url: str, demo: dict, output: Path) -> 
     assert not failures, '; '.join(failures)
 
 
+def replay_timeline_regression(context, url: str, demo: dict, output: Path) -> None:
+    """Replay starts on the left; later prices and exposure appear only as reached."""
+    first = int(demo["as_of"] / 1000)
+    page = context.new_page()
+    page.set_viewport_size({"width": 1440, "height": 1000})
+    def frame(route):
+        params = parse_qs(urlparse(route.request.url).query)
+        asof = int(params.get("asof", [str(first)])[0])
+        offset = max(0, (asof - first) // 300) if params.get("replay") == ["1"] else 0
+        payload = dict(demo)
+        payload.update(exchange="binance", asof=asof * 1000, replay=params.get("replay") == ["1"],
+                       times=[t + offset * 300000 for t in demo["times"]], as_of=demo["as_of"] + offset * 300000)
+        route.fulfill(json=payload)
+    page.route("**/api/heatmap?*", frame)
+    replay_url = "**/api/replay?*"
+    page.route(replay_url, lambda route: route.fulfill(status=400, json={"error": "Choose a shorter replay interval"}))
+    try:
+        page.goto(url + f"/?exchange=binance&mode=pair&coin=BTC&range=24h&model=1&asof={first}")
+        page.wait_for_function("state.data !== null")
+        page.evaluate("() => { void startReplay(false); }")
+        page.wait_for_function("document.getElementById('banner').textContent.includes('Choose a shorter replay interval')")
+        assert page.evaluate("state.data !== null"), "Replay errors must leave the current map visible"
+        page.unroute(replay_url)
+        page.route(replay_url, lambda route: route.fulfill(json={
+            "first_asof": first * 1000, "bar_seconds": 300, "frames": 51, "days": 1, "note": "Offline timeline fixture"}))
+        page.evaluate("() => { void startReplay(false); }")
+        page.wait_for_function("state.replay && state.data.replay && state.replay.anchorN && state.layout")
+        position = "(xOf(replayOffset(state.data) + state.data.times.length - 1, state.layout) - state.layout.plotX) / state.layout.plotW"
+        initial = page.evaluate(position)
+        assert initial < .3, f"Replay started too far right: {initial}"
+        assert page.evaluate("state.view.i1 > replayOffset(state.data) + state.data.times.length + 10"), "Future time should initially be blank"
+        assert "empty area is future time" in page.locator("#banner").inner_text()
+        page.evaluate("() => {const rect=canvas.getBoundingClientRect(); updateHover(rect.left+state.layout.plotX+state.layout.plotW*.9, rect.top+state.layout.plotY+state.layout.plotH*.5)}")
+        assert page.evaluate("tip.hidden"), "Unreached future must not show a fabricated value"
+        page.screenshot(path=str(output / "replay-start.png"), full_page=True)
+        page.evaluate("() => { void showFrame(10); }")
+        page.wait_for_function(f"state.data.asof === {(first + 3000) * 1000}")
+        advanced = page.evaluate(position)
+        assert advanced > initial + .1, (initial, advanced)
+        page.screenshot(path=str(output / "replay-advanced.png"), full_page=True)
+        page.evaluate("() => { void showFrame(0); }")
+        page.wait_for_function(f"state.data.asof === {first * 1000}")
+        assert abs(page.evaluate(position) - initial) < .01, "Scrubbing backward should restore the timeline"
+        page.evaluate("() => { void showFrame(50); }")
+        page.wait_for_function(f"state.data.asof === {(first + 15000) * 1000}")
+        assert 0 < page.evaluate(position) < 1, "Playback should follow the latest reached bar"
+    finally:
+        page.close()
+
+
 def run(url: str, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
@@ -278,6 +328,7 @@ def run(url: str, output: Path) -> None:
         # The replay protocol is exercised offline with real demo frames. No archive download.
         demo = page.request.get(url + "/api/heatmap?exchange=demo&symbol=BTC&range=24h&model=1").json()
         replay_regressions(context, url, demo)
+        replay_timeline_regression(context, url, demo, output)
         export_identity_regressions(context, url, demo, output)
         replay_page = context.new_page()
         replay_page.on("pageerror", lambda error: errors.append(str(error)))

@@ -50,8 +50,8 @@ def test_same_key_concurrent_calls_load_once():
 
 def test_replay_duration_is_rejected_before_network():
     with mock.patch.object(service, 'load_span') as load:
-        with pytest.raises(DataError, match='31 days'):
-            service.replay_payload('BTC', '12h', '5m', '1609459200', '1614816000')
+        with pytest.raises(DataError, match='730 days'):
+            service.replay_payload('BTC', '12h', '5m', '1609459200', str(1609459200 + 731*86400))
     load.assert_not_called()
 
 
@@ -251,3 +251,134 @@ def test_live_quality_uses_two_bar_age_budget_without_relabeling_history(source)
     loaded.source = 'binance-vision'
     loaded.series.provenance['history_kind'] = 'reconstructed_archive'
     assert service._quality(loaded)['stale'] is False
+
+
+def test_client_disconnect_while_sending_response_does_not_report_internal_error(caplog):
+    from liqmap import server
+    handler = server.Handler.__new__(server.Handler)
+    handler.path = '/api/heatmap'
+    with mock.patch.object(handler, '_heatmap', side_effect=server.ClientDisconnected()), \
+         mock.patch.object(handler, '_send_json') as send_error:
+        handler._get()
+    send_error.assert_not_called()
+    assert 'request failed' not in caplog.text
+
+
+def test_reset_in_response_write_is_classified_as_client_disconnect():
+    from liqmap import server
+    handler = server.Handler.__new__(server.Handler)
+    handler.wfile = mock.Mock()
+    handler.wfile.write.side_effect = ConnectionResetError('client closed')
+    with mock.patch.object(handler, 'send_response'), mock.patch.object(handler, 'send_header'), \
+         mock.patch.object(handler, 'end_headers'), pytest.raises(server.ClientDisconnected):
+        handler._send_bytes(b'data', status=400, content_type='text/plain', cache='no-store')
+
+
+def test_unrelated_connection_reset_still_reports_internal_error(caplog):
+    from liqmap import server
+    handler = server.Handler.__new__(server.Handler)
+    handler.path = '/api/heatmap'
+    with mock.patch.object(handler, '_heatmap', side_effect=ConnectionResetError('upstream')), \
+         mock.patch.object(handler, '_send_json') as send_error:
+        handler._get()
+    assert send_error.call_args.kwargs['status'] == 500
+    assert 'request failed' in caplog.text
+
+
+def test_client_reset_while_waiting_for_request_does_not_escape_handler():
+    from http.server import BaseHTTPRequestHandler
+    from liqmap import server
+    handler = server.Handler.__new__(server.Handler)
+    with mock.patch.object(BaseHTTPRequestHandler, 'handle', side_effect=ConnectionResetError('client closed')):
+        handler.handle()
+
+
+def test_replay_accepts_the_58_day_daily_window_from_session_log():
+    span = mock.Mock(first_end_open=1759276800, last_end_open=1764288000, frames=59, days=239, note='')
+    with mock.patch.object(service, 'load_span', return_value=span) as load:
+        result = service.replay_payload('BTC', '180d', '1d', '1759303560', '1764314940')
+    assert result['frames'] == 59
+    load.assert_called_once()
+
+
+def test_replay_source_window_limit_precedes_network():
+    with mock.patch.object(service, 'load_span') as load:
+        with pytest.raises(DataError, match='1100 days'):
+            service.replay_payload('BTC', '2y', '1d', '1609459200', str(1609459200 + 400*86400))
+    load.assert_not_called()
+
+
+def test_disconnected_browser_does_not_break_server(caplog):
+    import logging
+    import socket
+    import struct
+    import threading
+    from liqmap import server
+
+    started = threading.Event()
+    resume = threading.Event()
+    finished = threading.Event()
+    class WaitingHandler(server.Handler):
+        def _heatmap(self, query):
+            started.set()
+            assert resume.wait(3)
+            self._send_bytes(b'x' * 65536, status=200, content_type='application/octet-stream', cache='no-store')
+        def handle(self):
+            try:
+                super().handle()
+            finally:
+                finished.set()
+
+    app = server.BoundedThreadingHTTPServer(('127.0.0.1', 0), WaitingHandler)
+    thread = threading.Thread(target=app.serve_forever, daemon=True)
+    thread.start()
+    caplog.set_level(logging.ERROR, logger='liqmap.server')
+    client = None
+    try:
+        client = socket.create_connection(app.server_address, timeout=3)
+        client.sendall(b'GET /api/heatmap HTTP/1.1\r\nHost: localhost\r\n\r\n')
+        assert started.wait(3)
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+        client.close()
+        client = None
+        resume.set()
+        assert finished.wait(3)
+        assert 'request failed' not in caplog.text
+        import urllib.request
+        with urllib.request.urlopen(f'http://127.0.0.1:{app.server_port}/healthz', timeout=3) as response:
+            assert response.status == 200
+    finally:
+        if client is not None:
+            client.close()
+        resume.set()
+        app.shutdown()
+        app.server_close()
+        thread.join(timeout=3)
+
+
+def test_idle_keepalive_timeout_is_not_logged_as_a_request_error(monkeypatch, caplog):
+    import logging
+    import socket
+    import threading
+    from liqmap import server
+
+    monkeypatch.setattr(server, 'SOCKET_IDLE_TIMEOUT_S', 0.1)
+    finished = threading.Event()
+    class IdleHandler(server.Handler):
+        def handle(self):
+            try:
+                super().handle()
+            finally:
+                finished.set()
+    app = server.BoundedThreadingHTTPServer(('127.0.0.1', 0), IdleHandler)
+    thread = threading.Thread(target=app.serve_forever, daemon=True)
+    thread.start()
+    caplog.set_level(logging.INFO, logger='liqmap.server')
+    try:
+        with socket.create_connection(app.server_address, timeout=3):
+            assert finished.wait(3)
+        assert 'Request timed out' not in caplog.text
+    finally:
+        app.shutdown()
+        app.server_close()
+        thread.join(timeout=3)
