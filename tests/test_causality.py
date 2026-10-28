@@ -334,10 +334,11 @@ def test_replay_source_window_limit_precedes_grid_allocation(monkeypatch):
         data.load_span('BTC', 'BTCUSDT', {'bar_seconds': 86400, 'seconds': 730*86400}, 0, 400*86400)
 
 
-def test_default_chart_resolution_preserves_exact_economic_features():
+@pytest.mark.parametrize('model_id', [1, 2, 3])
+def test_default_chart_resolution_preserves_exact_economic_features(model_id):
     data = series([1000, 2000, 3000, 4000], base=[10, 12, 13, 15])
-    old = build_heatmap(data, 1, n_bins=360)
-    sharp = build_heatmap(data, 1)
+    old = build_heatmap(data, model_id, n_bins=360)
+    sharp = build_heatmap(data, model_id)
     assert len(sharp.centers) == 720
     assert sharp.features == old.features
     np.testing.assert_allclose(sharp.logical_totals['resting_long_usd'], old.logical_totals['resting_long_usd'])
