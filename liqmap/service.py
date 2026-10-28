@@ -17,6 +17,9 @@ from liqmap.data import (
     COINS,
     EXCHANGE_NAMES,
     MAX_BARS,
+    MAX_REPLAY_BARS,
+    MAX_REPLAY_DAYS,
+    MAX_REPLAY_SOURCE_DAYS,
     RANGES,
     DataError,
     RequestDeadlineExceeded,
@@ -49,8 +52,6 @@ SERIES_TTL = {
 SPAN_TTL = 1800
 MAX_SERIES_CACHE = 16
 MAX_SPAN_CACHE = 2
-MAX_REPLAY_DAYS = 31
-MAX_REPLAY_BARS = 12000
 SCHEMA_VERSION = "1.0"
 
 _cache: dict[tuple, tuple[float, object]] = {}
@@ -139,7 +140,9 @@ def replay_payload(symbol: str, range_key: str, bar: str, start: str, end: str =
     if effective_end < from_s:
         raise DataError("Replay end must be after its start.")
     if effective_end - from_s > MAX_REPLAY_DAYS * 86400:
-        raise DataError("Replay duration is limited to 31 days. Choose a shorter interval.")
+        raise DataError("Replay duration is limited to 730 days. Choose a shorter interval.")
+    if effective_end - from_s + int(spec["seconds"]) > MAX_REPLAY_SOURCE_DAYS * 86400:
+        raise DataError("Replay and its lookback are limited to 1100 days of source data.")
     total_bars = (effective_end - from_s) // int(spec["bar_seconds"]) + int(spec["seconds"]) // int(spec["bar_seconds"]) + 1
     if total_bars > MAX_REPLAY_BARS:
         raise DataError("Replay exceeds the 12000-bar span limit. Choose a shorter interval or larger bars.")

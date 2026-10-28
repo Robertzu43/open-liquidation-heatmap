@@ -64,6 +64,9 @@ OKX_STAT_PERIOD = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12H
 # Bars a past Binance view may use. Open interest is published every 5 minutes.
 BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
 MAX_BARS = 3000
+MAX_REPLAY_DAYS = 730
+MAX_REPLAY_BARS = 12000
+MAX_REPLAY_SOURCE_DAYS = 1100
 MAX_METADATA_CACHE_ENTRIES = 1024
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_ZIP_MEMBER_BYTES = 128 * 1024 * 1024
@@ -1359,8 +1362,10 @@ def load_span(coin: str, pair: str, spec: dict, from_s: int, to_s: int | None) -
     if last < first:
         raise DataError("Replay end must be after its start.")
     count = (last - first) // bar_s + n
-    if last - first > 31 * 86400 or count > 12000:
-        raise DataError("Replay is limited to 31 days and 12000 total bars including warm-up.")
+    if last - first > MAX_REPLAY_DAYS * 86400 or count > MAX_REPLAY_BARS:
+        raise DataError("Replay is limited to 730 days and 12000 total bars including warm-up.")
+    if last - first + int(spec["seconds"]) > MAX_REPLAY_SOURCE_DAYS * 86400:
+        raise DataError("Replay and its lookback are limited to 1100 days of source data.")
     grid = make_grid(last, count, bar_s)
     archive = _fold_binance_archive(pair, spec["bar"], grid)
     live = None

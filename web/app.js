@@ -468,9 +468,19 @@ function applyPayload(data) {
     state.priceDirty = false;
   }
   const n = data.times.length;
+  const replay = data.replay && state.replay;
+  if (replay && replay.anchorFirst == null) {
+    replay.anchorFirst = data.times[0];
+    replay.anchorN = n;
+    state.timeFull = true;
+    state.priceDirty = false;
+  }
   if (state.timeFull) {
-    state.view.i0 = -0.5;
-    state.view.i1 = n - 0.5;
+    if (replay) setReplayView(replay);
+    else {
+      state.view.i0 = -0.5;
+      state.view.i1 = n - 0.5;
+    }
   }
   if (!state.priceDirty && !keepView) {
     state.view.lo = data.price_view[0];
@@ -490,6 +500,10 @@ function applyPayload(data) {
   $("asof").textContent = `${sourceNames[data.source] || data.source} · last bar ${fmtStamp(data.as_of, withTime)} · generated ${fmtStamp(data.generated_at, true)}`;
   renderProvenance(data);
   const lines = [];
+  if (replay) {
+    lines.push("Replay: price and modeled exposure update as each bar arrives; the empty area is future time. Earlier exposure can change as the lookback moves.");
+    if (replay.note) lines.push(replay.note);
+  }
   if (data.asof) lines.push(`As of ${fmtStamp(data.asof, true)} · ${data.bar} bars`);
   (data.warnings || []).forEach((line) => lines.push(line));
   if (data.note && !lines.includes(data.note)) lines.push(data.note);
@@ -501,6 +515,20 @@ function applyPayload(data) {
   canvas.setAttribute("aria-label", (data.analysis || {}).summary || data.title);
   announce("Loaded " + data.title + ". " + $("data-status").textContent);
   requestDraw();
+}
+
+function replayOffset(data) {
+  const replay = data.replay && state.replay;
+  return replay && replay.anchorFirst != null ? Math.round((data.times[0] - replay.anchorFirst) / replay.step) : 0;
+}
+
+function setReplayView(replay) {
+  const future = Math.max(1, Math.min(replay.frames - 1, 150));
+  const context = Math.min(12, Math.max(1, Math.ceil(future / 5)));
+  const follow = Math.max(0, replay.idx - Math.floor(future * 0.85));
+  const anchor = replay.anchorN - 1;
+  state.view.i0 = Math.max(-0.5, anchor - context + follow - 0.5);
+  state.view.i1 = Math.min(replay.anchorN + replay.frames - 1 - 0.5, anchor + future + follow + 0.5);
 }
 
 function renderProvenance(data) {
@@ -653,7 +681,8 @@ function priceAt(y, L) {
 function clampView() {
   const data = state.data;
   if (!data) return;
-  const n = data.times.length;
+  const replay = data.replay && state.replay;
+  const n = replay && replay.anchorN ? replay.anchorN + replay.frames - 1 : data.times.length;
   let span = state.view.i1 - state.view.i0;
   span = clamp(span, Math.min(8, n), n);
   const timeMid = clamp((state.view.i0 + state.view.i1) / 2, -0.5 + span / 2, n - 0.5 - span / 2);
@@ -751,11 +780,14 @@ function draw() {
   ctx.rect(L.plotX, L.plotY, L.plotW, L.plotH);
   ctx.clip();
   if (state.heatCanvas) {
-    const x0 = xOf(-0.5, L);
-    const x1 = xOf(nT - 0.5, L);
+    const offset = replayOffset(data);
+    const x0 = xOf(offset - 0.5, L);
+    const x1 = xOf(offset + nT - 0.5, L);
     const yTop = yOf(centers[bins - 1] + half, L);
     const yBot = yOf(centers[0] - half, L);
-    ctx.imageSmoothingEnabled = true;
+    // Preserve the overview's soft gradients, but keep the underlying price/time
+    // bins distinct when the user zooms in instead of enlarging a blurred image.
+    ctx.imageSmoothingEnabled = state.timeFull && !state.priceDirty;
     ctx.drawImage(state.heatCanvas, x0, yTop, x1 - x0, yBot - yTop);
   }
   if (state.showCandles) drawCandles(ctx, L, data);
@@ -771,8 +803,9 @@ function draw() {
 
 function drawCandles(ctx, L, data) {
   const nT = data.times.length;
-  const start = Math.max(0, Math.floor(state.view.i0) - 1);
-  const end = Math.min(nT - 1, Math.ceil(state.view.i1) + 1);
+  const offset = replayOffset(data);
+  const start = Math.max(0, Math.floor(state.view.i0 - offset) - 1);
+  const end = Math.min(nT - 1, Math.ceil(state.view.i1 - offset) + 1);
   const colW = Math.abs(xOf(1, L) - xOf(0, L));
   const bodyW = Math.max(1, Math.min(11, colW * 0.62));
   for (let i = start; i <= end; i++) {
@@ -780,7 +813,7 @@ function drawCandles(ctx, L, data) {
     const high = data.highA[i];
     const low = data.lowA[i];
     const close = data.closeA[i];
-    const x = xOf(i, L);
+    const x = xOf(i + offset, L);
     const up = close >= open;
     ctx.strokeStyle = up ? "#7dcea0" : "#e07a72";
     ctx.fillStyle = ctx.strokeStyle;
@@ -844,9 +877,11 @@ function drawTimeAxis(ctx, L, data) {
   let lastRight = -1e9;
   for (let k = 0; k < count; k++) {
     const index = state.view.i0 + ((k + 0.5) / count) * (state.view.i1 - state.view.i0);
-    const snapped = clamp(Math.round(index), 0, data.times.length - 1);
+    const replay = data.replay && state.replay;
+    const snapped = clamp(Math.round(index - replayOffset(data)), 0, data.times.length - 1);
     const x = xOf(index, L);
-    const text = fmtAxis(data.times[snapped], withTime, narrow);
+    const timestamp = replay && replay.anchorFirst != null ? replay.anchorFirst + Math.round(index) * replay.step : data.times[snapped];
+    const text = fmtAxis(timestamp, withTime, narrow);
     const width = ctx.measureText(text).width;
     if (x - width / 2 < L.plotX + 2 || x + width / 2 > L.plotX + L.plotW - 2) continue;
     if (x - width / 2 < lastRight + 8) continue;
@@ -996,7 +1031,13 @@ function updateHover(clientX, clientY) {
     return;
   }
   const data = state.data;
-  const index = clamp(Math.round(indexAt(x, L)), 0, data.times.length - 1);
+  const index = Math.round(indexAt(x, L)) - replayOffset(data);
+  if (index < 0 || index >= data.times.length) {
+    state.hover = null;
+    tip.hidden = true;
+    requestDraw();
+    return;
+  }
   const price = priceAt(y, L);
   const bin = nearestBin(price, data.centersA);
   const usd = data.heatA[bin * data.times.length + index];
@@ -1091,8 +1132,11 @@ function resetView() {
   state.timeFull = true;
   state.priceDirty = false;
   const n = state.data.times.length;
-  state.view.i0 = -0.5;
-  state.view.i1 = n - 0.5;
+  if (state.data.replay && state.replay && state.replay.anchorN) setReplayView(state.replay);
+  else {
+    state.view.i0 = -0.5;
+    state.view.i1 = n - 0.5;
+  }
   state.view.lo = state.data.price_view[0];
   state.view.hi = state.data.price_view[1];
   clampView();
@@ -1248,7 +1292,7 @@ async function startReplay(keepIdx) {
   const params = new URLSearchParams({ symbol: state.coin, range: state.range, from: String(state.asof) });
   if (state.bar) params.set("bar", state.bar);
   if (toText) params.set("to", String(parseCotInput(toText)));
-  setLoading(true, "Loading replay… the first load of a long span downloads one file per day and can take minutes");
+  setLoading(true, "Loading replay… uncached history can take a while. If the request times out, choose a shorter interval and retry.");
   try {
     const response = await fetch("/api/replay?" + params.toString(), {signal: controller.signal});
     const body = await response.json();
@@ -1267,12 +1311,16 @@ async function startReplay(keepIdx) {
       reloaded: Boolean(keepIdx),
       days: body.days,
       note: body.note,
+      anchorFirst: keepIdx && prev ? prev.anchorFirst : null,
+      anchorN: keepIdx && prev ? prev.anchorN : null,
     };
     syncReplay();
     await showFrame(state.replay.idx);
   } catch (err) {
     if (err.name === "AbortError" || seq !== state.replaySeq) return;
-    fail(err.message || "Could not load the replay.");
+    const message = err.message || "Could not load the replay.";
+    showBanner("error", [message]);
+    announce("Replay unavailable. " + message);
   } finally {
     if (seq === state.replaySeq) {
       state.replayController = null;
@@ -1311,7 +1359,6 @@ async function showFrame(idx) {
     const body = await fetchFrame(r, r.idx);
     if (state.replay !== r || gen !== r.gen || r.idx !== frame || context !== mapParams().toString()) return false;
     applyPayload(body);
-    if (r.note && r.idx === 0) showBanner("info", [r.note]);
     for (const ahead of [r.idx + 1, r.idx + 2]) {
       if (ahead < r.frames) fetchFrame(r, ahead).catch(() => {});
     }
@@ -1327,7 +1374,15 @@ async function showFrame(idx) {
     }
     r.playing = false;
     syncReplay();
-    fail(err.message || "Could not load this frame.");
+    const message = err.message || "Could not load this frame.";
+    const data = state.data;
+    if (!data || data.model.id !== state.model || data.exchange !== state.exchange ||
+        data.coin !== state.coin || data.range !== state.range || data.mode !== state.mode) {
+      fail(message);
+    } else {
+      showBanner("error", [message]);
+      announce("Replay unavailable. " + message);
+    }
     return false;
   }
 }

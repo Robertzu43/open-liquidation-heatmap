@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1 — 2026-10-28
+
+- Replay starts with price on the left and reveals historical price and modeled exposure together as each bar arrives. Future time is blank; earlier modeled exposure can change as the lookback window moves.
+- The default chart grid now has 720 price bins instead of 360, and zoomed heatmaps preserve bin boundaries. Exact economic features remain independent of chart resolution; binned shelves and payload size change. README screenshots show observed OKX market prices.
+- Replay accepts longer bounded windows, including the 58-day interval reported by a user; large cold downloads can still exceed the request budget.
+- Normal client disconnects no longer produce server error tracebacks; idle connection timeouts are logged at debug level.
+
 ## 0.3.0 — 2026-10-28
 
 ### Changed
