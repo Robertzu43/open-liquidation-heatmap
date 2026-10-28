@@ -1,6 +1,6 @@
 # Open Liq 0.3.0 — release review
 
-This is a local implementation candidate for the approved in-place upgrade. Application version: **0.3.0**; API schema: **1.0**; model: **2.0.0**. The baseline was commit `8668994` (192 passing tests, two skips). This review records engineering evidence separately from external model/strategy evidence.
+The approved in-place upgrade is implemented and independently reviewed as a local research release candidate. Application version: **0.3.0**; API schema: **1.0**; model: **2.0.0**. The baseline was commit `8668994` (192 passing tests, two skips). This review records engineering evidence separately from external model/strategy evidence.
 
 ## What changed
 
@@ -21,6 +21,20 @@ Final integration verification after the correction wave: **317 tests passed, tw
 - A live OKX BTC/24h smoke returned native base-OI accounting with 288/288 observed candle/OI/flow rows and a successful readiness response, in approximately 1.75 seconds. After the final chronology correction, separate three-bar 12-hour and daily adapter spot checks returned UTC-aligned opens and complete candle/OI/flow masks in approximately 0.793 and 0.602 seconds. These support endpoint compatibility, not an SLA or long-history completeness result.
 - Benchmark chart and raw samples are in [assets/benchmark.json](assets/benchmark.json). Nine model/range cases each have seven cached-source repetitions and exclude exchange/HTTP latency. A separate fresh local server records a cold request, five warm repeats, an eight-client burst, status/error counts, transfer sizes and Linux process memory. Hardware, workload, predeclared local budgets and child cleanup are recorded. These are small synthetic workloads, not model-accuracy or maximum-load evidence.
 - OpenAPI response schema was checked against an actual synthetic feature envelope. CI is configured in source; remote CI execution is a separate event.
+
+## Recorded local workload
+
+Final benchmark source revision: `96f28b7`; working tree clean when measured. This is demo BTC/12h/model 1 over loopback, with startup measured separately and no exchange access.
+
+| Measurement | Recorded result |
+|---|---:|
+| Fresh-server first request | 99.4 ms |
+| Five warm requests, median / maximum | 85.9 / 94.5 ms |
+| Eight-client burst | 5 HTTP 200; 3 HTTP 429 `busy` |
+| Observed server RSS / reported high-water mark | 50.9 / 53.0 MiB |
+| Model/payload chart samples | 9 cases × 7 runs = 63 |
+
+All predeclared small-workload checks passed: successful warmed requests below five seconds and observed server memory below 512 MiB. Burst admission depends on scheduling, so counts can vary between runs. One burst and four memory observations are not sustained-load or maximum-memory certification. The raw file contains hardware, samples, status-specific latency, byte counts and successful child-process cleanup.
 
 ## Independent review and fixes
 
