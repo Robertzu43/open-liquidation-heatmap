@@ -1,6 +1,6 @@
 # Open Liquidation Heatmap: product excellence design
 
-Status: PROPOSED — awaiting user choice/approval; no product implementation has started.
+Status: APPROVED — user approved the in-place design and instructed implementation on 2026-10-28.
 
 Baseline: commit `8668994`, version `0.2.0`, 192 tests passed / 2 skipped in the prior review. Audience: an algorithmic trader currently paying for the CoinGlass API, plus desktop and mobile users interpreting liquidation scenarios. Authoring date: 2026-10-28.
 
