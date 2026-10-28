@@ -2,7 +2,7 @@
 
 Candles and open interest come from OKX and Binance. Binance tries the
 live USDT-M API first and, if that is blocked, the public data.binance.vision
-archive (cached under .cache/).
+archive (cached in the user cache directory or LIQMAP_CACHE_DIR).
 
 Symbols are restricted to a short ticker pattern before they are placed into a
 URL, so a request cannot be turned into an SSRF fetch.
@@ -11,19 +11,24 @@ URL, so a request cannot be turned into an SSRF fetch.
 from __future__ import annotations
 
 import io
+import json
 import logging
 import math
+import os
 import re
 import threading
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import numpy as np
 import requests
+from urllib3.util import Timeout
 
 from liqmap.model import MarketSeries
 
@@ -56,6 +61,9 @@ OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12H", "1d":
 # Bars a past Binance view may use. Open interest is published every 5 minutes.
 BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
 MAX_BARS = 3000
+MAX_METADATA_CACHE_ENTRIES = 1024
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+MAX_ZIP_MEMBER_BYTES = 128 * 1024 * 1024
 # The live openInterestHist endpoint keeps 30 days; stay a day inside it.
 LIVE_OI_DAYS = 29
 # First day of Binance's public 5-minute metrics archive (2020-09-01 UTC).
@@ -67,12 +75,77 @@ _SESSION.headers.update({"User-Agent": USER_AGENT})
 _HEAD_CACHE: dict[str, tuple[float, bool]] = {}
 _NEG_ZIP: dict[str, float] = {}
 _HEAD_LOCK = threading.Lock()
-_FILE_LOCKS: dict[str, threading.Lock] = {}
-_FILE_LOCKS_GUARD = threading.Lock()
+_FILE_LOCKS = tuple(threading.Lock() for _ in range(64))
 
 
 class DataError(Exception):
     """The request was understood, but the public data cannot build a map."""
+
+
+request_deadline: ContextVar[float | None] = ContextVar("request_deadline", default=None)
+
+
+class RequestDeadlineExceeded(DataError):
+    """The cooperative upstream request budget expired."""
+
+
+def check_deadline() -> float | None:
+    deadline = request_deadline.get()
+    if deadline is None:
+        return None
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RequestDeadlineExceeded("Market data request exceeded its time budget; try a shorter range.")
+    return remaining
+
+
+def _request_timeout(timeout: tuple[float, float]):
+    remaining = check_deadline()
+    if remaining is None:
+        return timeout
+    return Timeout(total=remaining, connect=min(timeout[0], remaining), read=min(timeout[1], remaining))
+
+
+def _response_bytes(response) -> bytes:
+    body = bytearray()
+    try:
+        declared = (getattr(response, "headers", {}) or {}).get("content-length")
+        try:
+            oversized = declared is not None and int(declared) > MAX_RESPONSE_BYTES
+        except (TypeError, ValueError):
+            oversized = False
+        if oversized:
+            raise DataError("Market data response exceeds the size limit.")
+        for chunk in response.iter_content(chunk_size=16 * 1024):
+            check_deadline()
+            if chunk:
+                if len(body) + len(chunk) > MAX_RESPONSE_BYTES:
+                    raise DataError("Market data response exceeds the size limit.")
+                body.extend(chunk)
+        check_deadline()
+        return bytes(body)
+    finally:
+        response.close()
+
+
+def _retry_pause(seconds: float) -> None:
+    remaining = check_deadline()
+    time.sleep(seconds if remaining is None else min(seconds, remaining))
+    check_deadline()
+
+
+@contextmanager
+def _bounded_file_lock(rel: str):
+    lock = _file_lock(rel)
+    remaining = check_deadline()
+    acquired = lock.acquire() if remaining is None else lock.acquire(timeout=remaining)
+    if not acquired:
+        raise RequestDeadlineExceeded("Market data request timed out waiting for an archive download.")
+    try:
+        check_deadline()
+        yield
+    finally:
+        lock.release()
 
 
 @dataclass
@@ -189,42 +262,75 @@ def _host(url: str) -> str:
 
 
 def _cache_root() -> Path:
-    root = Path(__file__).resolve().parent.parent / ".cache"
-    root.mkdir(parents=True, exist_ok=True)
+    configured = os.environ.get("LIQMAP_CACHE_DIR")
+    if configured:
+        root = Path(configured).expanduser()
+    else:
+        base = os.environ.get("XDG_CACHE_HOME")
+        root = (Path(base).expanduser() if base else Path.home() / ".cache") / "open-liq"
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise DataError("Could not create the archive cache directory; configure writable LIQMAP_CACHE_DIR.") from exc
     return root
 
 
 def _file_lock(rel: str) -> threading.Lock:
-    with _FILE_LOCKS_GUARD:
-        lock = _FILE_LOCKS.get(rel)
-        if lock is None:
-            lock = threading.Lock()
-            _FILE_LOCKS[rel] = lock
-        return lock
+    # A bounded set also keeps the same file serialized while a writer holds it.
+    return _FILE_LOCKS[hash(rel) % len(_FILE_LOCKS)]
+
+
+def _put_metadata(cache: dict, key: str, value) -> None:
+    """Insert under _HEAD_LOCK; evict the oldest insertion at capacity."""
+    cache.pop(key, None)
+    while len(cache) >= MAX_METADATA_CACHE_ENTRIES:
+        cache.pop(next(iter(cache)))
+    cache[key] = value
+
+
+def _read_cached_zip(path: Path) -> bytes | None:
+    if not path.is_file():
+        return None
+    size = path.stat().st_size
+    if size > MAX_RESPONSE_BYTES:
+        raise DataError("Cached archive exceeds the size limit; remove it or select a shorter interval.")
+    if size <= 32:
+        return None
+    with path.open("rb") as cached:
+        blob = cached.read(MAX_RESPONSE_BYTES + 1)
+    if len(blob) > MAX_RESPONSE_BYTES:
+        raise DataError("Cached archive exceeds the size limit.")
+    check_deadline()
+    return blob if blob[:2] == b"PK" else None
 
 
 def _get_json(url: str, params: dict | None = None, timeout: tuple[float, float] = (5, 25), retries: int = 3):
     last: Exception | None = None
     for attempt in range(retries):
+        check_deadline()
         try:
-            response = _SESSION.get(url, params=params, timeout=timeout)
+            response = _SESSION.get(url, params=params, timeout=_request_timeout(timeout), stream=True)
+            status = response.status_code
+            body = _response_bytes(response)
         except requests.RequestException as exc:
             last = exc
-            time.sleep(0.35 * (2 ** attempt))
+            _retry_pause(0.35 * (2 ** attempt))
             continue
-        if response.status_code == 429 or response.status_code >= 500:
-            last = DataError(f"{_host(url)} returned HTTP {response.status_code}")
-            time.sleep(0.35 * (2 ** attempt))
+        if status == 429 or status >= 500:
+            last = DataError(f"{_host(url)} returned HTTP {status}")
+            _retry_pause(0.35 * (2 ** attempt))
             continue
         try:
-            payload = response.json()
+            payload = json.loads(body)
         except ValueError:
             payload = None
-        return response.status_code, payload
+        check_deadline()
+        return status, payload
     raise DataError(f"Could not reach {_host(url)} after {retries} tries ({last}).")
 
 
 def _head_ok(url: str) -> bool:
+    check_deadline()
     now = time.time()
     with _HEAD_LOCK:
         hit = _HEAD_CACHE.get(url)
@@ -232,59 +338,72 @@ def _head_ok(url: str) -> bool:
             return hit[1]
     ok = False
     try:
-        response = _SESSION.head(url, timeout=(4, 15), allow_redirects=True)
+        response = _SESSION.head(url, timeout=_request_timeout((4, 15)), allow_redirects=True)
         length = int(response.headers.get("content-length") or "0")
         ok = response.status_code == 200 and length > 32
+        response.close()
+        check_deadline()
     except requests.RequestException:
         ok = False
     with _HEAD_LOCK:
-        _HEAD_CACHE[url] = (now, ok)
+        _put_metadata(_HEAD_CACHE, url, (now, ok))
     return ok
 
 
 def _cached_zip(url: str, rel: str) -> bytes | None:
+    check_deadline()
     now = time.time()
     with _HEAD_LOCK:
         missed = _NEG_ZIP.get(url)
         if missed is not None and now - missed < 900:
             return None
     path = _cache_root() / rel
-    if path.is_file() and path.stat().st_size > 32:
-        blob = path.read_bytes()
-        if blob[:2] == b"PK":
+    blob = _read_cached_zip(path)
+    if blob is not None:
+        return blob
+    with _bounded_file_lock(rel):
+        blob = _read_cached_zip(path)
+        if blob is not None:
             return blob
-    with _file_lock(rel):
-        if path.is_file() and path.stat().st_size > 32:
-            blob = path.read_bytes()
-            if blob[:2] == b"PK":
-                return blob
         try:
             response = _SESSION.get(
                 url,
-                timeout=(5, 90),
+                timeout=_request_timeout((5, 90)),
+                stream=True,
                 headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
             )
+            content = _response_bytes(response)
         except requests.RequestException as exc:
+            check_deadline()
             raise DataError(f"Could not download the Binance archive ({exc.__class__.__name__}).") from exc
         if response.status_code == 404:
             with _HEAD_LOCK:
-                _NEG_ZIP[url] = time.time()
+                _put_metadata(_NEG_ZIP, url, time.time())
             return None
-        if response.status_code != 200 or response.content[:2] != b"PK":
+        if response.status_code != 200 or content[:2] != b"PK":
             raise DataError(f"Binance archive returned HTTP {response.status_code} for {path.name}.")
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".part")
-        tmp.write_bytes(response.content)
+        tmp.write_bytes(content)
         tmp.replace(path)
-        return response.content
+        return content
 
 
 def _zip_text(blob: bytes) -> str:
+    check_deadline()
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
-        names = archive.namelist()
-        if not names:
+        members = archive.infolist()
+        if not members:
             raise DataError("Binance archive zip was empty.")
-        return archive.read(names[0]).decode("utf-8", "replace")
+        member = members[0]
+        if member.file_size > MAX_ZIP_MEMBER_BYTES:
+            raise DataError("Binance archive member exceeds the decompressed size limit.")
+        with archive.open(member) as stream:
+            content = stream.read(MAX_ZIP_MEMBER_BYTES + 1)
+        if len(content) > MAX_ZIP_MEMBER_BYTES:
+            raise DataError("Binance archive member exceeds the decompressed size limit.")
+        check_deadline()
+        return content.decode("utf-8", "replace")
 
 
 def fold_candles(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tuple[np.ndarray, ...]:
@@ -320,50 +439,39 @@ def fold_candles(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tupl
     return open_, high, low, close, volume
 
 
-def _nearest_open_index(starts: np.ndarray, ts: int) -> int:
-    """Index of the candle open nearest ``ts``. A tie stays on the earlier open."""
-    index = int(np.searchsorted(starts, ts, side="left"))
-    if index <= 0:
-        return 0
-    if index >= len(starts):
-        return len(starts) - 1
-    if abs(int(starts[index]) - ts) < abs(ts - int(starts[index - 1])):
-        return index
-    return index - 1
-
-
 def fold_oi(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tuple[np.ndarray, np.ndarray]:
-    """Last open interest and last long-share on the nearest candle open.
+    """Last event in each [open, close) interval; never borrow a future print.
 
-    A print more than half a bar from every open is left out. On hourly
-    candles, ten minutes after an open stays on that candle, and fifty
-    minutes after that open lands on the next candle.
+    Rows may carry native base OI as a fourth element. Invalid latest OI stays
+    invalid instead of silently exposing an older valid print in the interval.
     """
     n = len(grid_ms)
-    oi = np.full(n, np.nan)
-    share = np.full(n, np.nan)
-    if n == 0:
-        return oi, share
+    oi, share = np.full(n, np.nan), np.full(n, np.nan)
     starts = np.asarray(grid_ms, dtype=np.int64)
-    half = bar_ms / 2.0
-    for open_ms, oi_usd, long_share in records:
-        ts = int(open_ms)
-        index = _nearest_open_index(starts, ts)
-        if abs(int(starts[index]) - ts) > half:
+    for row in sorted(records, key=lambda row: int(row[0])):
+        ts = int(row[0])
+        index = int(np.searchsorted(starts, ts, side="right") - 1)
+        if index < 0 or index >= n or ts >= int(starts[index]) + bar_ms:
             continue
-        try:
-            oi_value = float(oi_usd)
-        except (TypeError, ValueError):
-            oi_value = math.nan
-        if math.isfinite(oi_value) and oi_value >= 0:
-            oi[index] = oi_value
-        try:
-            share_value = float(long_share)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            share_value = math.nan
-        if math.isfinite(share_value):
-            share[index] = share_value
+        for target, value in ((oi, row[1]), (share, row[2])):
+            try:
+                target[index] = float(value)
+            except (TypeError, ValueError):
+                target[index] = math.nan
     return oi, share
+
+
+def _native_number(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return math.nan
+
+
+def _fold_native_oi(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> np.ndarray:
+    """Preserve exchange-native base quantities; missing fields remain unknown."""
+    native = [(row[0], row[3] if len(row) > 3 else math.nan, math.nan) for row in records]
+    return fold_oi(native, grid_ms, bar_ms)[0]
 
 
 def _limited_ffill(values: np.ndarray, limit: int) -> np.ndarray:
@@ -403,6 +511,13 @@ def finalize_series(
     warnings: list[str],
     venues: list[str] | None = None,
     now_s: float | None = None,
+    oi_base: np.ndarray | None = None,
+    candle_observed: np.ndarray | None = None,
+    oi_observed: np.ndarray | None = None,
+    flow_observed: np.ndarray | None = None,
+    provenance: dict | None = None,
+    components: tuple[MarketSeries, ...] = (),
+    received_at_ms: int | None = None,
 ) -> LoadedSeries:
     finite = np.isfinite(close) & (close > 0) & np.isfinite(high) & np.isfinite(low) & np.isfinite(open_)
     if int(finite.sum()) < 2:
@@ -410,11 +525,16 @@ def finalize_series(
     idx = np.flatnonzero(finite)
     sl = slice(int(idx[0]), int(idx[-1]) + 1)
     times_s = np.asarray(times[sl], dtype=np.int64)
-    open_s = np.asarray(open_[sl], dtype=np.float64)
-    high_s = np.asarray(high[sl], dtype=np.float64)
-    low_s = np.asarray(low[sl], dtype=np.float64)
-    close_s = np.asarray(close[sl], dtype=np.float64)
+    open_s = np.array(open_[sl], dtype=np.float64, copy=True)
+    high_s = np.array(high[sl], dtype=np.float64, copy=True)
+    low_s = np.array(low[sl], dtype=np.float64, copy=True)
+    close_s = np.array(close[sl], dtype=np.float64, copy=True)
     volume_s = np.nan_to_num(np.asarray(volume[sl], dtype=np.float64), nan=0.0)
+    candle_mask = finite[sl] if candle_observed is None else np.asarray(candle_observed, dtype=bool)[sl]
+    oi_mask = (np.isfinite(oi) & (oi > 0))[sl] if oi_observed is None else np.asarray(oi_observed, dtype=bool)[sl]
+    if oi_base is not None:
+        oi_mask = oi_mask & np.isfinite(oi_base[sl]) & (oi_base[sl] > 0)
+    flow_mask = np.isfinite(share)[sl] if flow_observed is None else np.asarray(flow_observed, dtype=bool)[sl]
     oi_s = _limited_ffill(np.asarray(oi[sl], dtype=np.float64), limit=3)
     share_s = _limited_ffill(np.asarray(share[sl], dtype=np.float64), limit=3)
     for i in range(len(close_s)):
@@ -432,12 +552,14 @@ def finalize_series(
     if np.nanmax(high_s) <= np.nanmin(low_s):
         high_s = np.maximum(high_s, close_s * 1.0001)
         low_s = np.minimum(low_s, close_s * 0.9999)
-    coverage = float(np.isfinite(oi_s).mean()) if len(oi_s) else 0.0
-    if coverage <= 0:
+    coverage = float(oi_mask.mean()) if len(oi_s) else 0.0
+    if oi_base is not None and not np.any(oi_mask & candle_mask):
+        raise DataError(f"{exchange_name(exchange)} returned candles for {symbol} but no usable native open interest.")
+    if not np.any(np.isfinite(oi_s) & (oi_s > 0)):
         raise DataError(f"{exchange_name(exchange)} returned candles for {symbol} but no open interest.")
     notes = list(warnings)
-    if coverage < 0.5:
-        notes.append(f"Open interest history covers about {coverage:.0%} of this window.")
+    if coverage < 1:
+        notes.append(f"Observed valid open interest covers about {coverage:.0%} of this window; gaps rebaseline the model.")
     as_of = int(times_s[-1])
     stale = is_stale(as_of, bar_seconds, now_s=now_s)
     series = MarketSeries(
@@ -455,6 +577,17 @@ def finalize_series(
         bar_seconds=int(bar_seconds),
         note=note,
         warnings=notes,
+        oi_base=None if oi_base is None else np.asarray(oi_base, dtype=float)[sl].copy(),
+        candle_observed=candle_mask, oi_observed=oi_mask, flow_observed=flow_mask,
+        provenance=provenance or {"source": source, "history_kind": "reconstructed_archive" if source == "binance-vision" else "synthetic" if source == "demo" else "exchange_history",
+            "price_source": "trade_ohlc", "sweep_price_approximation": True,
+            "native_oi_unit": "base_asset" if oi_base is not None else "unavailable",
+            "valuation_source": "bar_close", "valuation_unit": "USD_quote_approximation",
+            "availability": "publication_time_not_recorded", "bar_interval_seconds": int(bar_seconds),
+            "received_at_ms": received_at_ms,
+            "observation_time_semantics": "event in [bar_open, bar_close); historical receipt is not publication time",
+            "flow_source": "synthetic" if source == "demo" else "taker_when_observed_else_neutral"},
+        components=components,
     )
     return LoadedSeries(
         series=series,
@@ -474,34 +607,32 @@ def _records_from_series(series: MarketSeries) -> tuple[list[tuple], list[tuple]
     candles = []
     ois = []
     for i in range(len(series.times)):
-        candles.append(
-            (
-                int(series.times[i]),
-                float(series.open[i]),
-                float(series.high[i]),
-                float(series.low[i]),
-                float(series.close[i]),
-                float(series.volume_usd[i]),
+        if series.candle_observed[i]:
+            candles.append(
+                (
+                    int(series.times[i]),
+                    float(series.open[i]),
+                    float(series.high[i]),
+                    float(series.low[i]),
+                    float(series.close[i]),
+                    float(series.volume_usd[i]),
+                )
             )
-        )
-        share = float(series.long_share[i])
-        ois.append((int(series.times[i]), float(series.oi_usd[i]), share))
+        share = float(series.long_share[i]) if series.flow_observed[i] else math.nan
+        oi = float(series.oi_usd[i]) if series.oi_observed[i] else math.nan
+        ois.append((int(series.times[i]), oi, share))
     return candles, ois
 
 
 def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: int, coin: str) -> MarketSeries:
-    """Sum open interest onto one grid. Candles come from the freshest, busiest venue."""
+    """Sum displayed OI; keep venue-local state and choose each bar price causally."""
     if not parts:
         raise DataError("No exchange series were available to combine.")
     bar_ms = int(bar_seconds) * 1000
     n = len(grid_ms)
 
-    def rank(series: MarketSeries) -> tuple:
-        return (int(series.times[-1]), float(np.nansum(series.volume_usd)))
-
-    donor = max(parts, key=rank)
-    donor_candles, _ = _records_from_series(donor)
-    open_, high, low, close, _donor_vol = fold_candles(donor_candles, grid_ms, bar_ms)
+    open_, high, low, close = (np.full(n, np.nan) for _ in range(4))
+    donor_volume = np.full(n, -1.0)
     oi_sum = np.zeros(n, dtype=np.float64)
     oi_seen = np.zeros(n, dtype=bool)
     share_acc = np.zeros(n, dtype=np.float64)
@@ -512,7 +643,12 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
         candles, ois = _records_from_series(part)
         _o, _h, _l, _cl, vol = fold_candles(candles, grid_ms, bar_ms)
         oi, share = fold_oi(ois, grid_ms, bar_ms)
-        present = np.isfinite(oi)
+        # Per-bar donor selection cannot be revised by a future volume spike.
+        choose = np.isfinite(_cl) & (vol > donor_volume)
+        for target, source in ((open_, _o), (high, _h), (low, _l), (close, _cl)):
+            target[choose] = source[choose]
+        donor_volume[choose] = vol[choose]
+        present = np.isfinite(oi) & (oi > 0)
         if not present.any() and not np.isfinite(_cl).any():
             continue
         used.append(part.exchange)
@@ -544,6 +680,7 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
         bar_seconds=int(bar_seconds),
         note=f"Aggregated from {names}.",
         warnings=[],
+        components=tuple(parts),
     )
 
 
@@ -551,7 +688,7 @@ def _window(spec: dict, end_open_s: int | None = None) -> np.ndarray:
     bar = int(spec["bar_seconds"])
     n = int(spec["seconds"]) // bar
     if end_open_s is None:
-        end_open_s = int(time.time()) // bar * bar
+        end_open_s = history_end_open(int(time.time()), bar)
     return make_grid(int(end_open_s), n, bar)
 
 
@@ -561,6 +698,7 @@ def _okx_pages(path: str, params: dict, start_ms: int, limit: int, cursor_key: s
     cursor: int | None = None
     instrument_error = False
     for _ in range(48):
+        check_deadline()
         query = dict(params)
         query["limit"] = str(limit)
         if cursor is not None:
@@ -624,6 +762,8 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
                 300,
                 "after",
             )
+        except RequestDeadlineExceeded:
+            raise
         except DataError as exc:
             log.info("okx history candles unavailable: %s", exc)
             older = []
@@ -647,6 +787,8 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
             100,
             "end",
         )
+    except RequestDeadlineExceeded:
+        raise
     except DataError as exc:
         log.info("okx taker unavailable: %s", exc)
     if not candles:
@@ -668,20 +810,10 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
     bar_ms = int(spec["bar_seconds"]) * 1000
 
     def share_near(ts: int) -> float:
-        if not taker_times:
+        pos = int(np.searchsorted(taker_times, ts, side="right")) - 1
+        if pos < 0 or ts - taker_times[pos] > bar_ms:
             return math.nan
-        pos = int(np.searchsorted(taker_times, ts))
-        best = None
-        best_dist = bar_ms + 1
-        for candidate in (pos - 1, pos):
-            if 0 <= candidate < len(taker_times):
-                dist = abs(taker_times[candidate] - ts)
-                if dist < best_dist:
-                    best_dist = dist
-                    best = taker_times[candidate]
-        if best is None or best_dist > bar_ms:
-            return math.nan
-        return taker_at[best]
+        return taker_at[taker_times[pos]]
 
     candle_records = []
     for row in candles:
@@ -703,7 +835,7 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
             oi_usd = float(row[3])
         except (TypeError, ValueError, IndexError):
             continue
-        oi_records.append((ts, oi_usd, share_near(ts)))
+        oi_records.append((ts, oi_usd, share_near(ts), _native_number(row[2] if len(row) > 2 else None)))
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi, share = fold_oi(oi_records, grid, bar_ms)
     loaded = finalize_series(
@@ -715,6 +847,8 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
         volume=volume,
         oi=oi,
         share=share,
+        oi_base=_fold_native_oi(oi_records, grid, bar_ms),
+        received_at_ms=int(time.time() * 1000),
         exchange="okx",
         symbol=pair,
         coin=coin,
@@ -787,11 +921,9 @@ def _parse_metrics_csv(text: str) -> list[tuple]:
                 open_ms = int(parsed.timestamp() * 1000)
             oi_usd = float(parts[index["sum_open_interest_value"]])
             taker = parts[index["sum_taker_long_short_vol_ratio"]] if "sum_taker_long_short_vol_ratio" in index else ""
-            account = parts[index["count_long_short_ratio"]] if "count_long_short_ratio" in index else ""
             share = ratio_to_share(taker)
-            if not math.isfinite(share):
-                share = ratio_to_share(account)
-            rows.append((open_ms, oi_usd, share))
+            native = _native_number(parts[index["sum_open_interest"]]) if "sum_open_interest" in index else math.nan
+            rows.append((open_ms, oi_usd, share, native))
         except (ValueError, IndexError, KeyError):
             continue
     return rows
@@ -843,6 +975,7 @@ def _load_vision_klines(symbol: str, interval: str, start_ms: int, end_ms: int) 
         return found
 
     for year, month in _months_between(start_ms, end_ms):
+        check_deadline()
         url, rel = _binance_kline_url(symbol, interval, year, month, None)
         blob = _cached_zip(url, rel)
         if blob is None:
@@ -857,6 +990,7 @@ def _load_vision_metrics(symbol: str, start_ms: int, end_ms: int) -> list[tuple]
     days = _dates_between(start_ms, end_ms)
 
     def one(day: datetime) -> list[tuple]:
+        check_deadline()
         url, rel = _binance_metrics_url(symbol, day)
         blob = _cached_zip(url, rel)
         if blob is None:
@@ -868,7 +1002,8 @@ def _load_vision_metrics(symbol: str, start_ms: int, end_ms: int) -> list[tuple]
     else:
         workers = min(8, len(days))
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            groups = list(pool.map(one, days))
+            futures = [pool.submit(copy_context().run, one, day) for day in days]
+            groups = [future.result() for future in futures]
     dedup = {}
     for group in groups:
         for row in group:
@@ -880,6 +1015,7 @@ def _load_vision_metrics(symbol: str, start_ms: int, end_ms: int) -> list[tuple]
 def _latest_archive_day(symbol: str, interval: str) -> datetime | None:
     today = datetime.now(timezone.utc).date()
     for back in range(0, 6):
+        check_deadline()
         day = today - timedelta(days=back)
         stamp = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
         kline_url, _rel = _binance_kline_url(symbol, interval, day.year, day.month, day.day)
@@ -902,6 +1038,8 @@ class RawSeries:
     volume: np.ndarray
     oi: np.ndarray
     share: np.ndarray
+    oi_base: np.ndarray | None = None
+    received_at_ms: int | None = None
 
     @property
     def last_candle_ms(self) -> int | None:
@@ -919,6 +1057,7 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
     klines: list = []
     cursor = start_ms
     for _ in range(8):
+        check_deadline()
         try:
             status, batch = _get_json(
                 f"{base}/fapi/v1/klines",
@@ -926,6 +1065,8 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
                 timeout=(4, 8),
                 retries=1,
             )
+        except RequestDeadlineExceeded:
+            raise
         except DataError:
             return None
         if status in (202, 451) or status >= 400 or not isinstance(batch, list):
@@ -942,6 +1083,7 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
     oi_rows: list[dict] = []
     cursor = start_ms
     for _ in range(20):
+        check_deadline()
         try:
             status, batch = _get_json(
                 f"{base}/futures/data/openInterestHist",
@@ -949,6 +1091,8 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
                 timeout=(4, 8),
                 retries=1,
             )
+        except RequestDeadlineExceeded:
+            raise
         except DataError:
             return None
         if status >= 400 or not isinstance(batch, list) or not batch:
@@ -963,6 +1107,7 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
     taker_at: dict[int, float] = {}
     cursor = start_ms
     for _ in range(20):
+        check_deadline()
         try:
             status, batch = _get_json(
                 f"{base}/futures/data/takerlongshortRatio",
@@ -970,6 +1115,8 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
                 timeout=(4, 8),
                 retries=1,
             )
+        except RequestDeadlineExceeded:
+            raise
         except DataError:
             break
         if status >= 400 or not isinstance(batch, list) or not batch:
@@ -1000,12 +1147,12 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
     for row in oi_rows:
         try:
             ts = int(row["timestamp"])
-            oi_records.append((ts, float(row["sumOpenInterestValue"]), taker_at.get(ts, math.nan)))
+            oi_records.append((ts, float(row["sumOpenInterestValue"]), taker_at.get(ts, math.nan), _native_number(row.get("sumOpenInterest"))))
         except (KeyError, TypeError, ValueError):
             continue
     candles = fold_candles(candle_records, grid, bar_ms)
     oi, share = fold_oi(oi_records, grid, bar_ms)
-    return RawSeries("binance-live", np.asarray(grid, dtype=np.int64), *candles, oi, share)
+    return RawSeries("binance-live", np.asarray(grid, dtype=np.int64), *candles, oi, share, _fold_native_oi(oi_records, grid, bar_ms), int(time.time() * 1000))
 
 
 def _fold_binance_archive(pair: str, bar: str, grid: np.ndarray) -> RawSeries:
@@ -1018,7 +1165,7 @@ def _fold_binance_archive(pair: str, bar: str, grid: np.ndarray) -> RawSeries:
     metrics = [row for row in _load_vision_metrics(pair, start_ms, end_ms) if int(row[0]) % bar_ms == 0]
     folded = fold_candles(candles, grid, bar_ms)
     oi, share = fold_oi(metrics, grid, bar_ms)
-    return RawSeries("binance-vision", np.asarray(grid, dtype=np.int64), *folded, oi, share)
+    return RawSeries("binance-vision", np.asarray(grid, dtype=np.int64), *folded, oi, share, _fold_native_oi(metrics, grid, bar_ms))
 
 
 def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
@@ -1035,6 +1182,8 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
             volume=raw.volume,
             oi=raw.oi,
             share=raw.share,
+            oi_base=raw.oi_base,
+            received_at_ms=raw.received_at_ms,
             exchange="binance",
             symbol=pair,
             coin=coin,
@@ -1043,6 +1192,8 @@ def _try_binance_live(coin: str, pair: str, spec: dict) -> LoadedSeries | None:
             note="",
             warnings=[],
         )
+    except RequestDeadlineExceeded:
+        raise
     except DataError:
         return None
     log.info("binance live %s %s bars=%s", pair, spec["key"], len(loaded.series.times))
@@ -1055,7 +1206,7 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
     latest = _latest_archive_day(pair, spec["bar"])
     if latest is None:
         raise DataError(f"Binance has no public futures archive for {pair}. Check the coin.")
-    end_open_now = int(time.time()) // bar_s * bar_s
+    end_open_now = history_end_open(int(time.time()), bar_s)
     day_last = int(latest.timestamp()) + 86400 - bar_s
     end_open = min(end_open_now, day_last)
     if not allow_stale and is_stale(end_open * 1000, bar_s):
@@ -1077,6 +1228,8 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
         volume=raw.volume,
         oi=raw.oi,
         share=raw.share,
+        oi_base=raw.oi_base,
+        received_at_ms=raw.received_at_ms,
         exchange="binance",
         symbol=pair,
         coin=coin,
@@ -1123,6 +1276,8 @@ def finish_history(raw: RawSeries, end_open_s: int, spec: dict, coin: str, pair:
         volume=raw.volume[keep],
         oi=raw.oi[keep],
         share=raw.share[keep],
+        oi_base=None if raw.oi_base is None else raw.oi_base[keep],
+        received_at_ms=raw.received_at_ms,
         exchange="binance",
         symbol=pair,
         coin=coin,
@@ -1202,7 +1357,10 @@ def load_span(coin: str, pair: str, spec: dict, from_s: int, to_s: int | None) -
     last = history_end_open(int(time.time()) if to_s is None else to_s, bar_s)
     if last < first:
         raise DataError("Replay end must be after its start.")
-    grid = make_grid(last, (last - first) // bar_s + n, bar_s)
+    count = (last - first) // bar_s + n
+    if last - first > 31 * 86400 or count > 12000:
+        raise DataError("Replay is limited to 31 days and 12000 total bars including warm-up.")
+    grid = make_grid(last, count, bar_s)
     archive = _fold_binance_archive(pair, spec["bar"], grid)
     live = None
     recent = grid[grid >= int((time.time() - LIVE_OI_DAYS * 86400) * 1000)]
@@ -1265,6 +1423,7 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
         volume=volume,
         oi=oi,
         share=share,
+        oi_base=oi / close,
         exchange="demo",
         symbol=pair,
         coin=coin,
@@ -1293,10 +1452,12 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
         return fetch_binance(coin, pair, spec, allow_stale=False)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {name: pool.submit(run, name) for name in ("okx", "binance")}
+        futures = {name: pool.submit(copy_context().run, run, name) for name in ("okx", "binance")}
         for name, future in futures.items():
             try:
                 loaded_parts.append(future.result())
+            except RequestDeadlineExceeded:
+                raise
             except DataError as exc:
                 text = str(exc)
                 errors.append(text if text.startswith(exchange_name(name)) else f"{exchange_name(name)}: {text}")
@@ -1326,7 +1487,7 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
             warnings.append(message)
     venues = [item.series.exchange for item in fresh]
     names = ", ".join(exchange_name(item) for item in venues)
-    note = f"Symbol aggregate of {names}. Price candles are {exchange_name(donor.series.exchange)}; open interest is the sum."
+    note = f"Symbol aggregate of {names}. Price candles use the busiest observed venue per bar; displayed open interest is the sum."
     loaded = finalize_series(
         times=combined.times,
         open_=combined.open,
@@ -1344,6 +1505,10 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
         note=note,
         warnings=warnings,
         venues=venues,
+        components=combined.components,
+        candle_observed=combined.candle_observed,
+        oi_observed=combined.oi_observed,
+        flow_observed=combined.flow_observed,
     )
     return loaded
 

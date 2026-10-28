@@ -9,11 +9,15 @@ from __future__ import annotations
 
 import bisect
 import itertools
+import hashlib
+import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+MODEL_VERSION = "2.0.0"
+DECAY_REFERENCE_SECONDS = 300
 MMR = 0.005
 VENUES = ("binance", "bybit", "bybit_uta", "okx")
 
@@ -293,6 +297,15 @@ class MarketSeries:
     note: str = ""
     warnings: list[str] = field(default_factory=list)
 
+    # Native base-asset OI is not reconstructed from quote OI and candle prices.
+    oi_base: np.ndarray | None = None
+    candle_observed: np.ndarray | None = None
+    oi_observed: np.ndarray | None = None
+    flow_observed: np.ndarray | None = None
+    oi_available_at: np.ndarray | None = None
+    provenance: dict = field(default_factory=dict)
+    components: tuple[MarketSeries, ...] = ()
+
     def __post_init__(self) -> None:
         self.times = np.asarray(self.times, dtype=np.int64)
         self.open = np.asarray(self.open, dtype=np.float64)
@@ -314,6 +327,29 @@ class MarketSeries:
         ):
             raise ValueError("market series columns must share one length")
 
+        for name in ("oi_base", "oi_available_at"):
+            values = getattr(self, name)
+            if values is not None:
+                values = np.asarray(values, dtype=np.float64)
+                if values.shape != self.times.shape:
+                    raise ValueError(f"{name} must share the market series length")
+                setattr(self, name, values)
+        defaults = {
+            "candle_observed": np.isfinite(self.close) & (self.close > 0) & np.isfinite(self.high) & np.isfinite(self.low),
+            "oi_observed": np.isfinite(self.oi_usd) & (self.oi_usd > 0),
+            "flow_observed": np.isfinite(self.long_share),
+        }
+        for name, default in defaults.items():
+            values = getattr(self, name)
+            values = default if values is None else np.asarray(values, dtype=bool)
+            if values.shape != self.times.shape:
+                raise ValueError(f"{name} must share the market series length")
+            setattr(self, name, values)
+        if len(self.times) > 1 and np.any(np.diff(self.times) <= 0):
+            raise ValueError("market timestamps must be strictly increasing")
+        if self.bar_seconds <= 0:
+            raise ValueError("bar_seconds must be positive")
+
 
 @dataclass
 class Heatmap:
@@ -331,6 +367,13 @@ class Heatmap:
     profile_short_tiers: np.ndarray | None = None
     long_tier_column: np.ndarray | None = None
     short_tier_column: np.ndarray | None = None
+    metadata: dict = field(default_factory=dict)
+    logical_totals: dict[str, np.ndarray] = field(default_factory=dict)
+    logical_features: list[dict] = field(default_factory=list)
+
+    @property
+    def features(self) -> dict:
+        return self.logical_features[-1] if self.logical_features else {}
 
 
 def _nearest_bin(centers: np.ndarray, price: float) -> int:
@@ -419,9 +462,9 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
 
     def fmt_usd(value: float) -> str:
         if value >= 1e9:
-            return f"${value / 1e9:.2f}B"
+            return f"${value / 1e9:.1f}B"
         if value >= 1e6:
-            return f"${value / 1e6:.2f}M"
+            return f"${value / 1e6:.0f}M"
         if value >= 1e3:
             return f"${value / 1e3:.1f}K"
         return f"${value:.0f}"
@@ -437,14 +480,14 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
     if nearest_above and nearest_below and w5["long_usd"] > 0:
         ratio = w5["short_usd"] / w5["long_usd"]
         lean = (
-            f"Within 5% of price, estimated short liquidity is {ratio:.2f}× long liquidity."
+            f"Within 5% of price, estimated short exposure is {ratio:.2f}× long exposure."
         )
     elif w5["short_usd"] > 0 and w5["long_usd"] == 0:
-        lean = "Within 5% of price, the resting estimate is entirely short liquidity."
+        lean = "Within 5% of price, the estimated exposure is entirely short exposure."
     elif w5["long_usd"] > 0 and w5["short_usd"] == 0:
-        lean = "Within 5% of price, the resting estimate is entirely long liquidity."
+        lean = "Within 5% of price, the estimated exposure is entirely long exposure."
     else:
-        lean = "Within 5% of price, this window has little resting liquidity in the model."
+        lean = "Within 5% of price, this window has little estimated exposure in the model."
 
     above_txt = (
         f"The nearest short shelf is {fmt_px(nearest_above['price'])} ({nearest_above['distance_pct']:+.2f}%), about {fmt_usd(nearest_above['usd'])}."
@@ -458,7 +501,7 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
     )
     summary = (
         f"{coin} is trading at {fmt_px(spot)}. {above_txt} {below_txt} {lean} "
-        "These shelves are an estimate from open-interest changes and a published leverage mix."
+        "These shelves are an estimate from open-interest changes and a fixed assumed leverage mix."
     )
     levels = sorted(long_levels + short_levels, key=lambda g: g["usd"], reverse=True)
     return {
@@ -474,122 +517,215 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
     }
 
 
-def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_column: int | None = None) -> Heatmap:
+def _render_cohorts(levels: np.ndarray, amounts: np.ndarray, tiers: np.ndarray,
+                    centers: np.ndarray, n_tiers: int, kernel: tuple) -> np.ndarray:
+    """Rendering is a mass-conserving projection, never the sweep state."""
+    bins = len(centers)
+    book = np.zeros((n_tiers, bins))
+    if not len(levels):
+        return book
+    right = np.clip(np.searchsorted(centers, levels), 0, bins - 1)
+    left = np.maximum(right - 1, 0)
+    nearest = np.where(abs(centers[left] - levels) <= abs(centers[right] - levels), left, right)
+    offsets = np.arange(len(kernel)) - len(kernel) // 2
+    indexes = nearest[:, None] + offsets
+    valid = (indexes >= 0) & (indexes < bins)
+    weights = valid * np.asarray(kernel)
+    weights /= weights.sum(axis=1)[:, None]
+    for j in range(len(kernel)):
+        keep = valid[:, j]
+        book += np.bincount(tiers[keep] * bins + indexes[keep, j],
+                            weights=amounts[keep] * weights[keep, j],
+                            minlength=n_tiers * bins).reshape(n_tiers, bins)
+    return book
+
+
+def _logical_features(levels, amounts, sides, births, stamp, spot, opened, swept):
+    long = sides == 0
+    short = ~long
+    total = float(amounts.sum())
+    windows = []
+    for pct in (1, 2, 5, 10):
+        band = spot * pct / 100
+        below = long & (levels < spot) & (levels >= spot - band)
+        above = short & (levels > spot) & (levels <= spot + band)
+        lv, sv = float(amounts[below].sum()), float(amounts[above].sum())
+        windows.append({"window_pct": pct, "long_usd": lv, "short_usd": sv,
+                        "short_to_long": sv / lv if lv > 0 else None})
+    below = levels[long & (levels < spot)]
+    above = levels[short & (levels > spot)]
+    concentration = None
+    if total > 0:
+        _, inverse = np.unique(levels, return_inverse=True)
+        concentration = float(np.bincount(inverse, weights=amounts).max() / total)
+    return {"resting_long_usd": float(amounts[long].sum()),
+            "resting_short_usd": float(amounts[short].sum()), "opened_usd": opened,
+            "swept_long_usd": float(swept[0]), "swept_short_usd": float(swept[1]),
+            "imbalance": windows,
+            "nearest_long_price": float(below.max()) if len(below) else None,
+            "nearest_short_price": float(above.min()) if len(above) else None,
+            "nearest_long_distance_pct": float((below.max() / spot - 1) * 100) if len(below) and spot > 0 else None,
+            "nearest_short_distance_pct": float((above.min() / spot - 1) * 100) if len(above) and spot > 0 else None,
+            "concentration_top_level_share": concentration,
+            "persistence_usd_weighted_seconds": float(np.dot(amounts, (stamp - births) / 1000) / total) if total > 0 else None}
+
+
+def _visible_series(series: MarketSeries, start_ms: int) -> MarketSeries:
+    keep = series.times >= start_ms
+    columns = ("times", "open", "high", "low", "close", "volume_usd", "oi_usd", "long_share",
+               "oi_base", "candle_observed", "oi_observed", "flow_observed", "oi_available_at")
+    values = {name: None if getattr(series, name) is None else getattr(series, name)[keep].copy()
+              for name in columns}
+    return replace(series, **values,
+                   components=tuple(_visible_series(part, start_ms) for part in series.components),
+                   provenance=dict(series.provenance), warnings=list(series.warnings))
+
+
+def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_column: int | None = None,
+                  visible_bars: int | None = None) -> Heatmap:
+    """Causal post-close inventory. Native OI changes are valued at entry close.
+
+    Each venue owns its baseline and exact-level cohorts. Missing observations
+    break the OI delta chain; recovery establishes a baseline without inventing
+    exposure. Price triggers use only observed bars and precede close deposits.
+    ``visible_bars`` trims only the returned view; history state and render bins
+    use the full input. ``tier_column`` is relative to that visible view.
+    """
     spec = MODELS.get(int(model_id))
     if spec is None:
         raise ValueError(f"unknown model {model_id}")
     n = len(series.times)
     if n < 2:
         raise ValueError("need at least two candles")
-
-    low = float(np.nanmin(series.low))
-    high = float(np.nanmax(series.high))
+    if visible_bars is not None and (type(visible_bars) is not int or not 2 <= visible_bars <= n):
+        raise ValueError("visible_bars must be an integer from 2 to the loaded history length")
+    view_start = n - visible_bars if visible_bars is not None else 0
+    requested_column = None if tier_column is None else tier_column + view_start
+    if not isinstance(n_bins, int) or n_bins < 2 or n_bins > 4096:
+        raise ValueError("n_bins must be between 2 and 4096")
+    low, high = float(np.nanmin(series.low)), float(np.nanmax(series.high))
     if not np.isfinite(low) or not np.isfinite(high) or low <= 0 or high <= low:
         raise ValueError("price series is empty")
-    pad_lo = low * 0.78
-    pad_hi = high * 1.22
-    edges = np.linspace(pad_lo, pad_hi, n_bins + 1)
-    centers = (edges[:-1] + edges[1:]) / 2.0
-
-    kernel = tuple(spec["kernel"])
-    weights = spec["weights"]
-    tiers = tuple(int(lev) for lev, _weight in weights)
-    # One book per leverage tier; the totals are their sums.
-    long_book = np.zeros((len(tiers), n_bins), dtype=np.float64)
-    short_book = np.zeros((len(tiers), n_bins), dtype=np.float64)
-    long_heat = np.zeros((n_bins, n), dtype=np.float64)
-    short_heat = np.zeros((n_bins, n), dtype=np.float64)
+    edges = np.linspace(low * .78, high * 1.22, n_bins + 1)
+    centers = (edges[:-1] + edges[1:]) / 2
+    tiers = tuple(int(lev) for lev, _ in spec["weights"])
+    weights = np.asarray([w for _, w in spec["weights"]])
+    parts = series.components or (series,)
+    states = []
+    for part in parts:
+        states.append({"part": part, "at": {int(t): j for j, t in enumerate(part.times)},
+                       "prev": math.nan, "prev_time": None,
+                       "levels": np.empty(0), "amounts": np.empty(0),
+                       "sides": np.empty(0, dtype=int), "tiers": np.empty(0, dtype=int),
+                       "births": np.empty(0)})
+    long_heat, short_heat = np.zeros((n_bins, n)), np.zeros((n_bins, n))
+    features, coverage = [], []
     long_column = short_column = None
-    use_flow = bool(spec["flow"])
-
-    oi = np.where(np.isfinite(series.oi_usd), series.oi_usd, np.nan)
-    prev = np.nan
-    for i in range(n):
-        share = series.long_share[i]
-        if not np.isfinite(share):
-            share = 0.5
-        share = float(np.clip(share, 0.05, 0.95))
-        if not use_flow:
-            share = 0.5
-
-        cur = oi[i]
-        delta = 0.0
-        if np.isfinite(cur) and np.isfinite(prev):
-            delta = float(cur - prev)
-            if prev > 0:
-                delta = float(np.clip(delta, -prev, prev))
-        if np.isfinite(cur):
-            prev = float(cur)
-
-        entry = float(series.close[i])
-        if not np.isfinite(entry) or entry <= 0:
-            entry = float(series.open[i])
-
-        add_long = 0.0
-        add_short = 0.0
-        if delta > 0:
-            add_long += delta * share
-            add_short += delta * (1.0 - share)
-        elif delta < 0 and (long_book.sum() + short_book.sum()) > 0:
-            prev_oi = float(oi[i] - delta) if np.isfinite(oi[i]) else 0.0
-            frac = min(1.0, abs(delta) / prev_oi) if prev_oi > 0 else 1.0
-            if use_flow:
-                long_book *= 1.0 - frac * (1.0 - share)
-                short_book *= 1.0 - frac * share
+    excluded = 0
+    for i, open_ms in enumerate(series.times):
+        stamp = int(open_ms) + series.bar_seconds * 1000
+        elapsed = (int(open_ms) - int(series.times[i - 1])) / 1000 if i else 0
+        decay = float(spec["decay"]) ** (elapsed / DECAY_REFERENCE_SECONDS)
+        opened, swept = 0.0, np.zeros(2)
+        observed_venues = []
+        for state in states:
+            part = state["part"]
+            j = state["at"].get(int(open_ms))
+            amounts, levels, sides = state["amounts"], state["levels"], state["sides"]
+            price_valid = j is not None and bool(part.candle_observed[j])
+            if price_valid:
+                price_valid = bool(np.isfinite(part.low[j]) and np.isfinite(part.high[j])
+                                   and 0 < part.low[j] <= part.high[j]
+                                   and np.isfinite(part.close[j]) and part.close[j] > 0)
+            if price_valid:
+                hit = ((sides == 0) & (levels >= part.low[j])) | ((sides == 1) & (levels <= part.high[j]))
+                for side in (0, 1):
+                    swept[side] += amounts[hit & (sides == side)].sum()
+                amounts[hit] = 0
+            # Decay is elapsed time even when a venue has an observation gap.
+            amounts *= decay
+            cur = math.nan
+            if j is not None:
+                native = part.oi_base
+                cur = float(native[j] if native is not None else part.oi_usd[j])
+            available = j is not None and (part.oi_available_at is None or
+                (np.isfinite(part.oi_available_at[j]) and part.oi_available_at[j] <= stamp))
+            valid = price_valid and available and bool(part.oi_observed[j]) and np.isfinite(cur) and cur > 0
+            if valid:
+                observed_venues.append(part.exchange)
+                entry = float(part.close[j])
+                prev = state["prev"]
+                consecutive = state["prev_time"] is not None and int(open_ms) - state["prev_time"] == part.bar_seconds * 1000
+                delta = cur - prev if np.isfinite(prev) and consecutive else 0.0
+                share = float(part.long_share[j]) if spec["flow"] and part.flow_observed[j] else .5
+                share = float(np.clip(share, .05, .95)) if np.isfinite(share) else .5
+                if delta < 0:
+                    # OI reductions are matched contracts; both scenario sides shrink equally.
+                    amounts *= max(0.0, cur / prev)
+                add = max(delta, 0.0) * (entry if part.oi_base is not None else 1.0)
+                volume = float(part.volume_usd[j])
+                if np.isfinite(volume) and volume > 0 and spec["churn"] > 0:
+                    # Explicit turnover scenario, independent from native OI openings.
+                    add += min(volume * spec["churn"], cur * (entry if part.oi_base is not None else 1.0) * .02)
+                if add > 0:
+                    opened += add
+                    new_levels = [liq_price(entry, lev, side, MMR, venue=part.exchange if part.exchange in VENUES else "binance")
+                                  for side in ("long", "short") for lev in tiers]
+                    state["levels"] = np.concatenate((levels, new_levels))
+                    state["amounts"] = np.concatenate((amounts, add * np.concatenate((weights * share, weights * (1-share)))))
+                    state["sides"] = np.concatenate((sides, np.repeat([0, 1], len(tiers))))
+                    state["tiers"] = np.concatenate((state["tiers"], np.tile(np.arange(len(tiers)), 2)))
+                    state["births"] = np.concatenate((state["births"], np.full(2 * len(tiers), stamp)))
+                state["prev"], state["prev_time"] = cur, int(open_ms)
             else:
-                long_book *= 1.0 - frac
-                short_book *= 1.0 - frac
-
-        churn = float(spec["churn"])
-        vol = float(series.volume_usd[i]) if np.isfinite(series.volume_usd[i]) else 0.0
-        if churn > 0 and vol > 0:
-            seasoning = vol * churn
-            if np.isfinite(cur) and cur > 0:
-                seasoning = min(seasoning, cur * 0.02)
-            add_long += seasoning * share
-            add_short += seasoning * (1.0 - share)
-
-        if add_long > 0 or add_short > 0:
-            for tier, (lev, weight) in enumerate(weights):
-                if add_long > 0:
-                    _deposit(long_book[tier], _nearest_bin(centers, liq_price_long(entry, lev)), add_long * weight, kernel)
-                if add_short > 0:
-                    _deposit(short_book[tier], _nearest_bin(centers, liq_price_short(entry, lev)), add_short * weight, kernel)
-
-        if i == tier_column:
-            long_column = long_book.copy()
-            short_column = short_book.copy()
-        long_heat[:, i] = long_book.sum(axis=0)
-        short_heat[:, i] = short_book.sum(axis=0)
-
-        low_i = float(series.low[i])
-        high_i = float(series.high[i])
-        long_book[:, int(np.searchsorted(centers, low_i, side="left")) :] = 0.0
-        short_book[:, : int(np.searchsorted(centers, high_i, side="right"))] = 0.0
-
-        decay = float(spec["decay"])
-        if decay != 1.0:
-            long_book *= decay
-            short_book *= decay
-
-    spot = float(series.close[-1])
-    profile_long = long_book.sum(axis=0)
-    profile_short = short_book.sum(axis=0)
-    return Heatmap(
-        series=series,
-        model_id=int(model_id),
-        centers=centers,
-        long_heat=long_heat,
-        short_heat=short_heat,
-        profile_long=profile_long,
-        profile_short=profile_short,
-        analysis=analyze(centers, profile_long, profile_short, spot, series.coin),
-        tiers=tiers,
-        profile_long_tiers=long_book.copy(),
-        profile_short_tiers=short_book.copy(),
-        long_tier_column=long_column,
-        short_tier_column=short_column,
-    )
+                state["prev"], state["prev_time"] = math.nan, None
+                excluded += 1
+            keep = state["amounts"] > 0
+            for key in ("levels", "amounts", "sides", "tiers", "births"):
+                state[key] = state[key][keep]
+        joined = {key: np.concatenate([state[key] for state in states])
+                  for key in ("levels", "amounts", "sides", "tiers", "births")}
+        long = joined["sides"] == 0
+        books = []
+        for side in (long, ~long):
+            books.append(_render_cohorts(joined["levels"][side], joined["amounts"][side],
+                         joined["tiers"][side], centers, len(tiers), spec["kernel"]))
+        long_book, short_book = books
+        long_heat[:, i], short_heat[:, i] = long_book.sum(axis=0), short_book.sum(axis=0)
+        if i == requested_column:
+            long_column, short_column = long_book.copy(), short_book.copy()
+        features.append(_logical_features(joined["levels"], joined["amounts"], joined["sides"],
+                        joined["births"], stamp, float(series.close[i]), opened, swept))
+        coverage.append(observed_venues)
+    profile_long, profile_short = long_heat[:, -1].copy(), short_heat[:, -1].copy()
+    assumptions = ["Isolated margin scenario; fixed leverage weights and 0.5% maintenance margin; no account-level entries known.",
+                   "Amounts are estimated entry-notional USD, not current marked exposure or predicted liquidations.",
+                   "Observed trade-price OHLC approximates mark-price sweep triggers.",
+                   "Net OI changes represent matched contracts; long/short shares allocate assumed vulnerable exposure.",
+                   "No inventory is known before the history anchor; gaps rebaseline OI without recovery flow.",
+                   "Model 2 volume turnover is an explicit scenario, not observed position openings."]
+    metadata = {"model_version": MODEL_VERSION,
+                "parameter_digest": hashlib.sha256(json.dumps({"model": spec, "mmr": MMR, "decay_reference_seconds": DECAY_REFERENCE_SECONDS}, sort_keys=True).encode()).hexdigest(),
+                "assumptions": assumptions, "units": "entry_notional_usd",
+                "time_semantics": "bar_close_post_update", "state_timestamp": "bar_close_post_update",
+                "warmup_anchor_ms": int(series.times[0]), "insufficient_history": True,
+                "excluded_venue_observations": excluded, "venue_coverage": coverage[view_start:],
+                "history_bars": n, "visible_bars": n - view_start,
+                "oi_accounting": {p.exchange: "native_base" if p.oi_base is not None else "legacy_quote_delta" for p in parts},
+                "flow_prior": {p.exchange: "taker_when_observed_else_neutral" if spec["flow"] else "neutral" for p in parts},
+                "decay_reference_seconds": DECAY_REFERENCE_SECONDS}
+    result = Heatmap(series, int(model_id), centers, long_heat, short_heat, profile_long, profile_short,
+                   analyze(centers, profile_long, profile_short, float(series.close[-1]), series.coin),
+                   tiers, long_book.copy(), short_book.copy(), long_column, short_column,
+                   metadata, {key: np.asarray([row[key] for row in features]) for key in
+                              ("resting_long_usd", "resting_short_usd", "opened_usd", "swept_long_usd", "swept_short_usd")}, features)
+    if view_start:
+        result.series = _visible_series(series, int(series.times[view_start]))
+        result.long_heat = result.long_heat[:, view_start:].copy()
+        result.short_heat = result.short_heat[:, view_start:].copy()
+        result.logical_features = result.logical_features[view_start:]
+        result.logical_totals = {key: values[view_start:].copy() for key, values in result.logical_totals.items()}
+    return result
 
 
 def suggest_view(series: MarketSeries) -> tuple[float, float]:
