@@ -310,7 +310,7 @@ def test_expired_request_budget_prevents_network(monkeypatch):
     try:
         monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: pytest.fail('expired request made network call'))
         with pytest.raises(data.RequestDeadlineExceeded):
-            data._get_json('https://example.invalid')
+            data._get_json('http://127.0.0.1')
     finally:
         data.request_deadline.reset(token)
 
@@ -337,7 +337,7 @@ def test_streamed_response_stops_when_request_budget_expires(monkeypatch):
     token = data.request_deadline.set(101.)
     try:
         with pytest.raises(data.RequestDeadlineExceeded):
-            data._get_json('https://example.invalid')
+            data._get_json('http://127.0.0.1')
         assert observed['stream'] is True
         assert observed['timeout'].total == 1.
         assert response.closed
@@ -406,12 +406,12 @@ def test_remote_metadata_caches_evict_old_entries(monkeypatch, tmp_path):
     monkeypatch.setattr(data._SESSION, 'head', lambda *args, **kwargs: Response(200))
     monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: Response(404))
     for i in range(6):
-        url = f'https://example.invalid/{i}.zip'
+        url = f'http://127.0.0.1/{i}.zip'
         assert data._head_ok(url)
         assert data._cached_zip(url,f'{i}.zip') is None
     assert len(data._HEAD_CACHE) == len(data._NEG_ZIP) == 4
-    assert 'https://example.invalid/0.zip' not in data._HEAD_CACHE
-    assert 'https://example.invalid/0.zip' not in data._NEG_ZIP
+    assert 'http://127.0.0.1/0.zip' not in data._HEAD_CACHE
+    assert 'http://127.0.0.1/0.zip' not in data._NEG_ZIP
 
 
 def test_response_body_limit_stops_stream_and_closes_response(monkeypatch):
@@ -451,7 +451,7 @@ def test_cached_archive_size_limit_applies_before_reading(monkeypatch,tmp_path):
     monkeypatch.setattr(data,'_cache_root',lambda:tmp_path)
     (tmp_path/'fixture.zip').write_bytes(b'PK'+b'x'*100)
     with pytest.raises(data.DataError,match='size limit'):
-        data._cached_zip('https://example.invalid/fixture.zip','fixture.zip')
+        data._cached_zip('http://127.0.0.1/fixture.zip','fixture.zip')
     allowed = b'PK'+b'x'*38
     (tmp_path/'fixture.zip').write_bytes(allowed)
-    assert data._cached_zip('https://example.invalid/fixture.zip','fixture.zip') == allowed
+    assert data._cached_zip('http://127.0.0.1/fixture.zip','fixture.zip') == allowed

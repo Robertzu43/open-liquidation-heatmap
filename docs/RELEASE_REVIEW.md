@@ -13,7 +13,7 @@ The approved in-place upgrade is implemented and independently reviewed as a loc
 
 ## Verification record
 
-Final integration verification after the correction wave: **317 tests passed, two skipped** in 21.71 seconds; JavaScript syntax, compilation and diff whitespace checks passed. The initial whole-branch review and its focused correction review are recorded in the [review record](reviews/2026-10-28-final-review.md). The two skips are an opt-in live historical-network test and a redundant interface-gap sentinel. A skipped historical network test is not a successful archive backfill test.
+Final integration verification after the scanner correction: **318 tests passed, two skipped** in 21.68 seconds; JavaScript syntax, compilation and diff whitespace checks passed. The initial whole-branch review and its focused correction review are recorded in the [review record](reviews/2026-10-28-final-review.md). The two skips are an opt-in live historical-network test and a redundant interface-gap sentinel. A skipped historical network test is not a successful archive backfill test.
 
 - Installed-wheel smoke succeeded outside the checkout: console command, health, packaged HTML/JS/logo and synthetic API. A separate clean virtual environment also resolved the pinned dependencies from the package index and passed the installed command/assets/API check on Python 3.12.14; this does not establish every supported platform.
 - Extended Chromium browser smoke succeeded at 360, 390, 768, 1280, 1440 and 1920px widths, plus a narrow zoom-equivalent layout. It checks keyboard/touch, exports, fullscreen, error recovery, shared Auto bars, replay cancellation/context and time-zoom limits.
@@ -45,6 +45,8 @@ A separate interface reviewer reproduced four behavioral defects despite the ori
 Runtime review added bounded connection workers, cooperative source/cache waits, stricter live freshness, receipt-independent semantic fingerprints, user cache location and transfer/decompression caps.
 
 The final whole-branch reviewer found two additional defects: UTC+8 OKX long candles entering earlier UTC bars, and pending selections changing exported PNG provenance before the displayed data changed. The independent scoped re-review accepted both fixes with no remaining material scoped concern. Both were corrected in one wave: candles/OI/taker now use supported UTC periods and closed-interval validation, and PNG/JSON exports identify the displayed payload. New browser cases hold model, market and replay responses and exercise failed selections. The benchmark now supplies the previously missing cold/warm/concurrent HTTP and observed-memory evidence with explicit small-workload limits.
+
+An additional verification run in the original checkout exposed a test-scanner defect: its absolute-path exclusions skipped the entire nested worktree, hiding unapproved URLs in mocked fixtures. The scanner now filters paths relative to the repository, with a regression for ignored ancestors and nested directories. Fixtures use the existing allowed loopback host; the allowlist is unchanged. Independent review confirmed real source scanning and rejection of an injected unapproved host. Earlier worktree passes did not establish scanner coverage; the final result above includes the repaired checks. Production code and the recorded benchmark workload were unchanged by this test-only repair.
 
 ## Every category reassessed
 

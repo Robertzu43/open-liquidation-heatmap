@@ -1,6 +1,6 @@
 # Final independent whole-branch review
 
-**Final disposition:** both findings were corrected and passed the independent scoped re-review below. The 0.3.0 local research milestone has no remaining material finding from these reviews; external validation remains open.
+**Final disposition:** both findings and the subsequent integration scanner defect were corrected and passed independent scoped review below. The 0.3.0 local research milestone has no remaining material finding from these reviews; external validation remains open.
 
 Reviewed `42c35d7..42a0a24` on 2026-10-28 against the approved product-excellence design, release review, supplied diff, prior core/interface reviews, and actual source. No product files changed, commits created, or subagents used. Coordinator-only benchmark asset regeneration does not affect the findings.
 
@@ -122,3 +122,32 @@ These are review-run observations, not replacement values for the final publishe
 The scorecard retains **8/10 overall, 8.5/10 engineering, 5/10 paid-provider replacement**, labels scores as judgments, and leaves demonstrated trading edge unestablished. No empirical 10/10 or provider-equivalence assertion was found. At inspection, `docs/RELEASE_REVIEW.md` still described the correction/benchmark wave as pending; replace that transitional text and refresh benchmark descriptions/counts before final handoff. This is a documentation completion step, not an unresolved code finding.
 
 Declined judgments remain real strategy accuracy/profitability, paid-provider equivalence, sustained operations, full historical archive coverage, cross-browser/physical-device accessibility, remote CI success and generalized load performance: the necessary independent observations are outside this correction review.
+
+---
+
+# Integration addendum: repository scanner correction
+
+Reviewed only the uncommitted changes to `tests/validation/test_supply_chain.py` and `tests/test_history.py` on 2026-10-28. No production code, UI, benchmark behavior, or earlier review scope was reopened. No source edits or subagents used.
+
+**Verdict: correction accepted; no remaining material concern in this diff.** The integration failure revealed a genuine vacuous test in the worktree, and this change restores meaningful scanning without expanding the host allowlist.
+
+- `_iter_files()` now evaluates skipped components relative to the repository root. An ancestor named `.worktrees` no longer excludes the entire checkout; ignored directories inside the checkout remain excluded. The new regression supplies both a real source file beneath an ignored ancestor and nested ignored directories, and asserts the exact discovered file list. The original absolute-path implementation would return an empty list.
+- The seven URL-literal changes preserve fixture semantics. The expired-budget test still forbids any HTTP call; the streamed-response and metadata-cache tests replace session methods with controlled fixtures; the cache-size test reads the supplied local ZIP bytes or rejects their size before fetching. None of these tests depends on the hostname or HTTPS transport. The existing allowed loopback literal is therefore appropriate, and the exchange/local allowlist is unchanged.
+
+Independent verification:
+
+```text
+python -m pytest tests/validation/test_supply_chain.py tests/test_history.py -q
+34 passed, 1 skipped in 0.89s
+
+Actual worktree scan: 53 text files; liqmap/model.py included.
+Injected unapproved host in temporary .worktrees/checkout/liqmap/model.py:
+  repository allowlist test failed with the expected path and host.
+Nested build/ignored.py containing another unapproved host:
+  remained excluded, without hiding the source violation.
+
+git diff --check HEAD -- tests/validation/test_supply_chain.py tests/test_history.py
+passed
+```
+
+The skipped history test remains the opt-in live-network test. The adversarial scanner probe used temporary files and did not alter repository source. Coordinator owns full-suite reruns in both checkout locations. Earlier worktree passes did not establish scanner coverage; this restored scan and explicit injected-host rejection do. No new model, runtime, empirical-performance or benchmark claim follows from this test-only repair.
