@@ -4,9 +4,9 @@
 
 ### Changed
 - Model 2.0.0 separates exact economic inventory from rendering and fixes close-entry/same-bar sweep chronology.
-- Public-data adapters preserve native OI and source-quality semantics; venue inventories remain separate before aggregation.
+- Public-data adapters preserve native OI and source-quality semantics; venue inventories remain separate before aggregation. OKX long periods use UTC intervals, with confirmed candles and exact closed-interval alignment.
 - Historical replay, source availability and warm-up limitations are explicit rather than implied to be production backtest guarantees.
-- Desktop/mobile controls prioritize the chart, with progressive research/display panels, timezone selection and keyboard controls.
+- Desktop/mobile controls prioritize the chart, with progressive research/display panels, timezone selection and keyboard controls. Replay races are guarded, and exports retain the displayed dataset’s identity during pending selections.
 
 ### Added
 - Versioned research API, metadata/fingerprints, exact features, readiness/health checks and bounded runtime work.

@@ -156,7 +156,6 @@ Choose simple internal representation, sensible module boundaries, accessible sp
 
 ## Decisions/evidence still needed
 
-- Approval of this in-place design (or choice of rewrite).
 - Actual CoinGlass dataset/API access and strategy evaluation inputs, only if the user wants empirically demonstrated replacement readiness. Do not ask for secrets in chat; use configured credentials or supplied files through supported mechanisms.
 - A real operating window is required for uptime/shadow-run evidence. A coding session cannot stand in for it.
 
@@ -168,4 +167,4 @@ Completion status at design stage: none of the product acceptance gates is claim
 - Official `DietrichGebert/ponytail` v5.3.2, source commit `09c434ab73ca43761c5d8b0c5d341926c2fba710`: installed and enabled as `ponytail@ponytail`. Six installed skills and eight hook files match inspected source; seven focused upstream checks passed. Full-mode skill read and explicitly applied in this conversation. Automatic hooks in a future native Codex thread require the upstream trust/startup workflow and have not been claimed active here.
 - Both installations preserve pre-existing Codex configuration. They are installed in this cloud environment, not on the user's personal computer. Plugin listing is installation evidence, not evidence of automatic hook execution.
 - Independent builder check of this draft returned: “nothing important left.” This is a design review, not a product acceptance result.
-- Design approval requested; implementation, logo generation and finalized README remain pending. The current product score has not changed.
+- The user approved this in-place design and implementation on 2026-10-28. Application 0.3.0, the original logo and rewritten README are implemented on `codex/product-excellence`. Final review corrections and evidence are tracked in the [implementation plan](../plans/2026-10-28-product-excellence.md) and [release review](../../RELEASE_REVIEW.md). Historical design-stage status above is not the current implementation status.

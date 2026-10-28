@@ -13,13 +13,13 @@ This is a local implementation candidate for the approved in-place upgrade. Appl
 
 ## Verification record
 
-Pre-review integration verification: **312 tests passed, two skipped** in 21.31 seconds; JavaScript syntax and diff whitespace checks passed. The whole-branch independent review follows this verification. The two skips are an opt-in live historical-network test and a redundant interface-gap sentinel. A skipped historical network test is not a successful archive backfill test.
+Final integration verification after the correction wave: **317 tests passed, two skipped** in 21.71 seconds; JavaScript syntax, compilation and diff whitespace checks passed. The initial whole-branch review and its focused correction review are recorded in the [review record](reviews/2026-10-28-final-review.md). The two skips are an opt-in live historical-network test and a redundant interface-gap sentinel. A skipped historical network test is not a successful archive backfill test.
 
-- Installed-wheel smoke succeeded outside the checkout: console command, health, packaged HTML/JS/logo and synthetic API.
+- Installed-wheel smoke succeeded outside the checkout: console command, health, packaged HTML/JS/logo and synthetic API. A separate clean virtual environment also resolved the pinned dependencies from the package index and passed the installed command/assets/API check on Python 3.12.14; this does not establish every supported platform.
 - Extended Chromium browser smoke succeeded at 360, 390, 768, 1280, 1440 and 1920px widths, plus a narrow zoom-equivalent layout. It checks keyboard/touch, exports, fullscreen, error recovery, shared Auto bars, replay cancellation/context and time-zoom limits.
 - Final default phone chart top measured **283px**, versus approximately **960px** in the previous demo review. The chart is visible in the first 390x844 viewport; no horizontal overflow was observed.
-- A single live OKX BTC/24h smoke returned native base-OI accounting with 288/288 observed candle/OI/flow rows and a successful readiness response. End-to-end request time in that run was approximately 1.75 seconds. This is a spot check, not an SLA or long-run completeness result.
-- Benchmark chart and raw samples are in [assets/benchmark.json](assets/benchmark.json). Seven repeated synthetic cases per model/range exclude exchange and HTTP latency. Bar counts and environment are recorded; it is not a model-accuracy chart.
+- A live OKX BTC/24h smoke returned native base-OI accounting with 288/288 observed candle/OI/flow rows and a successful readiness response, in approximately 1.75 seconds. After the final chronology correction, separate three-bar 12-hour and daily adapter spot checks returned UTC-aligned opens and complete candle/OI/flow masks in approximately 0.793 and 0.602 seconds. These support endpoint compatibility, not an SLA or long-history completeness result.
+- Benchmark chart and raw samples are in [assets/benchmark.json](assets/benchmark.json). Nine model/range cases each have seven cached-source repetitions and exclude exchange/HTTP latency. A separate fresh local server records a cold request, five warm repeats, an eight-client burst, status/error counts, transfer sizes and Linux process memory. Hardware, workload, predeclared local budgets and child cleanup are recorded. These are small synthetic workloads, not model-accuracy or maximum-load evidence.
 - OpenAPI response schema was checked against an actual synthetic feature envelope. CI is configured in source; remote CI execution is a separate event.
 
 ## Independent review and fixes
@@ -29,6 +29,8 @@ A core reviewer checked causal accounting, data quality and research contracts. 
 A separate interface reviewer reproduced four behavioral defects despite the original smoke passing: a late old-model replay response, a pending replay load surviving Live, shared Auto links inheriting saved custom bars, and a time-zoom minimum that was not applied. All four received deterministic regressions and fixes. Extended tests also cover rapid frame selection and late failed span responses.
 
 Runtime review added bounded connection workers, cooperative source/cache waits, stricter live freshness, receipt-independent semantic fingerprints, user cache location and transfer/decompression caps.
+
+The final whole-branch reviewer found two additional defects: UTC+8 OKX long candles entering earlier UTC bars, and pending selections changing exported PNG provenance before the displayed data changed. The independent scoped re-review accepted both fixes with no remaining material scoped concern. Both were corrected in one wave: candles/OI/taker now use supported UTC periods and closed-interval validation, and PNG/JSON exports identify the displayed payload. New browser cases hold model, market and replay responses and exercise failed selections. The benchmark now supplies the previously missing cold/warm/concurrent HTTP and observed-memory evidence with explicit small-workload limits.
 
 ## Every category reassessed
 

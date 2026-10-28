@@ -95,6 +95,94 @@ def replay_regressions(context, url: str, demo: dict) -> None:
     assert not failures, "; ".join(failures)
 
 
+def export_identity_regressions(context, url: str, demo: dict, output: Path) -> None:
+    """Exports retain displayed identity while model/market/replay requests wait."""
+    failures = []
+    for case in ("model", "market", "replay"):
+        page = context.new_page()
+        page.add_init_script("""
+            const originalFetch = window.fetch;
+            window.exportResponses = [];
+            window.fetch = async (...args) => {
+                const response = await originalFetch(...args);
+                if (window.holdExports && new URL(args[0], location.href).pathname === '/api/heatmap')
+                    return new Promise(resolve => window.exportResponses.push(() => resolve(response)));
+                return response;
+            };
+        """)
+        first = int(demo["as_of"] / 1000)
+        exchange = "binance" if case == "replay" else "demo"
+        def payload_route(route):
+            params = parse_qs(urlparse(route.request.url).query)
+            if params.get("model") == ["2"] or params.get("symbol") == ["ETH"]:
+                route.fulfill(status=503, json={"error": "Held selection failed deterministically"})
+                return
+            payload = dict(demo)
+            payload.update(exchange=exchange, coin="BTC", range="24h", mode="pair",
+                title="Displayed fixture BTC", asof=first*1000 if case == "replay" else None,
+                replay=params.get("replay") == ["1"])
+            route.fulfill(json=payload)
+        page.route("**/api/heatmap?*", payload_route)
+        page.route("**/api/replay?*", lambda route: route.fulfill(json={
+            "first_asof": first*1000, "bar_seconds": 300, "frames": 3, "days": 1, "note": "Export identity fixture"}))
+        try:
+            page.goto(url + f"/?exchange={exchange}&mode=pair&coin=BTC&range=24h&model=1" + (f"&asof={first}" if case == "replay" else ""))
+            page.wait_for_function("state.data !== null")
+            if case == "replay":
+                page.evaluate("() => { void startReplay(false); }")
+                page.wait_for_function("state.replay && state.data.replay")
+            page.evaluate("window.holdExports = true")
+            if case == "market":
+                page.evaluate("() => { state.coin = 'ETH'; state.exchange = 'okx'; state.range = '7d'; persist(); void load('coin'); }")
+            else:
+                page.locator("#model-settings").evaluate("e => e.open = true")
+                page.locator('[data-model="2"]').click()
+            page.wait_for_function("window.exportResponses.length > 0")
+            assert page.evaluate("state.data.model.id === 1 && state.data.coin === 'BTC'")
+            page.evaluate("""() => {
+                window.exportDrawnLabels = [];
+                const original = CanvasRenderingContext2D.prototype.fillText;
+                CanvasRenderingContext2D.prototype.fillText = function(text, ...args) {
+                    if (this.canvas !== document.getElementById('chart')) window.exportDrawnLabels.push(text);
+                    return original.call(this, text, ...args);
+                };
+            }""")
+            with page.expect_download() as png:
+                page.locator('#shot').click()
+            expected = f"{exchange}-btc-24h-model1"
+            png.value.save_as(output / f"pending-{case}.png")
+            assert png.value.suggested_filename == expected + '.png', "PNG filename describes pending selection"
+            labels = page.evaluate("window.exportDrawnLabels")
+            assert 'Displayed fixture BTC' in labels, "PNG title does not describe displayed payload"
+            assert any('Wide clusters scenario' in label for label in labels), "PNG scenario describes pending selection"
+            assert not any('Tight magnets scenario' in label for label in labels)
+            page.locator('#research-settings').evaluate('e => e.open = true')
+            with page.expect_download() as exported:
+                page.locator('#export').click()
+            target = output / f"pending-{case}.json"
+            exported.value.save_as(target)
+            assert exported.value.suggested_filename == 'open-liq-' + expected + '-research.json', "JSON filename describes pending selection"
+            document = json.loads(target.read_text())
+            assert document['payload']['coin'] == 'BTC' and document['payload']['model']['id'] == 1
+            displayed_settings = parse_qs(urlparse(document['settings_url']).query)
+            assert displayed_settings['model'] == ['1'] and displayed_settings['coin'] == ['BTC']
+            assert displayed_settings['exchange'] == [exchange] and displayed_settings['range'] == ['24h']
+            assert document['selected_settings_url'] != document['settings_url']
+            page.evaluate("window.holdExports = false; window.exportResponses.splice(0).forEach(release => release())")
+            page.wait_for_function("state.data === null")
+            assert page.evaluate("""() => {
+                let downloads = 0;
+                downloadFile = () => { downloads += 1; };
+                snapshot(); exportResearch();
+                return downloads === 0;
+            }"""), "Failed selection exports without a displayed dataset"
+        except AssertionError as error:
+            failures.append(f"{case}: {error}")
+        finally:
+            page.close()
+    assert not failures, '; '.join(failures)
+
+
 def run(url: str, output: Path) -> None:
     output.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
@@ -190,6 +278,7 @@ def run(url: str, output: Path) -> None:
         # The replay protocol is exercised offline with real demo frames. No archive download.
         demo = page.request.get(url + "/api/heatmap?exchange=demo&symbol=BTC&range=24h&model=1").json()
         replay_regressions(context, url, demo)
+        export_identity_regressions(context, url, demo, output)
         replay_page = context.new_page()
         replay_page.on("pageerror", lambda error: errors.append(str(error)))
         first = int(demo["as_of"] / 1000)

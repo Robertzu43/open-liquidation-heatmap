@@ -1114,11 +1114,29 @@ function resize() {
 function provenanceLines() {
   const data = state.data;
   return [
-    $("title").textContent,
-    `Open Liq · ${MODEL_NAMES[state.model]} scenario · estimated USD exposure, not exchange position records`,
+    data.title,
+    `Open Liq · ${data.model.name || MODEL_NAMES[data.model.id] || "Unknown"} scenario · estimated USD exposure, not exchange position records`,
     `Source ${data.source} · event/bar ${fmtStamp(data.as_of, true)} · generated ${fmtStamp(data.generated_at, true)}`,
     `Model ${data.model_version || (data.model || {}).version || "unversioned"} · revision ${data.data_revision || data.data_fingerprint || "not provided"}`,
   ];
+}
+
+function displayedExportStem() {
+  const data = state.data;
+  return `${data.exchange}-${data.coin}-${data.range}-model${data.model.id}`.toLowerCase();
+}
+
+function displayedSettingsUrl() {
+  const data = state.data;
+  const url = new URL(location.href);
+  for (const [key, value] of Object.entries({exchange: data.exchange, coin: data.coin, range: data.range, model: data.model.id, mode: data.mode})) {
+    url.searchParams.set(key, String(value));
+  }
+  if (data.exchange === "binance" && data.mode === "pair" && data.bar) url.searchParams.set("bar", data.bar);
+  else url.searchParams.delete("bar");
+  if (data.asof != null) url.searchParams.set("asof", String(Math.floor(data.asof / 1000)));
+  else url.searchParams.delete("asof");
+  return url.toString();
 }
 
 function snapshot() {
@@ -1138,7 +1156,7 @@ function snapshot() {
     ctx.font = index === 0 ? "16px sans-serif" : "11px sans-serif";
     ctx.fillText(line, 16, 25 + index * 23, width - 32);
   });
-  downloadFile(out.toDataURL("image/png"), `${state.exchange}-${state.coin}-${state.range}-model${state.model}.png`.toLowerCase());
+  downloadFile(out.toDataURL("image/png"), `${displayedExportStem()}.png`);
   announce("PNG snapshot exported with source and model provenance.");
 }
 
@@ -1154,9 +1172,9 @@ function downloadFile(href, name) {
 function exportResearch() {
   if (!state.data) return;
   const payload = Object.fromEntries(Object.entries(state.data).filter(([key]) => !key.endsWith("A")));
-  const document = { exported_at: new Date().toISOString(), settings_url: location.href, disclaimer: "Estimated exposure; not exchange position records.", payload };
+  const document = { exported_at: new Date().toISOString(), settings_url: displayedSettingsUrl(), selected_settings_url: location.href, disclaimer: "Estimated exposure; not exchange position records.", payload };
   const href = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2)], {type: "application/json"}));
-  downloadFile(href, `open-liq-${state.coin.toLowerCase()}-research.json`);
+  downloadFile(href, `open-liq-${displayedExportStem()}-research.json`);
   setTimeout(() => URL.revokeObjectURL(href), 1000);
   announce("Research JSON exported with source payload and provenance.");
 }

@@ -256,3 +256,72 @@ def test_visible_tail_keeps_full_history_state_and_tier_snapshot(model_id):
 def test_visible_bars_must_fit_loaded_history(visible_bars):
     with pytest.raises(ValueError,match='visible_bars'):
         build_heatmap(series([1000,2000,3000],base=[10,20,30]),1,visible_bars=visible_bars)
+
+
+@pytest.mark.parametrize('bar,seconds,candle_period,offset_hours',[
+    ('12h',43200,'12Hutc',4),('1d',86400,'1Dutc',16)])
+def test_okx_long_bars_request_utc_and_reject_offset_or_unconfirmed_candles(monkeypatch,bar,seconds,candle_period,offset_hours):
+    from liqmap import data
+    base = 1792886400000  # 2026-10-25 00:00:00 UTC
+    grid = base + np.arange(5)*seconds*1000
+    monkeypatch.setattr(data,'_window',lambda spec:grid)
+    monkeypatch.setattr(data.time,'time',lambda:(int(grid[-1])+seconds*1000)/1000)
+    calls = []
+    candles = [[str(t),'100','101','99','100','1','1','10','1'] for t in grid]
+    candles[2][0] = str(int(grid[2])+offset_hours*3600000)
+    candles[2][2] = '1000'  # Misaligned candle must not sweep earlier exact state.
+    candles[3][8] = '0'
+    def pages(path,params,*args):
+        calls.append((path,params))
+        if path.endswith('open-interest-history'):
+            return [[str(t),'1',str(10+i),str((10+i)*100)] for i,t in enumerate(grid)]
+        if path.endswith('taker-volume-contract'):
+            return [[str(t),'1','3'] for t in grid]
+        return candles
+    monkeypatch.setattr(data,'_okx_pages',pages)
+    loaded = data.fetch_okx('BTC','BTCUSDT',{'key':'fixture','bar':bar,'bar_seconds':seconds,'seconds':seconds*5})
+    np.testing.assert_array_equal(loaded.series.candle_observed,[True,True,False,False,True])
+    assert loaded.series.high[2] != 1000
+    assert loaded.series.long_share[0] == .75
+    for path,params in calls:
+        if path.endswith('candles'):
+            assert params['bar'] == candle_period
+        else:
+            assert params['period'] == candle_period
+
+
+@pytest.mark.parametrize('bar,seconds',[('12h',43200),('1d',86400)])
+def test_okx_even_confirmed_candle_cannot_close_after_request_cutoff(monkeypatch,bar,seconds):
+    from liqmap import data
+    grid = 1792886400000 + np.arange(3)*seconds*1000
+    cutoff_ms = int(grid[-1]) + seconds*1000 - 1
+    monkeypatch.setattr(data,'_window',lambda spec:grid)
+    monkeypatch.setattr(data.time,'time',lambda:cutoff_ms/1000)
+    def pages(path,*args):
+        if path.endswith('open-interest-history'):
+            return [[str(t),'1','10','1000'] for t in grid]
+        if path.endswith('taker-volume-contract'):
+            return []
+        return [[str(t),'100','101','99','100','1','1','10','1'] for t in grid]
+    monkeypatch.setattr(data,'_okx_pages',pages)
+    loaded = data.fetch_okx('BTC','BTCUSDT',{'key':'fixture','bar':bar,'bar_seconds':seconds,'seconds':seconds*3})
+    assert loaded.series.times.tolist() == grid[:2].tolist()
+    assert int(loaded.series.times[-1])+seconds*1000 <= cutoff_ms
+
+
+def test_okx_statistics_use_matching_utc_intervals_without_borrowing_flow(monkeypatch):
+    from liqmap import data
+    seconds = 86400
+    grid = 1792886400000 + np.arange(4)*seconds*1000
+    monkeypatch.setattr(data,'_window',lambda spec:grid)
+    monkeypatch.setattr(data.time,'time',lambda:(int(grid[-1])+seconds*1000)/1000)
+    def pages(path,params,*args):
+        if path.endswith('open-interest-history'):
+            return [[str(t+(1 if i==2 else 0)),'1',str(10+i),str((10+i)*100)] for i,t in enumerate(grid)]
+        if path.endswith('taker-volume-contract'):
+            return [[str(t+(1 if i==1 else 0)),'1','3'] for i,t in enumerate(grid)]
+        return [[str(t),'100','101','99','100','1','1','10','1'] for t in grid]
+    monkeypatch.setattr(data,'_okx_pages',pages)
+    loaded = data.fetch_okx('BTC','BTCUSDT',{'key':'fixture','bar':'1d','bar_seconds':seconds,'seconds':seconds*4})
+    np.testing.assert_array_equal(loaded.series.oi_observed,[True,True,False,True])
+    np.testing.assert_array_equal(loaded.series.flow_observed,[True,False,False,True])

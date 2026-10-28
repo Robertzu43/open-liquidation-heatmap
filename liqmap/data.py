@@ -57,7 +57,10 @@ RANGES: dict[str, dict] = {
     "1y": {"seconds": 365 * 86400, "bar": "1d", "bar_seconds": 86400},
     "2y": {"seconds": 730 * 86400, "bar": "1d", "bar_seconds": 86400},
 }
-OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12H", "1d": "1D"}
+# These endpoint families independently document UTC periods. Keep their
+# parameter mappings explicit: bare 12H/1D use UTC+8 on OKX.
+OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12Hutc", "1d": "1Dutc"}
+OKX_STAT_PERIOD = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12Hutc", "1d": "1Dutc"}
 # Bars a past Binance view may use. Open interest is published every 5 minutes.
 BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
 MAX_BARS = 3000
@@ -741,11 +744,15 @@ def _okx_pages(path: str, params: dict, start_ms: int, limit: int, cursor_key: s
 
 
 def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
+    cutoff_ms = int(time.time() * 1000)
     bar = OKX_BAR[spec["bar"]]
+    period = OKX_STAT_PERIOD[spec["bar"]]
     inst = f"{coin}-USDT-SWAP"
     grid = _window(spec)
     start_ms = int(grid[0]) - int(spec["bar_seconds"]) * 1000
-    end_ms = int(grid[-1]) + int(spec["bar_seconds"]) * 1000
+    bar_ms = int(spec["bar_seconds"]) * 1000
+    # Only exact source intervals represented by this UTC grid may contribute.
+    closed_opens = {int(t) for t in grid if int(t) + bar_ms <= cutoff_ms}
     candles = _okx_pages(
         "/api/v5/market/candles",
         {"instId": inst, "bar": bar},
@@ -773,7 +780,7 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
         candles = [merged[key] for key in sorted(merged)]
     oi_rows = _okx_pages(
         "/api/v5/rubik/stat/contracts/open-interest-history",
-        {"instId": inst, "period": bar},
+        {"instId": inst, "period": period},
         start_ms,
         100,
         "end",
@@ -782,7 +789,7 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
     try:
         taker_rows = _okx_pages(
             "/api/v5/rubik/stat/taker-volume-contract",
-            {"instId": inst, "period": bar},
+            {"instId": inst, "period": period},
             start_ms,
             100,
             "end",
@@ -799,28 +806,22 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
     for row in taker_rows:
         # [ts, sellVol, buyVol]
         try:
+            ts = int(row[0])
+            if ts not in closed_opens:
+                continue
             sell = float(row[1])
             buy = float(row[2])
         except (TypeError, ValueError, IndexError):
             continue
         total = buy + sell
         if total > 0:
-            taker_at[int(row[0])] = buy / total
-    taker_times = sorted(taker_at)
-    bar_ms = int(spec["bar_seconds"]) * 1000
-
-    def share_near(ts: int) -> float:
-        pos = int(np.searchsorted(taker_times, ts, side="right")) - 1
-        if pos < 0 or ts - taker_times[pos] > bar_ms:
-            return math.nan
-        return taker_at[taker_times[pos]]
-
+            taker_at[ts] = buy / total
     candle_records = []
     for row in candles:
-        ts = int(row[0])
-        if ts < start_ms or ts >= end_ms:
-            continue
         try:
+            ts = int(row[0])
+            if ts not in closed_opens or str(row[8]) != "1":
+                continue
             candle_records.append(
                 (ts, float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[7]))
             )
@@ -828,14 +829,14 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
             continue
     oi_records = []
     for row in oi_rows:
-        ts = int(row[0])
-        if ts < start_ms or ts >= end_ms:
-            continue
         try:
+            ts = int(row[0])
+            if ts not in closed_opens:
+                continue
             oi_usd = float(row[3])
         except (TypeError, ValueError, IndexError):
             continue
-        oi_records.append((ts, oi_usd, share_near(ts), _native_number(row[2] if len(row) > 2 else None)))
+        oi_records.append((ts, oi_usd, taker_at.get(ts, math.nan), _native_number(row[2] if len(row) > 2 else None)))
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi, share = fold_oi(oi_records, grid, bar_ms)
     loaded = finalize_series(

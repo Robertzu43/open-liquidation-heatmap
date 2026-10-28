@@ -114,7 +114,7 @@ The model assumes leverage allocations, simplified isolated maintenance margin a
 
 ![Offline synthetic workload benchmark: model generation latency and compressed payload sizes](docs/assets/benchmark.png)
 
-This is a **local synthetic workload measurement**, with cached source data and freshly computed models/payloads. It excludes HTTP and exchange latency and is neither an uptime claim nor an accuracy benchmark. The chart shows medians and observed min/max over seven repetitions per case. Different ranges contain different bar counts.
+The chart measures **local synthetic workloads**, with cached source data and freshly computed models/payloads. It excludes HTTP and exchange latency. It shows medians and observed min/max over seven repetitions per case; different ranges contain different bar counts. The raw report also records a fresh local server’s cold/warm HTTP requests, a concurrent burst and observed memory, against declared small-workload budgets. Neither measurement establishes a production SLA, maximum-load bound or model accuracy.
 
 [Raw environment and samples](docs/assets/benchmark.json) · Reproduce with `python scripts/benchmark.py`.
 

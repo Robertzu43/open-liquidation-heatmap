@@ -16,6 +16,8 @@ Venue components retain independent baselines and cohort inventories. Aggregatio
 
 ## Causal chronology
 
+OKX candle, OI and taker requests use UTC-aligned periods, including explicit `12Hutc` and `1Dutc` for long bars. Candles must be confirmed and match a complete requested interval ending by the captured request cutoff. Misaligned, unfinished or missing rows remain unobserved; adjacent taker intervals are not substituted.
+
 For each closed bar, the engine:
 
 1. Applies the observed trade-price high/low to cohorts that already existed before that bar.
