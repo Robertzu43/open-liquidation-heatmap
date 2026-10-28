@@ -5,3 +5,6 @@ __pycache__/
 *.npz
 .venv/
 .pytest_cache/
+.worktrees/
+.superpowers/
+.hypothesis/
