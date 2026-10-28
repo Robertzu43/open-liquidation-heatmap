@@ -1,7 +1,10 @@
 /* Open liquidation heatmap. The server sends little-endian float32 grids.
    Threshold only remaps color; it does not refetch. */
 
-const TZ = "America/Bogota";
+const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const MODEL_NAMES = { 1: "Wide clusters", 2: "Tight magnets", 3: "Flow skew" };
+const timeZone = () => state.timezone === "local" ? localZone : "UTC";
+const zoneLabel = () => state.timezone === "local" ? localZone : "UTC";
 const STORE = "open-liqmap-v1";
 const THEMES = {
   ember: {
@@ -35,6 +38,7 @@ const state = {
   showMap: false,
   showCandles: true,
   auto: 0,
+  timezone: "utc",
   data: null,
   view: { i0: -0.5, i1: 10, lo: 0, hi: 1 },
   timeFull: true,
@@ -54,6 +58,9 @@ const state = {
   hover: null,
   drag: null,
   models: [],
+  replay: null,
+  replaySeq: 0,
+  replayController: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -65,7 +72,7 @@ const banner = $("banner");
 // Past views and bar choice are Binance pair-only; bars must give 2 to 3,000 per range.
 const BAR_S = { "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400 };
 const RANGE_S = { "12h": 43200, "24h": 86400, "3d": 259200, "7d": 604800, "30d": 2592000, "90d": 7776000, "180d": 15552000, "1y": 31536000, "2y": 63072000 };
-const COT_OFFSET_S = 5 * 3600;
+
 
 function barFits(range, bar) {
   if (!bar) return true;
@@ -78,13 +85,14 @@ function historyOn() {
 }
 
 function cotInputValue(seconds) {
-  // datetime-local text for a unix time, read on the COT (UTC−5) clock.
-  return new Date((seconds - COT_OFFSET_S) * 1000).toISOString().slice(0, 16);
+  const date = new Date(seconds * 1000);
+  if (state.timezone !== "local") return date.toISOString().slice(0, 16);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
 function parseCotInput(text) {
-  const ms = Date.parse(text + ":00Z");
-  return Number.isFinite(ms) ? Math.floor(ms / 1000) + COT_OFFSET_S : null;
+  const ms = Date.parse(text + (state.timezone === "local" ? "" : "Z"));
+  return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 }
 
 function clamp(value, lo, hi) {
@@ -129,8 +137,8 @@ function decodeF32(b64) {
 function fmtUsd(value) {
   const abs = Math.abs(Number(value) || 0);
   const sign = value < 0 ? "-" : "";
-  if (abs >= 1e9) return sign + "$" + (abs / 1e9).toFixed(2) + "B";
-  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(2) + "M";
+  if (abs >= 1e9) return sign + "$" + (abs / 1e9).toFixed(1) + "B";
+  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
   if (abs >= 1e3) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
   return sign + "$" + abs.toFixed(0);
 }
@@ -146,7 +154,7 @@ function fmtPx(value) {
 
 function fmtStamp(ms, withTime) {
   const opts = {
-    timeZone: TZ,
+    timeZone: timeZone(),
     day: "2-digit",
     month: "short",
     year: "numeric",
@@ -156,14 +164,14 @@ function fmtStamp(ms, withTime) {
     opts.hour = "2-digit";
     opts.minute = "2-digit";
   }
-  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " COT";
+  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " " + zoneLabel();
 }
 
 function fmtAxis(ms, withTime, narrow) {
-  const opts = { timeZone: TZ, hourCycle: "h23" };
+  const opts = { timeZone: timeZone(), hourCycle: "h23" };
   if (narrow && withTime) {
     const parts = new Intl.DateTimeFormat("en-GB", {
-      timeZone: TZ, day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+      timeZone: timeZone(), day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
     }).formatToParts(new Date(ms));
     const pick = (type) => parts.find((part) => part.type === type).value;
     return pick("day") + " " + pick("hour") + ":" + pick("minute");
@@ -217,10 +225,12 @@ function persist() {
       showMap: state.showMap,
       showCandles: state.showCandles,
       auto: state.auto,
+      timezone: state.timezone,
     }));
   } catch (_err) {
     /* private mode */
   }
+  updateUrl();
 }
 
 function restore() {
@@ -240,11 +250,45 @@ function restore() {
     if (Number.isFinite(saved.threshold)) state.threshold = clamp(saved.threshold, 0, 1);
     if (typeof saved.showMap === "boolean") state.showMap = saved.showMap;
     if (typeof saved.showCandles === "boolean") state.showCandles = saved.showCandles;
+    if (["utc", "local"].includes(saved.timezone)) state.timezone = saved.timezone;
     if (saved.auto != null) state.auto = Number(saved.auto) || 0;
   } catch (_err) {
     /* ignore broken storage */
   }
 }
+
+function restoreUrl() {
+  const params = new URLSearchParams(location.search);
+  if (["okx", "binance", "demo"].includes(params.get("exchange"))) state.exchange = params.get("exchange");
+  if (/^[A-Za-z0-9]{1,16}$/.test(params.get("coin") || "")) state.coin = params.get("coin").toUpperCase();
+  if (params.get("range") in RANGE_S) state.range = params.get("range");
+  if ([1, 2, 3].includes(Number(params.get("model")))) state.model = Number(params.get("model"));
+  if (["pair", "symbol"].includes(params.get("mode"))) state.mode = params.get("mode");
+  if (THEMES[params.get("theme")]) state.theme = params.get("theme");
+  if (["utc", "local"].includes(params.get("tz"))) state.timezone = params.get("tz");
+  if (params.has("threshold") && Number.isFinite(Number(params.get("threshold")))) state.threshold = clamp(Number(params.get("threshold")), 0, 1);
+  if (params.has("profile")) state.showMap = params.get("profile") === "1";
+  if (params.has("candles")) state.showCandles = params.get("candles") !== "0";
+  if (params.has("range") || params.has("bar")) state.bar = "";
+  if (params.get("bar") in BAR_S && barFits(state.range, params.get("bar"))) state.bar = params.get("bar");
+  if (!barFits(state.range, state.bar)) state.bar = "";
+  const asof = Number(params.get("asof"));
+  if (historyOn() && asof > 0 && Number.isSafeInteger(asof)) state.asof = asof;
+}
+
+function updateUrl() {
+  const params = mapParams();
+  params.delete("symbol");
+  params.set("coin", state.coin);
+  params.set("tz", state.timezone);
+  params.set("theme", state.theme);
+  params.set("threshold", String(state.threshold));
+  params.set("profile", state.showMap ? "1" : "0");
+  params.set("candles", state.showCandles ? "1" : "0");
+  history.replaceState(null, "", "?" + params.toString());
+}
+
+function announce(message) { $("announcement").textContent = message; }
 
 function syncControls() {
   $("exchange").value = state.exchange;
@@ -255,18 +299,26 @@ function syncControls() {
   $("liqmap").checked = state.showMap;
   $("candles").checked = state.showCandles;
   $("auto").value = String(state.auto);
+  $("timezone").value = state.timezone;
+  $("timezone-note").textContent = zoneLabel() + " · event times";
+  document.querySelectorAll(".tz-label").forEach(el => { el.textContent = state.timezone === "local" ? "local" : "UTC"; });
+  $("model-name").textContent = MODEL_NAMES[state.model];
   document.querySelectorAll(".tab").forEach((button) => {
     const on = Number(button.dataset.model) === state.model;
     button.classList.toggle("on", on);
-    button.setAttribute("aria-selected", on ? "true" : "false");
+    button.setAttribute("aria-pressed", on ? "true" : "false");
   });
   document.querySelectorAll("#mode-toggle button").forEach((button) => {
     button.classList.toggle("on", button.dataset.mode === state.mode);
+    button.setAttribute("aria-pressed", String(button.dataset.mode === state.mode));
   });
   const symbolMode = state.mode === "symbol";
+  $("exchange").value = symbolMode ? "aggregate" : state.exchange;
   $("exchange").disabled = symbolMode;
   $("exchange-field").classList.toggle("disabled", symbolMode);
   const canTravel = historyOn();
+  $("history-controls").hidden = !canTravel;
+  $("history-note").textContent = canTravel ? "Replay uses reconstructed Binance archives. Set an As of and an optional end time. Archive availability is not proof of point-in-time collection." : "Historical as-of and replay are available for Binance single-venue data. Choose Binance to explore reconstructed history.";
   $("bar").value = state.bar;
   $("bar").disabled = !canTravel;
   $("bar-field").classList.toggle("disabled", !canTravel);
@@ -277,6 +329,7 @@ function syncControls() {
   if ($("rp-load")) syncReplay();
   document.querySelectorAll(".swatch").forEach((button) => {
     button.classList.toggle("on", button.dataset.theme === state.theme);
+    button.setAttribute("aria-pressed", String(button.dataset.theme === state.theme));
   });
   const theme = THEMES[state.theme];
   const root = document.documentElement;
@@ -310,6 +363,7 @@ function buildSwatches() {
 function setLoading(on, label) {
   const el = $("loading");
   el.hidden = !on;
+  wrap.setAttribute("aria-busy", on ? "true" : "false");
   if (on) el.textContent = label || "Loading…";
 }
 
@@ -346,6 +400,7 @@ function mapParams(extra) {
 }
 
 async function load(reason) {
+  stopReplay();
   const seq = ++state.seq;
   if (state.controller) state.controller.abort();
   const controller = new AbortController();
@@ -369,6 +424,8 @@ async function load(reason) {
 }
 
 function fail(message) {
+  tip.hidden = true;
+  state.hover = null;
   state.data = null;
   state.heatCanvas = null;
   showBanner("error", [message]);
@@ -379,7 +436,13 @@ function fail(message) {
   $("levels").querySelector("tbody").innerHTML = "";
   $("resting").textContent = "";
   $("tags").innerHTML = "";
-  $("asof").textContent = "No map loaded";
+  $("asof").textContent = "No map loaded · refresh to retry";
+  $("data-status").textContent = "Data unavailable";
+  $("data-status").className = "status error";
+  $("provenance").textContent = "No current dataset. Refresh to retry the selected source.";
+  $("quality-detail").textContent = "";
+  $("chart-price").textContent = "";
+  announce("Data unavailable. " + message);
   drawMessage(message);
 }
 
@@ -421,10 +484,11 @@ function applyPayload(data) {
     "binance-live": "Binance live",
     "binance-vision": "Binance archive",
     demo: "Synthetic demo",
-    aggregate: "Aggregated fresh venues",
+    aggregate: "Venue aggregate",
   };
   const withTime = data.bar_seconds < 86400;
-  $("asof").textContent = `${sourceNames[data.source] || data.source} · last bar ${fmtStamp(data.as_of, withTime)} · updated ${fmtStamp(data.generated_at, true)}`;
+  $("asof").textContent = `${sourceNames[data.source] || data.source} · last bar ${fmtStamp(data.as_of, withTime)} · generated ${fmtStamp(data.generated_at, true)}`;
+  renderProvenance(data);
   const lines = [];
   if (data.asof) lines.push(`As of ${fmtStamp(data.asof, true)} · ${data.bar} bars`);
   (data.warnings || []).forEach((line) => lines.push(line));
@@ -434,13 +498,41 @@ function applyPayload(data) {
   showBanner(serious ? "warn" : "info", lines);
   renderAnalysis(data);
   renderHow(data.model);
-  canvas.setAttribute("aria-label", data.analysis.summary || data.title);
+  canvas.setAttribute("aria-label", (data.analysis || {}).summary || data.title);
+  announce("Loaded " + data.title + ". " + $("data-status").textContent);
   requestDraw();
+}
+
+function renderProvenance(data) {
+  const demo = data.source === "demo";
+  const quality = data.quality || {};
+  const status = quality.status || (data.stale ? "stale" : "reported");
+  const lag = Math.max(0, Math.round((Date.now() - data.as_of) / 60000));
+  const freshness = data.asof || /archive/.test(data.source) ? "Archive history" : data.stale ? "Stale source" : "Last bar " + (lag < 60 ? lag + "m" : Math.floor(lag / 60) + "h") + " ago";
+  $("data-status").textContent = demo ? "Synthetic demo" : freshness;
+  $("data-status").className = "status" + (demo || data.stale || status === "degraded" ? " warn" : "");
+  const model = data.model || {};
+  const metadata = data.model_metadata || {};
+  const version = data.model_version || model.version || "unversioned";
+  const revision = data.data_revision || data.data_fingerprint || (data.provenance || {}).data_revision || "not provided";
+  const sources = Array.isArray(data.sources) ? data.sources.join(", ") : (data.source || "unknown");
+  const shortRevision = String(revision).length > 28 ? String(revision).slice(0, 19) + "…" + String(revision).slice(-8) : revision;
+  $("provenance").title = "Full data revision: " + revision;
+  $("provenance").textContent = `${demo ? "Synthetic demonstration · no market observations" : "Source: " + sources} · last event/bar ${fmtStamp(data.as_of, true)} · generated ${fmtStamp(data.generated_at, true)} · model ${version} · revision ${shortRevision}`;
+  const coverage = quality.coverage || {};
+  const covered = [ ["candle_observed", "candles"], ["oi_observed", "open interest"] ].map(([key, label]) => {
+    const item = coverage[key];
+    return item && item.total > 0 ? `${Math.round(item.observed / item.total * 100)}% ${label} observed` : null;
+  }).filter(Boolean);
+  const history = metadata.insufficient_history ? ` Inventory starts at ${fmtStamp(metadata.warmup_anchor_ms || data.times[0], true)}; earlier positions are unknown.` : "";
+  $("quality-detail").textContent = `Quality: ${status}. ${demo ? "Use the demo to explore controls; its levels are not market evidence." : "Generation time is not observation freshness. " + covered.join(" · ") + ". Historical availability: " + (quality.historical_availability || "unknown") + "."}${history}`;
 }
 
 function renderAnalysis(data) {
   const analysis = data.analysis || {};
-  $("summary").textContent = analysis.summary || "";
+  $("summary").textContent = (analysis.summary || "").replace(/liquidity/gi, "exposure");
+  $("chart-price").textContent = analysis.price == null ? "" : "$" + fmtPx(analysis.price);
+  $("chart-context").textContent = rangeLabel(state.range) + " · " + (data.bar || "") + " · " + (state.timezone === "local" ? "Local" : "UTC");
   $("above").innerHTML = levelHtml(analysis.above);
   $("below").innerHTML = levelHtml(analysis.below);
   const imb = $("imbalance").querySelector("tbody");
@@ -453,7 +545,7 @@ function renderAnalysis(data) {
     const dist = (level.distance_pct >= 0 ? "+" : "") + Number(level.distance_pct).toFixed(2) + "%";
     return `<tr><td>${escapeHtml(level.side)}</td><td>${fmtPx(level.price)}</td><td>${dist}</td><td>${fmtUsd(level.usd)}</td></tr>`;
   }).join("");
-  $("resting").textContent = `Resting long ${fmtUsd(analysis.resting_long_usd || 0)} · resting short ${fmtUsd(analysis.resting_short_usd || 0)}`;
+  $("resting").textContent = `Modeled long ${fmtUsd(analysis.resting_long_usd || 0)} · short ${fmtUsd(analysis.resting_short_usd || 0)}`;
   const tags = $("tags");
   tags.innerHTML = "";
   (analysis.levels || []).slice(0, 4).forEach((level) => {
@@ -476,7 +568,7 @@ function renderHow(model) {
   if (!model) return;
   const weights = (model.weights || []).map((row) => `<li>${row.leverage}× · ${(row.weight * 100).toFixed(0)}%</li>`).join("");
   const flow = model.flow
-    ? "New open interest follows taker buy/sell when that print exists. Otherwise the split is even."
+    ? "New open interest uses the available flow prior where supported, with a neutral fallback. Account long/short ratios are not taker flow."
     : "New open interest is split evenly between longs and shorts.";
   $("how-body").innerHTML = `
     <p>${escapeHtml(model.blurb || "")}</p>
@@ -486,8 +578,9 @@ function renderHow(model) {
     <p>${flow} A later candle removes a shelf when price trades through it.</p>
     <p>Leverage mix</p>
     <ul>${weights}</ul>
-    <p>Per-bar decay ${model.decay}. Volume churn ${model.churn}. Kernel ${model.kernel.map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
-    <p>The color scale is relative to this window. It is not a count of real liquidations.</p>`;
+    <p>Elapsed-time decay basis ${escapeHtml(model.decay_basis || "see model metadata")}, coefficient ${model.decay}. Volume churn ${model.churn}. Kernel ${(model.kernel || []).map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
+    <p>The color scale is relative to this window. It is not a count of real liquidations.</p>
+    ${(state.data && Array.isArray(state.data.assumptions) ? state.data.assumptions : []).map(item => `<p>${escapeHtml(item)}</p>`).join("")}`;
 }
 
 function focusPrice(price) {
@@ -563,15 +656,9 @@ function clampView() {
   const n = data.times.length;
   let span = state.view.i1 - state.view.i0;
   span = clamp(span, Math.min(8, n), n);
-  if (state.view.i0 < -0.5) {
-    state.view.i0 = -0.5;
-    state.view.i1 = state.view.i0 + span;
-  }
-  if (state.view.i1 > n - 0.5) {
-    state.view.i1 = n - 0.5;
-    state.view.i0 = state.view.i1 - span;
-  }
-  if (state.view.i0 < -0.5) state.view.i0 = -0.5;
+  const timeMid = clamp((state.view.i0 + state.view.i1) / 2, -0.5 + span / 2, n - 0.5 - span / 2);
+  state.view.i0 = timeMid - span / 2;
+  state.view.i1 = timeMid + span / 2;
   const centers = data.centersA;
   const hardLo = centers[0];
   const hardHi = centers[centers.length - 1];
@@ -919,7 +1006,7 @@ function updateHover(clientX, clientY) {
   tip.innerHTML = `
     <div>${fmtStamp(data.times[index], withTime)}</div>
     <div>Price ${fmtPx(price)}</div>
-    <div>Liquidity ${fmtUsd(usd || 0)}</div>
+    <div>Est. entry exposure ${fmtUsd(usd || 0)}</div>
     <div>O ${fmtPx(data.openA[index])} H ${fmtPx(data.highA[index])}</div>
     <div>L ${fmtPx(data.lowA[index])} C ${fmtPx(data.closeA[index])}</div>`;
   const left = x + 14;
@@ -976,7 +1063,7 @@ function showLevels(body) {
     box.className = "tiers";
     tip.appendChild(box);
   }
-  box.innerHTML = rows || "<div>No resting tiers here</div>";
+  box.innerHTML = rows || "<div>No modeled tiers here</div>";
 }
 
 function zoomPrice(y, factor) {
@@ -1024,29 +1111,54 @@ function resize() {
   requestDraw();
 }
 
+function provenanceLines() {
+  const data = state.data;
+  return [
+    $("title").textContent,
+    `Open Liq · ${MODEL_NAMES[state.model]} scenario · estimated USD exposure, not exchange position records`,
+    `Source ${data.source} · event/bar ${fmtStamp(data.as_of, true)} · generated ${fmtStamp(data.generated_at, true)}`,
+    `Model ${data.model_version || (data.model || {}).version || "unversioned"} · revision ${data.data_revision || data.data_fingerprint || "not provided"}`,
+  ];
+}
+
 function snapshot() {
   if (!state.data) return;
-  const pad = 54;
   const out = document.createElement("canvas");
-  out.width = canvas.width;
-  out.height = canvas.height + Math.floor(pad * state.dpr);
+  const width = Math.max(state.cssW, 900);
+  const pad = 116;
+  out.width = Math.round(width * state.dpr);
+  out.height = canvas.height + Math.round(pad * state.dpr);
   const ctx = out.getContext("2d");
-  ctx.fillStyle = "#10120e";
-  ctx.fillRect(0, 0, out.width, out.height);
-  ctx.drawImage(canvas, 0, Math.floor(pad * state.dpr));
-  ctx.fillStyle = "#e7ecdf";
-  ctx.font = `${15 * state.dpr}px sans-serif`;
-  ctx.fillText($("title").textContent, 16 * state.dpr, 22 * state.dpr);
-  ctx.fillStyle = "#8f9a84";
-  ctx.font = `${12 * state.dpr}px sans-serif`;
-  ctx.fillText("Open Liq estimate · not exchange liquidation records", 16 * state.dpr, 42 * state.dpr);
+  ctx.scale(state.dpr, state.dpr);
+  ctx.fillStyle = "#0c100f";
+  ctx.fillRect(0, 0, width, out.height / state.dpr);
+  ctx.drawImage(canvas, 0, pad, state.cssW, state.cssH);
+  provenanceLines().forEach((line, index) => {
+    ctx.fillStyle = index === 0 ? "#e9eee8" : "#b5c2b3";
+    ctx.font = index === 0 ? "16px sans-serif" : "11px sans-serif";
+    ctx.fillText(line, 16, 25 + index * 23, width - 32);
+  });
+  downloadFile(out.toDataURL("image/png"), `${state.exchange}-${state.coin}-${state.range}-model${state.model}.png`.toLowerCase());
+  announce("PNG snapshot exported with source and model provenance.");
+}
+
+function downloadFile(href, name) {
   const link = document.createElement("a");
-  const name = `${state.exchange}-${state.coin}-${state.range}-model${state.model}.png`.toLowerCase();
-  link.href = out.toDataURL("image/png");
+  link.href = href;
   link.download = name;
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+function exportResearch() {
+  if (!state.data) return;
+  const payload = Object.fromEntries(Object.entries(state.data).filter(([key]) => !key.endsWith("A")));
+  const document = { exported_at: new Date().toISOString(), settings_url: location.href, disclaimer: "Estimated exposure; not exchange position records.", payload };
+  const href = URL.createObjectURL(new Blob([JSON.stringify(document, null, 2)], {type: "application/json"}));
+  downloadFile(href, `open-liq-${state.coin.toLowerCase()}-research.json`);
+  setTimeout(() => URL.revokeObjectURL(href), 1000);
+  announce("Research JSON exported with source payload and provenance.");
 }
 
 function setAuto(seconds) {
@@ -1090,6 +1202,12 @@ function syncReplay() {
 }
 
 function stopReplay() {
+  state.replaySeq += 1;
+  if (state.replayController) {
+    state.replayController.abort();
+    state.replayController = null;
+    setLoading(false);
+  }
   const r = state.replay;
   if (!r) return;
   r.gen += 1;
@@ -1102,20 +1220,21 @@ function stopReplay() {
 async function startReplay(keepIdx) {
   const prev = state.replay;
   const idx = keepIdx && prev ? prev.idx : 0;
-  if (prev) {
-    prev.gen += 1;
-    prev.controller.abort();
-  }
-  state.replay = null;
-  syncReplay();
+  stopReplay();
+  const seq = state.replaySeq;
+  const controller = new AbortController();
+  state.replayController = controller;
+  state.seq += 1;
+  if (state.controller) state.controller.abort();
   const toText = $("to-input").value;
   const params = new URLSearchParams({ symbol: state.coin, range: state.range, from: String(state.asof) });
   if (state.bar) params.set("bar", state.bar);
   if (toText) params.set("to", String(parseCotInput(toText)));
   setLoading(true, "Loading replay… the first load of a long span downloads one file per day and can take minutes");
   try {
-    const response = await fetch("/api/replay?" + params.toString());
+    const response = await fetch("/api/replay?" + params.toString(), {signal: controller.signal});
     const body = await response.json();
+    if (seq !== state.replaySeq) return;
     if (!response.ok) throw new Error(body.error || "Could not load the replay.");
     state.replay = {
       gen: 1,
@@ -1134,9 +1253,13 @@ async function startReplay(keepIdx) {
     syncReplay();
     await showFrame(state.replay.idx);
   } catch (err) {
+    if (err.name === "AbortError" || seq !== state.replaySeq) return;
     fail(err.message || "Could not load the replay.");
   } finally {
-    setLoading(false);
+    if (seq === state.replaySeq) {
+      state.replayController = null;
+      setLoading(false);
+    }
   }
 }
 
@@ -1153,7 +1276,7 @@ function fetchFrame(r, idx) {
     if (!response.ok) throw new Error(body.error || "Could not load this frame.");
     return body;
   });
-  promise.catch(() => r.cache.delete(idx));
+  promise.catch(() => { if (r.cache.get(idx) === promise) r.cache.delete(idx); });
   r.cache.set(idx, promise);
   return promise;
 }
@@ -1162,11 +1285,13 @@ async function showFrame(idx) {
   const r = state.replay;
   if (!r) return false;
   const gen = r.gen;
-  r.idx = clamp(idx, 0, r.frames - 1);
+  const context = mapParams().toString();
+  const frame = clamp(idx, 0, r.frames - 1);
+  r.idx = frame;
   syncReplay();
   try {
     const body = await fetchFrame(r, r.idx);
-    if (state.replay !== r || gen !== r.gen) return false;
+    if (state.replay !== r || gen !== r.gen || r.idx !== frame || context !== mapParams().toString()) return false;
     applyPayload(body);
     if (r.note && r.idx === 0) showBanner("info", [r.note]);
     for (const ahead of [r.idx + 1, r.idx + 2]) {
@@ -1177,7 +1302,7 @@ async function showFrame(idx) {
     }
     return true;
   } catch (err) {
-    if (err.name === "AbortError" || state.replay !== r) return false;
+    if (err.name === "AbortError" || state.replay !== r || gen !== r.gen || r.idx !== frame || context !== mapParams().toString()) return false;
     if (err.expired && !r.reloaded) {
       await startReplay(true);
       return false;
@@ -1264,8 +1389,13 @@ function wire() {
       syncControls();
       persist();
       if (state.replay) {
-        state.replay.cache.clear();
-        showFrame(state.replay.idx);
+        const r = state.replay;
+        r.gen += 1;
+        r.playing = false;
+        r.controller.abort();
+        r.controller = new AbortController();
+        r.cache.clear();
+        showFrame(r.idx);
       } else {
         load("model");
       }
@@ -1311,12 +1441,14 @@ function wire() {
     const text = $("asof-input").value;
     state.asof = text ? parseCotInput(text) : null;
     syncControls();
+    persist();
     load("asof");
   });
   $("live").addEventListener("click", () => {
     stopReplay();
     state.asof = null;
     syncControls();
+    persist();
     load("live");
   });
   const coin = $("coin");
@@ -1340,6 +1472,60 @@ function wire() {
   });
   $("refresh").addEventListener("click", () => load("refresh"));
   $("shot").addEventListener("click", snapshot);
+  $("export").addEventListener("click", exportResearch);
+  $("share").addEventListener("click", async () => {
+    updateUrl();
+    try {
+      await navigator.clipboard.writeText(location.href);
+      $("share").textContent = "Link copied";
+      announce("Settings link copied.");
+    } catch (_err) {
+      $("share").textContent = "Copy link from address bar";
+      announce("Settings saved in the address bar. Copy its URL to share.");
+    }
+  });
+  $("timezone").addEventListener("change", () => {
+    const to = $("to-input").value ? parseCotInput($("to-input").value) : null;
+    state.timezone = $("timezone").value;
+    if (to != null) $("to-input").value = cotInputValue(to);
+    syncControls();
+    persist();
+    if (state.data) applyPayload(state.data);
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") document.querySelectorAll(".advanced > details[open]").forEach(panel => { panel.open = false; panel.querySelector("summary").focus(); });
+  });
+  document.querySelectorAll(".advanced > details").forEach(panel => panel.addEventListener("toggle", () => {
+    if (panel.open) document.querySelectorAll(".advanced > details").forEach(other => { if (other !== panel) other.open = false; });
+  }));
+  const zoom = factor => {
+    if (!state.data || !state.layout) return;
+    if ($("zoom-axis").value === "time") zoomTime(state.layout.plotX + state.layout.plotW / 2, factor);
+    else zoomPrice(state.layout.plotY + state.layout.plotH / 2, factor);
+    requestDraw();
+  };
+  $("zoom-in").addEventListener("click", () => zoom(1 / 1.25));
+  $("zoom-out").addEventListener("click", () => zoom(1.25));
+  $("reset").addEventListener("click", resetView);
+  canvas.addEventListener("keydown", event => {
+    if (!state.data) return;
+    if (["+", "=", "-", "0", "Home", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(event.key)) event.preventDefault();
+    if (["+", "=", "-"].includes(event.key)) {
+      const factor = event.key === "-" ? 1.25 : 1 / 1.25;
+      zoom(factor);
+    } else if (["0", "Home"].includes(event.key)) resetView();
+    else if (event.key.startsWith("Arrow") && !state.replay) {
+      if (["ArrowUp", "ArrowDown"].includes(event.key)) {
+        const delta = (state.view.hi - state.view.lo) * .1 * (event.key === "ArrowUp" ? 1 : -1);
+        state.view.lo += delta; state.view.hi += delta; state.priceDirty = true;
+      } else {
+        const delta = (state.view.i1 - state.view.i0) * .1 * (event.key === "ArrowRight" ? 1 : -1);
+        state.view.i0 += delta; state.view.i1 += delta; state.timeFull = false;
+      }
+      clampView();
+    }
+    requestDraw();
+  });
   $("full").addEventListener("click", () => {
     const card = $("chart-card");
     if (!document.fullscreenElement) card.requestFullscreen().catch(() => {});
@@ -1398,6 +1584,7 @@ function wire() {
     if (!state.data || !state.layout) return;
     canvas.setPointerCapture(event.pointerId);
     state.drag = {
+      touch: event.pointerType === "touch",
       x: event.clientX,
       y: event.clientY,
       i0: state.view.i0,
@@ -1410,7 +1597,7 @@ function wire() {
     updateHover(event.clientX, event.clientY);
     if (!state.drag || !state.layout) return;
     const dx = event.clientX - state.drag.x;
-    const dy = event.clientY - state.drag.y;
+    const dy = state.drag.touch ? 0 : event.clientY - state.drag.y;
     const L = state.layout;
     const spanT = state.drag.i1 - state.drag.i0;
     const spanP = state.drag.hi - state.drag.lo;
@@ -1462,6 +1649,7 @@ async function bootStatus() {
 }
 
 restore();
+restoreUrl();
 buildSwatches();
 syncControls();
 setAuto(state.auto);
