@@ -26,6 +26,7 @@ from liqmap.data import (
     check_deadline,
     exchange_name,
     is_stale,
+    live_component_stale,
     load_market,
     load_span,
     normalize_symbol,
@@ -199,7 +200,9 @@ def get_series(
         with _guard:
             hit = _cache.get(key)
         if hit is not None and now - hit[0] < SERIES_TTL.get(range_name, 120):
-            return hit[1]
+            cached = hit[1]
+            if exchange_key != "aggregate" or not any(live_component_stale(part, now) for part in cached.series.components):
+                return cached
         try:
             loaded = load_market(exchange_key, coin, range_name, mode_key, asof=asof, bar=bar)
         except RequestDeadlineExceeded:
@@ -292,13 +295,28 @@ def _quality(loaded, *, historical: bool = False) -> dict:
     provenance = getattr(series, "provenance", {})
     synthetic = loaded.source == "demo" or series.exchange == "demo" or provenance.get("history_kind") == "synthetic"
     stale = bool(loaded.stale)
-    if not historical and loaded.source in {"okx", "binance-live", "aggregate"} and provenance.get("history_kind") != "reconstructed_archive":
-        stale = stale or is_stale(loaded.as_of, series.bar_seconds, limit_s=2 * int(series.bar_seconds))
+    if not historical and loaded.source in {"okx", "binance-live", "binance-vision", "aggregate"}:
+        stale = stale or is_stale(loaded.as_of, series.bar_seconds, limit_s=2 * int(series.bar_seconds)) or live_component_stale(series)
     coverage = {}
     for name in ("candle_observed", "oi_observed", "flow_observed"):
         mask = getattr(series, name, None)
         coverage[name] = None if mask is None else {"observed": int(np.count_nonzero(mask)), "total": len(mask)}
     degraded = any(coverage[name] is not None and coverage[name]["observed"] < coverage[name]["total"] for name in ("candle_observed", "oi_observed"))
+    warnings = list(series.warnings)
+    if loaded.source == "aggregate":
+        missing_venues = set(("okx", "binance")) - set(loaded.venues)
+        incomplete = any(
+            not np.all(np.isin(series.times, part.times[np.asarray(part.candle_observed, dtype=bool) & np.asarray(part.oi_observed, dtype=bool)]))
+            for part in series.components
+        )
+        if missing_venues or incomplete:
+            degraded = True
+            warnings.append("Aggregate venue coverage is incomplete; estimates exclude missing observations.")
+        if not historical and any(live_component_stale(part) for part in series.components):
+            stale = True
+            warnings.append("An aggregate venue is no longer fresh.")
+    if stale and not historical and not synthetic:
+        warnings.append("Live market data is stale; check source timestamps before use.")
     status = "synthetic" if synthetic else "stale" if stale else "unknown" if not provenance else "degraded" if degraded else "observed"
     availability = getattr(series, "oi_available_at", None)
     known = availability is not None and len(availability) > 0 and bool(np.all(np.isfinite(availability) & (availability > 0)))
@@ -313,7 +331,7 @@ def _quality(loaded, *, historical: bool = False) -> dict:
         "coverage_basis": "source_masks" if provenance else "inferred_from_series",
         "historical_availability": "known" if known and trusted_availability and not synthetic else "unknown",
         "provenance": _scrub(getattr(series, "provenance", {})),
-        "warnings": list(series.warnings),
+        "warnings": warnings,
     }
 
 
@@ -431,7 +449,7 @@ def load_heatmap(
         "as_of": int(loaded.as_of),
         "stale": metadata["quality"]["stale"],
         "note": series.note,
-        "warnings": list(series.warnings),
+        "warnings": metadata["quality"]["warnings"],
         "generated_at": int(time.time() * 1000),
         "times": [int(item) for item in series.times],
         "open": _f32(series.open),

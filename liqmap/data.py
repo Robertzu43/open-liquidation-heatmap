@@ -252,6 +252,13 @@ def is_stale(last_open_ms: int, bar_seconds: int, now_s: float | None = None, li
     return (now - covered_until) > limit_s
 
 
+def live_component_stale(series: MarketSeries, now_s: float | None = None) -> bool:
+    """Require a recent bar with both observed candles and open interest."""
+    observed = np.asarray(series.candle_observed, dtype=bool) & np.asarray(series.oi_observed, dtype=bool)
+    indices = np.flatnonzero(observed)
+    return not len(indices) or is_stale(int(series.times[indices[-1]]), series.bar_seconds, now_s, 2 * int(series.bar_seconds))
+
+
 def ratio_to_share(ratio: float | str | None) -> float:
     """Convert a long/short ratio into the long fraction. Non-positive is missing."""
     try:
@@ -1472,9 +1479,9 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
                 errors.append(f"{exchange_name(name)}: {exc.__class__.__name__}")
     fresh = []
     for part in loaded_parts:
-        if part.source == "binance-vision" and part.stale:
+        if part.stale or live_component_stale(part.series):
             when = _fmt_cot(part.as_of + part.series.bar_seconds * 1000)
-            errors.append(f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when}).")
+            errors.append(f"{exchange_name(part.series.exchange)} was left out of this aggregate because its data lags the live market (last bar ends {when}).")
             continue
         fresh.append(part)
     if not fresh:

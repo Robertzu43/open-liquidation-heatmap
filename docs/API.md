@@ -70,7 +70,7 @@ Market context remains at the root: `exchange`, `exchange_name`, `symbol` (e.g. 
 `quality` contains:
 
 - `status`: `synthetic`, `stale`, `degraded`, `observed`, or `unknown`. Observed means source data were loaded with provenance; it is not an exchange audit or quality guarantee.
-- `synthetic`, `stale`, `degraded`: explicit booleans; for live `okx`, `binance-live` and `aggregate` sources, stale includes a current source bar-close age check against twice the bar interval. Historical/as-of/replay and reconstructed archive views preserve the loader assessment of their requested historical boundary. Root `stale` agrees with `quality.stale`.
+- `synthetic`, `stale`, `degraded`: explicit booleans. Live sources, including Binance archive fallback, are stale when the latest bar with both observed price and open interest is older than twice the bar interval. Aggregate sources exclude stale venues, mark missing or incomplete venue coverage degraded, and refresh cached aggregates when a component ages out. Historical/as-of/replay views retain the loader assessment of their requested boundary. Root `stale` agrees with `quality.stale`.
 - `source_as_of`: same source bar-open Unix ms as root `as_of`.
 - `coverage`: `candle_observed`, `oi_observed`, `flow_observed`, each `{observed: integer, total: integer}` or null if masks are unavailable. Filled values do not increase observed counts.
 - `degraded`: true when candle/OI observation masks contain gaps; a degraded source is not ready. Missing flow is disclosed by its mask and model prior.
