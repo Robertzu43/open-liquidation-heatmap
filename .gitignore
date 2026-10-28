@@ -8,3 +8,8 @@ __pycache__/
 .worktrees/
 .superpowers/
 .hypothesis/
+build/
+dist/
+*.egg-info/
+!web/assets/*.png
+!docs/assets/*.png

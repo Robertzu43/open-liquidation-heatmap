@@ -1,5 +1,7 @@
 # HTTP API v1
 
+Machine-readable contract: [OpenAPI 3.1](openapi.json).
+
 Run `python -m liqmap.server` and use `http://127.0.0.1:8765`. No API key is needed. Public sources can be unavailable or delayed; demo is explicitly synthetic. HTTP responses use UTF-8 strict JSON (non-finite scalars are never emitted), `Cache-Control: no-store`, and optional gzip.
 
 ## Routes and parameters

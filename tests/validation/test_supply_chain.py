@@ -34,6 +34,10 @@ SKIP_DIRS = {
     ".pytest_cache",
     ".mypy_cache",
     ".ruff_cache",
+    ".superpowers",
+    ".worktrees",
+    "build",
+    "dist",
 }
 URL_RE = re.compile(r"https?://([^/\s\"'`<>]+)")
 
