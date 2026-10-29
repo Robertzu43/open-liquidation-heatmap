@@ -255,6 +255,15 @@ def replay_timeline_regression(context, url: str, demo: dict, output: Path) -> N
         page.evaluate("() => { void showFrame(50); }")
         page.wait_for_function(f"state.data.asof === {(first + 15000) * 1000}")
         assert 0 < page.evaluate(position) < 1, "Playback should follow the latest reached bar"
+        # Dragging the slider or holding an arrow key fetches only the bar the user settles on.
+        asked: list[int] = []
+        page.on("request", lambda request: asked.append((int(parse_qs(urlparse(request.url).query)["asof"][0]) - first) // 300)
+                if "/api/heatmap" in request.url and "replay=1" in request.url else None)
+        page.evaluate("() => { const s = document.getElementById('rp-scrub'); for (let v = 49; v >= 20; v--) { s.value = v; s.dispatchEvent(new Event('input')); } }")
+        page.wait_for_function(f"state.data.asof === {(first + 6000) * 1000}")
+        page.evaluate("() => { for (let k = 0; k < 10; k++) canvas.dispatchEvent(new KeyboardEvent('keydown', {key: 'ArrowLeft', bubbles: true})); }")
+        page.wait_for_function(f"state.data.asof === {(first + 3000) * 1000} && document.getElementById('rp-scrub').value === '10'")
+        assert set(asked) <= {20, 21, 22, 10, 11, 12}, f"Scrubbing fetched every bar it passed: {sorted(set(asked))}"
     finally:
         page.close()
 
@@ -306,6 +315,7 @@ def trader_ux_checks(browser, url: str, output: Path) -> None:
         assert "Nearest long liq cluster" in long_text and f"{analysis['below']['price']:,.0f}" in long_text, long_text
         ratio = next(row for row in analysis["imbalance"] if row["window_pct"] == 5)["short_to_long"]
         assert f"{ratio:.2f}×" in page.locator("#read-ratio").inner_text()
+        assert page.evaluate("fmtPx(0.0000054242)") == "0.000005424", "Tiny prices keep four significant digits"
         page.locator("#read-long").click()
         assert page.evaluate(f"state.priceDirty && state.view.lo < {analysis['below']['price']} && state.view.hi > {analysis['below']['price']}"), "Reading line focuses its price"
         page.locator("#reset").click()
@@ -449,6 +459,10 @@ def replay_preset_regression(context, url: str, demo: dict) -> None:
         assert not page.locator("#replay-settings").evaluate("e => e.open"), "The panel closes so the chart is visible"
         assert page.locator("#replay-bar").is_visible() and "Replay" in page.locator("#replay-bar").text_content()
         assert page.locator("#legend-liq").is_hidden() and page.locator("#mk-fund").is_hidden(), "Live-only overlays hide during replay"
+        page.locator("#display-settings > summary").focus()
+        page.keyboard.press(" ")
+        assert page.evaluate("document.getElementById('display-settings').open && !state.replay.playing"), "Space on a panel header toggled the replay"
+        page.keyboard.press("Escape")
         # Auto-refresh must not fire while a replay is active.
         seq = page.evaluate("state.seq")
         page.evaluate("setAuto(0.05)")
@@ -511,6 +525,8 @@ def background_refresh_checks(browser, url: str) -> None:
     try:
         page.goto(url + "/?exchange=demo&coin=BTC&range=24h&model=1")
         page.wait_for_function("state.data !== null && document.getElementById('loading').hidden")
+        # Screen readers do not hear an unchanged alert banner again.
+        assert page.evaluate("() => { showBanner('info', ['Same line']); const node = banner.firstChild; showBanner('info', ['Same line']); return banner.firstChild === node; }"), "An unchanged banner was rewritten"
         seq = page.evaluate("() => { window.fakeHidden = true; setAuto(0.1); return state.seq; }")
         page.wait_for_timeout(400)
         assert page.evaluate("state.seq") == seq, "A hidden tab without alerts must not auto-refresh"
@@ -578,7 +594,9 @@ def coin_input_checks(browser, url: str) -> None:
         assert "1–16 letters or digits" in page.locator("#banner").inner_text()
         page.route("**/api/heatmap?*", lambda route: route.fulfill(status=503, json={"error": "Held coin failed deterministically"}))
         page.locator("#coin").fill("DOGE")
-        page.locator("#coin").press("Enter")
+        # An auto-refresh tick while this load is in flight neither restarts it nor turns it quiet.
+        assert page.evaluate("""() => { document.getElementById('coin').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter'}));
+            const seq = state.seq; autoRefresh(); return state.seq === seq && document.getElementById('loading').textContent.startsWith('Loading Demo · DOGE'); }"""), "An auto-refresh tick replaced a user load"
         page.wait_for_function("state.data === null && document.getElementById('loading').hidden")
         assert page.locator("#watch-add").is_hidden(), "A failed coin is not offered for the watchlist"
         page.unroute("**/api/heatmap?*")
@@ -632,9 +650,41 @@ def venue_side_checks(browser, url: str, demo: dict) -> None:
         page.wait_for_function("document.getElementById('loading').hidden")
         assert liq_requests == ["okx", "aggregate"], liq_requests
         assert page.evaluate("() => { state.fundingNext = Date.now() - 1000; tickFunding(); return document.getElementById('mk-fund-t').textContent; }") == "settling"
+        # A failed venue switch shows neither the previous venue's chip values nor its market name.
+        page.route("**/api/heatmap?*", lambda route: route.fulfill(status=503, json={"error": "Venue failed deterministically"}))
+        page.locator("#exchange").select_option("okx")
+        page.wait_for_function("state.data === null && document.getElementById('loading').hidden")
+        assert set(page.locator("#watch-list .c-px").all_inner_texts()) == {"—"}, page.locator("#watch-list").inner_text()
+        assert "aggregate" not in page.locator("#title").inner_text(), page.locator("#title").inner_text()
         assert not errors, errors
     finally:
         context.close()
+
+
+def touch_checks(browser, url: str) -> None:
+    """A tap inspects the chart; a sideways swipe pans time; a vertical swipe scrolls the page."""
+    mobile = offline_context(browser, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
+    touch_page = mobile.new_page()
+    touch_page.goto(url + "/?exchange=demo&mode=pair&coin=BTC&range=24h&model=1")
+    touch_page.wait_for_function("state.data !== null && state.layout")
+    box = touch_page.locator("#chart").bounding_box()
+    touch_page.touchscreen.tap(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    assert touch_page.evaluate("!tip.hidden"), "A tap on the chart must show the tooltip"
+    touch_page.locator("#zoom-axis").select_option("time")
+    touch_page.locator("#zoom-in").tap()
+    touch_page.evaluate("scrollTo(0, 0)")
+    initial = touch_page.evaluate("state.view.i0")
+    cdp = mobile.new_cdp_session(touch_page)
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 170, "y": 460}]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 230, "y": 460}]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    assert touch_page.evaluate("state.view.i0") != initial, "Touch swipe must pan zoomed time range"
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 190, "y": 550}]})
+    for y in (500, 440, 370, 300):
+        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 190, "y": y}]})
+    cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
+    touch_page.wait_for_function("scrollY > 0")
+    mobile.close()
 
 
 def run(url: str, output: Path, chromium: str | None = None) -> None:
@@ -778,25 +828,7 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
         replay_page.locator("#rp-scrub").fill("1")
         replay_page.wait_for_function("state.replay.idx === 1")
         assert not errors, errors
-        mobile = offline_context(browser, viewport={"width": 390, "height": 844}, is_mobile=True, has_touch=True)
-        touch_page = mobile.new_page()
-        touch_page.goto(url + "/?exchange=demo&mode=pair&coin=BTC&range=24h&model=1")
-        touch_page.wait_for_function("state.data !== null")
-        touch_page.locator("#zoom-axis").select_option("time")
-        touch_page.locator("#zoom-in").tap()
-        touch_page.evaluate("scrollTo(0, 0)")
-        initial = touch_page.evaluate("state.view.i0")
-        cdp = mobile.new_cdp_session(touch_page)
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 170, "y": 460}]})
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 230, "y": 460}]})
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
-        assert touch_page.evaluate("state.view.i0") != initial, "Touch swipe must pan zoomed time range"
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchStart", "touchPoints": [{"x": 190, "y": 550}]})
-        for y in (500, 440, 370, 300):
-            cdp.send("Input.dispatchTouchEvent", {"type": "touchMove", "touchPoints": [{"x": 190, "y": y}]})
-        cdp.send("Input.dispatchTouchEvent", {"type": "touchEnd", "touchPoints": []})
-        touch_page.wait_for_function("scrollY > 0")
-        mobile.close()
+        touch_checks(browser, url)
         browser.close()
     print(f"Browser smoke passed; captures: {output}")
 
