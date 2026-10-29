@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.4.0 — 2026-10-29
+
+Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchanged for OKX and Binance.
+
+### Added
+- **Bybit** USDT perpetuals as a third live venue (`exchange=bybit`). Candles and native base-asset open interest come from the public v5 API, valued at bar close, closed bars only. Bybit has no 12-hour OI period, so 12-hour bars use the last 4-hour OI snapshot inside each closed bar. Bybit publishes no historical taker flow, so Flow skew uses its neutral fallback for Bybit; account long/short ratios are not substituted. There is no archive fallback: a geo-blocked Bybit API is reported unavailable.
+- `market_context` in heatmap and features responses: price change, last observed USD open interest and its change over the displayed window, and the window bounds. Additive; `schema_version` stays `1.0`.
+- `GET /api/v1/context`: live funding rate, next funding time, funding interval, open interest and mark price per venue, with an OI-weighted funding rate and total USD open interest. Per-venue errors are isolated. 30-second cache.
+- `GET /api/v1/liquidations`: observed recent OKX filled liquidation orders, at OKX's bankruptcy price, with an explicit coverage window and a `truncated` flag. These are exchange records, not model output. Binance and Bybit pair views return `available: false`. 30-second cache.
+- `GET /api/v1/watchlist`: price, window price change, quality, nearest short and long liquidation clusters and the ±5% short-to-long ratio for up to six symbols, with per-symbol error isolation.
+- `capabilities` in `/api/v1/status`, and `bybit` in its exchange list.
+- UI: venue picker with OKX, Binance, Bybit and All venues; a reading line above the chart with the nearest short and long liquidation clusters, distance, size and ±5% ratio; a market strip with open interest, OI change, price change, funding and funding countdown; a watchlist of up to six coins; observed OKX liquidations drawn as dots (red = longs liquidated, green = shorts liquidated); a Replay panel with Last 24h / 3 days / 7 days presets from the Binance archive; an optional price-proximity alert (in-page message and browser notification).
+
+### Changed
+- All venues (`exchange=aggregate` or `mode=symbol`) now combines OKX, Binance and Bybit. Aggregate totals change, and a missing or excluded Bybit marks coverage degraded.
+- The model summary says "short/long liquidation cluster" instead of "shelf". The numbers are the same.
+- Live views refresh every 60 seconds by default.
+- Disclaimers are one footer line plus collapsible Source & quality details.
+- The three new routes have `/api/` aliases, use the 4 expensive-request slots, the 60-second cooperative budget, 400 `invalid_request` validation and strict finite JSON.
+- The README leads with how to read the chart; methodology and evidence stay in the linked docs.
+
+### Notes
+- Historical as-of views and replay remain Binance-only.
+- Observed liquidations come from OKX only. Binance and Bybit publish liquidations only over websocket streams. Observed liquidations and funding are context; they are not model inputs.
+- Not supported: Hyperliquid and other venues without public historical open interest (the model needs OI history); contracts other than USDT-margined linear perpetuals; order placement or account access.
+- New outbound host: `api.bybit.com`. See [migration notes](docs/MIGRATION.md) and [operations](docs/OPERATIONS.md).
+
 ## 0.3.1 — 2026-10-28
 
 - Replay starts with price on the left and reveals historical price and modeled exposure together as each bar arrives. Future time is blank; earlier modeled exposure can change as the lookback window moves.
