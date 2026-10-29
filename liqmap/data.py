@@ -547,7 +547,17 @@ def finalize_series(
     if int(finite.sum()) < 2:
         raise DataError(f"Not enough {exchange_name(exchange)} candles for {symbol} in this window.")
     idx = np.flatnonzero(finite)
-    sl = slice(int(idx[0]), int(idx[-1]) + 1)
+    start, end = int(idx[0]), int(idx[-1]) + 1
+    # Exchanges can publish a bar's OI a little after its candle. Up to two newest
+    # bars still waiting for it are left out until it arrives; they are not gaps.
+    with np.errstate(invalid="ignore"):
+        oi_valid = np.isfinite(oi) & (oi > 0) if oi_observed is None else np.asarray(oi_observed, dtype=bool)
+        if oi_base is not None:
+            oi_valid = oi_valid & np.isfinite(oi_base) & (oi_base > 0)
+    for _ in range(2):
+        if end - start > 2 and not oi_valid[end - 1]:
+            end -= 1
+    sl = slice(start, end)
     times_s = np.asarray(times[sl], dtype=np.int64)
     open_s = np.array(open_[sl], dtype=np.float64, copy=True)
     high_s = np.array(high[sl], dtype=np.float64, copy=True)

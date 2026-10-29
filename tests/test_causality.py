@@ -343,3 +343,26 @@ def test_default_chart_resolution_preserves_exact_economic_features(model_id):
     assert sharp.features == old.features
     np.testing.assert_allclose(sharp.logical_totals['resting_long_usd'], old.logical_totals['resting_long_usd'])
     np.testing.assert_allclose(sharp.logical_totals['resting_short_usd'], old.logical_totals['resting_short_usd'])
+
+
+def _finalize(oi):
+    n = len(oi)
+    price = np.full(n, 100.0)
+    return finalize_series(times=np.arange(n) * 300000, open_=price, high=price + 1, low=price - 1, close=price,
+                           volume=np.ones(n), oi=np.asarray(oi, dtype=float) * 100, share=np.full(n, .5),
+                           oi_base=np.asarray(oi, dtype=float), exchange='okx', symbol='BTCUSDT', coin='BTC',
+                           bar_seconds=300, source='okx', note='', warnings=[], now_s=n * 300)
+
+
+def test_newest_bar_waiting_for_its_open_interest_is_left_out_not_a_gap():
+    loaded = _finalize([10, 11, 12, 13, np.nan])
+    assert len(loaded.series.times) == 4 and loaded.series.oi_observed.all()
+    assert not any('covers' in warning for warning in loaded.series.warnings)
+
+
+def test_only_two_trailing_bars_wait_and_interior_gaps_stay_reported():
+    trailing = _finalize([10, 11, 12, 13, np.nan, np.nan, np.nan])
+    assert len(trailing.series.times) == 5 and not trailing.series.oi_observed[-1]
+    interior = _finalize([10, np.nan, 12, 13, 14])
+    assert len(interior.series.times) == 5 and not interior.series.oi_observed[1]
+    assert any('covers 4 of 5 bars' in warning for warning in interior.series.warnings)
