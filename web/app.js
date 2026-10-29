@@ -2258,7 +2258,8 @@ async function showFrame(idx) {
   try {
     const body = await fetchFrame(r, r.idx);
     if (state.replay !== r || gen !== r.gen || r.idx !== frame || context !== mapParams().toString()) return false;
-    applyPayload(body);
+    // Announce frames a user steps to, not every frame of a playing replay.
+    applyPayload(body, r.playing);
     for (const ahead of [r.idx + 1, r.idx + 2]) {
       if (ahead < r.frames) fetchFrame(r, ahead).catch(() => {});
     }
@@ -2456,7 +2457,7 @@ function wire() {
     if (to != null) $("to-input").value = toInputValue(to);
     syncControls();
     persist();
-    if (state.data) applyPayload(state.data);
+    if (state.data) applyPayload(state.data, true);
   });
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
