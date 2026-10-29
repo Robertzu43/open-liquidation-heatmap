@@ -1,8 +1,9 @@
 """Public-market loaders for the liquidation heatmap.
 
-Candles and open interest come from OKX and Binance. Binance tries the
+Candles and open interest come from OKX, Binance and Bybit. Binance tries the
 live USDT-M API first and, if that is blocked, the public data.binance.vision
-archive (cached in the user cache directory or LIQMAP_CACHE_DIR).
+archive (cached in the user cache directory or LIQMAP_CACHE_DIR). Bybit has no
+public archive fallback; a blocked Bybit API is reported as unavailable.
 
 Symbols are restricted to a short ticker pattern before they are placed into a
 URL, so a request cannot be turned into an SSRF fetch.
@@ -34,7 +35,7 @@ from liqmap.model import MarketSeries
 
 log = logging.getLogger("liqmap.data")
 
-USER_AGENT = "open-liqmap/0.2"
+USER_AGENT = "open-liqmap/0.4"
 COINS = (
     "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "AVAX", "LINK", "LTC",
     "DOT", "TON", "SUI", "APT", "ARB", "OP", "NEAR", "FIL", "PEPE", "WIF",
@@ -42,9 +43,12 @@ COINS = (
 EXCHANGE_NAMES = {
     "okx": "OKX",
     "binance": "Binance",
+    "bybit": "Bybit",
     "demo": "Demo",
     "aggregate": "Aggregated",
 }
+# Live venues combined by the aggregate view, in display order.
+AGGREGATE_VENUES = ("okx", "binance", "bybit")
 # Window length and the candle size used to build it.
 RANGES: dict[str, dict] = {
     "12h": {"seconds": 12 * 3600, "bar": "5m", "bar_seconds": 300},
@@ -62,6 +66,12 @@ RANGES: dict[str, dict] = {
 OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12Hutc", "1d": "1Dutc"}
 OKX_STAT_PERIOD = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12Hutc", "1d": "1Dutc"}
 # Bars a past Binance view may use. Open interest is published every 5 minutes.
+# Bybit v5 kline intervals. 720 minutes is the 12-hour bar.
+BYBIT_KLINE = {"5m": "5", "15m": "15", "1h": "60", "4h": "240", "12h": "720", "1d": "D"}
+# Bybit open-interest history has no 12-hour period. For 12-hour bars the last
+# 4-hour snapshot inside each closed bar is used; it never comes after the close.
+BYBIT_OI = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "12h": "4h", "1d": "1d"}
+BYBIT_BASE = "https://api.bybit.com"
 BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
 MAX_BARS = 3000
 MAX_REPLAY_DAYS = 730
@@ -873,6 +883,142 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
 
 
 
+def _bybit_result(path: str, params: dict) -> dict:
+    """The ``result`` object of a Bybit v5 public response, or a DataError."""
+    status, payload = _get_json(f"{BYBIT_BASE}{path}", params, timeout=(4, 10), retries=2)
+    if not isinstance(payload, dict):
+        if status in (401, 403, 451):
+            raise DataError(f"Bybit is not reachable from this network (HTTP {status}). Its public API blocks some regions.")
+        raise DataError(f"Bybit returned an unexpected response (HTTP {status}).")
+    if payload.get("retCode") != 0:
+        message = str(payload.get("retMsg") or f"HTTP {status}")
+        if "symbol" in message.lower():
+            raise DataError(f"Bybit has no {params.get('symbol', 'such')} perpetual ({message}).")
+        raise DataError(f"Bybit rejected the request ({message}).")
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        raise DataError("Bybit returned an unexpected response.")
+    return result
+
+
+def _bybit_klines(pair: str, interval: str, start_ms: int, end_ms: int) -> list:
+    """Kline rows oldest first. Bybit returns newest first, up to 1,000 per call."""
+    rows: dict[int, list] = {}
+    cursor_end = int(end_ms)
+    for _ in range(8):
+        check_deadline()
+        result = _bybit_result("/v5/market/kline", {
+            "category": "linear", "symbol": pair, "interval": interval,
+            "start": int(start_ms), "end": cursor_end, "limit": 1000,
+        })
+        batch = result.get("list") or []
+        oldest = None
+        for row in batch:
+            try:
+                ts = int(row[0])
+            except (TypeError, ValueError, IndexError):
+                continue
+            rows.setdefault(ts, row)
+            oldest = ts if oldest is None else min(oldest, ts)
+        if len(batch) < 1000 or oldest is None or oldest <= start_ms or oldest - 1 >= cursor_end:
+            break
+        cursor_end = oldest - 1
+    return [rows[key] for key in sorted(rows)]
+
+
+def _bybit_open_interest(pair: str, interval: str, start_ms: int, end_ms: int) -> list:
+    """Open-interest snapshots oldest first, following Bybit's page cursor."""
+    rows: dict[int, dict] = {}
+    cursor = None
+    seen: set[str] = set()
+    for _ in range(40):
+        check_deadline()
+        params = {"category": "linear", "symbol": pair, "intervalTime": interval,
+                  "startTime": int(start_ms), "endTime": int(end_ms), "limit": 200}
+        if cursor:
+            params["cursor"] = cursor
+        result = _bybit_result("/v5/market/open-interest", params)
+        batch = result.get("list") or []
+        for item in batch:
+            try:
+                rows[int(item["timestamp"])] = item
+            except (KeyError, TypeError, ValueError):
+                continue
+        cursor = result.get("nextPageCursor") or None
+        if not batch or not cursor or cursor in seen:
+            break
+        seen.add(cursor)
+    return [rows[key] for key in sorted(rows)]
+
+
+def fetch_bybit(coin: str, pair: str, spec: dict) -> LoadedSeries:
+    """Bybit USDT perpetual candles and native base-asset open interest.
+
+    Bybit publishes no historical taker buy/sell volume, so the flow prior is
+    unavailable and Flow skew uses its neutral fallback for this venue. Account
+    long/short ratios are not substituted for taker flow.
+    """
+    cutoff_ms = int(time.time() * 1000)
+    grid = _window(spec)
+    bar_ms = int(spec["bar_seconds"]) * 1000
+    start_ms = int(grid[0])
+    end_ms = int(grid[-1]) + bar_ms - 1
+    closed_opens = {int(t) for t in grid if int(t) + bar_ms <= cutoff_ms}
+    candles = _bybit_klines(pair, BYBIT_KLINE[spec["bar"]], start_ms, end_ms)
+    if not candles:
+        raise DataError(f"Bybit returned no {pair} candles for this window.")
+    oi_rows = _bybit_open_interest(pair, BYBIT_OI[spec["bar"]], start_ms, end_ms)
+    if not oi_rows:
+        raise DataError(f"Bybit returned no {pair} open interest for this window.")
+    candle_records = []
+    for row in candles:
+        try:
+            ts = int(row[0])
+            if ts not in closed_opens:
+                continue
+            # [start, open, high, low, close, volume (base), turnover (quote)]
+            candle_records.append((ts, float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[6])))
+        except (TypeError, ValueError, IndexError):
+            continue
+    oi_records = []
+    for item in oi_rows:
+        try:
+            ts = int(item["timestamp"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        # Only a snapshot inside a closed bar of this grid may describe that bar.
+        if ts - ts % bar_ms not in closed_opens:
+            continue
+        oi_records.append((ts, math.nan, math.nan, _native_number(item.get("openInterest"))))
+    open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
+    oi_base = _fold_native_oi(oi_records, grid, bar_ms)
+    # Bybit history is native quantity only; value it at the bar close.
+    with np.errstate(invalid="ignore"):
+        oi_usd = np.where(np.isfinite(oi_base) & (oi_base > 0) & np.isfinite(close), oi_base * close, np.nan)
+    loaded = finalize_series(
+        times=grid,
+        open_=open_,
+        high=high,
+        low=low,
+        close=close,
+        volume=volume,
+        oi=oi_usd,
+        share=np.full(len(grid), np.nan),
+        oi_base=oi_base,
+        received_at_ms=int(time.time() * 1000),
+        exchange="bybit",
+        symbol=pair,
+        coin=coin,
+        bar_seconds=int(spec["bar_seconds"]),
+        source="bybit",
+        note="",
+        warnings=[],
+    )
+    loaded.series.provenance["flow_source"] = "unavailable_neutral"
+    log.info("bybit %s %s bars=%s", pair, spec["key"], len(loaded.series.times))
+    return loaded
+
+
 def _binance_kline_url(symbol: str, interval: str, year: int, month: int, day: int | None = None) -> tuple[str, str]:
     if day is None:
         name = f"{symbol}-{interval}-{year}-{month:02d}.zip"
@@ -1463,10 +1609,12 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
     def run(name: str):
         if name == "okx":
             return fetch_okx(coin, pair, spec)
+        if name == "bybit":
+            return fetch_bybit(coin, pair, spec)
         return fetch_binance(coin, pair, spec, allow_stale=False)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {name: pool.submit(copy_context().run, run, name) for name in ("okx", "binance")}
+    with ThreadPoolExecutor(max_workers=len(AGGREGATE_VENUES)) as pool:
+        futures = {name: pool.submit(copy_context().run, run, name) for name in AGGREGATE_VENUES}
         for name, future in futures.items():
             try:
                 loaded_parts.append(future.result())
@@ -1540,7 +1688,7 @@ def load_market(
     if mode_key not in {"pair", "symbol"}:
         raise DataError("Mode must be pair or symbol.")
     if not re.fullmatch(r"[a-z0-9_-]{2,20}", exchange_key):
-        raise DataError("Unknown exchange. Use okx, binance, or demo.")
+        raise DataError("Unknown exchange. Use okx, binance, bybit, or demo.")
     spec, end_open = resolve_view(exchange_key, mode_key, range_key, asof, bar)
     coin, pair = normalize_symbol(symbol)
     if end_open is not None:
@@ -1553,4 +1701,6 @@ def load_market(
         return fetch_okx(coin, pair, spec)
     if exchange_key == "binance":
         return fetch_binance(coin, pair, spec, allow_stale=True)
-    raise DataError("Unknown exchange. Use okx, binance, or demo.")
+    if exchange_key == "bybit":
+        return fetch_bybit(coin, pair, spec)
+    raise DataError("Unknown exchange. Use okx, binance, bybit, or demo.")

@@ -126,7 +126,7 @@ def plot_heatmap(heat, centers, times_ms, open_, high, low, close, title: str, o
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Open liquidation heatmap from public exchange data")
-    parser.add_argument("--exchange", default="okx", help="okx, binance, demo, or aggregate")
+    parser.add_argument("--exchange", default="okx", help="okx, binance, bybit, demo, or aggregate")
     parser.add_argument("--symbol", default="BTCUSDT")
     parser.add_argument("--range", default=None, help="12h, 24h, 3d, 7d, 30d, 90d, 180d, 1y, 2y")
     parser.add_argument("--lookback", default=None, help="Older alias for --range (1d maps to 24h)")

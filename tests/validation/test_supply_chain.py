@@ -183,11 +183,12 @@ def test_allowlist_rejects_a_stray_host() -> None:
     assert unlisted_python_hosts(listed) == []
 
 
-def test_allowlist_is_binance_archive_okx_and_local_literals() -> None:
+def test_allowlist_is_binance_archive_okx_bybit_and_local_literals() -> None:
     assert ALLOWED_EXCHANGE_HOSTS == (
         "fapi.binance.com",
         "data.binance.vision",
         "www.okx.com",
+        "api.bybit.com",
     )
     assert ALLOWED_LOCAL_HOSTS == ("127.0.0.1", "evil")
 

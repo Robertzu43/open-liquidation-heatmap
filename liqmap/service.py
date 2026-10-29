@@ -14,6 +14,7 @@ import time
 import numpy as np
 
 from liqmap.data import (
+    AGGREGATE_VENUES,
     COINS,
     EXCHANGE_NAMES,
     MAX_BARS,
@@ -88,7 +89,7 @@ def _canonical(exchange: str, symbol: str, range_key: str, mode: str) -> tuple[s
     mode_key = (mode or "pair").strip().lower()
     exchange_key = (exchange or "okx").strip().lower()
     if exchange_key not in EXCHANGE_NAMES:
-        raise DataError("Unknown exchange. Use okx, binance, demo, or aggregate.")
+        raise DataError("Unknown exchange. Use okx, binance, bybit, demo, or aggregate.")
     if mode_key not in {"pair", "symbol"}:
         raise DataError("Mode must be pair or symbol.")
     spec = range_spec(range_key)
@@ -294,7 +295,7 @@ def _quality(loaded, *, historical: bool = False) -> dict:
     series = loaded.series
     provenance = getattr(series, "provenance", {})
     synthetic = loaded.source == "demo" or series.exchange == "demo" or provenance.get("history_kind") == "synthetic"
-    live_source = loaded.source in {"okx", "binance-live", "binance-vision", "aggregate"}
+    live_source = loaded.source in {"okx", "binance-live", "binance-vision", "bybit", "aggregate"}
     stale = bool(loaded.stale) if historical or not live_source else (
         is_stale(loaded.as_of, series.bar_seconds, limit_s=2 * int(series.bar_seconds)) or live_component_stale(series)
     )
@@ -305,7 +306,7 @@ def _quality(loaded, *, historical: bool = False) -> dict:
     degraded = any(coverage[name] is not None and coverage[name]["observed"] < coverage[name]["total"] for name in ("candle_observed", "oi_observed"))
     warnings = list(series.warnings)
     if loaded.source == "aggregate":
-        missing_venues = set(("okx", "binance")) - set(loaded.venues)
+        missing_venues = set(AGGREGATE_VENUES) - set(loaded.venues)
         incomplete = any(
             not np.all(np.isin(series.times, part.times[np.asarray(part.candle_observed, dtype=bool) & np.asarray(part.oi_observed, dtype=bool)]))
             for part in series.components
@@ -529,6 +530,7 @@ def status_payload() -> dict:
         "exchanges": [
             {"id": "okx", "name": EXCHANGE_NAMES["okx"], "live": True},
             {"id": "binance", "name": EXCHANGE_NAMES["binance"], "live": True},
+            {"id": "bybit", "name": EXCHANGE_NAMES["bybit"], "live": True},
             {"id": "demo", "name": EXCHANGE_NAMES["demo"], "live": False},
         ],
         "ranges": [

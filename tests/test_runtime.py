@@ -17,6 +17,14 @@ def clear_cache():
     service._spans.clear()
 
 
+@pytest.fixture(autouse=True)
+def offline_bybit():
+    """Aggregate tests below exercise OKX and Binance; Bybit stays offline and unavailable."""
+    from liqmap import data
+    with mock.patch.object(data, 'fetch_bybit', side_effect=DataError('Bybit is not reachable from this network (HTTP 403).')):
+        yield
+
+
 def test_data_fingerprint_stable_across_render_time_and_changes_with_input():
     loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('12h'))
     with mock.patch.object(service, 'get_series', return_value=loaded):
