@@ -1,6 +1,5 @@
 :root {
   --bg:#0c100f;
-  --bg-elev:#131a18;
   --bg-chart:#14160f;
   --line:#29332d;
   --text:#e9eee8;
@@ -220,25 +219,15 @@ h1 {
   flex:0 1 168px;
 }
 
-.toolbar>#exchange-field {
-  order:2;
-}
-
-.toolbar>.field:has(#coin) {
-  order:1;
-}
-
-.toolbar>.field:has(#range) {
-  order:3;
-}
-
 .toolbar>#refresh {
-  order:4;
   width:44px;
   height:44px;
   display:grid;
   place-items:center;
   padding:10px;
+  background:var(--brass);
+  color:var(--brass-ink);
+  border-color:var(--brass);
 }
 
 .toolbar svg,.icon-btns svg {
@@ -249,12 +238,6 @@ h1 {
   stroke-width:1.7;
   stroke-linecap:round;
   stroke-linejoin:round;
-}
-
-.toolbar>#refresh {
-  background:var(--brass);
-  color:var(--brass-ink);
-  border-color:var(--brass);
 }
 
 .advanced {
@@ -696,11 +679,6 @@ input[type=range] {
   line-height:1.7;
 }
 
-.caption strong {
-  color:#d0dacd;
-  font-weight:500;
-}
-
 .panel {
   padding:19px 16px;
 }
@@ -1021,8 +999,17 @@ footer span:first-child {
   .top .status {
     margin-left:auto;
   }
+  /* Off screen, but still the page's h1 for screen readers (same as .sr-only). */
   .heading {
-    display:none;
+    position:absolute;
+    width:1px;
+    height:1px;
+    padding:0;
+    margin:-1px;
+    overflow:hidden;
+    clip:rect(0,0,0,0);
+    white-space:nowrap;
+    border:0;
   }
   .chart-wrap {
     height:55vh;
@@ -1037,9 +1024,6 @@ footer span:first-child {
   .table-details {
     margin-top:12px;
   }
-  footer {
-    flex-wrap:wrap;
-  }
 }
 
 @media(max-width:600px) {
@@ -1048,7 +1032,7 @@ footer span:first-child {
   }
   .top {
     min-height:38px;
-    margin-bottom:12px;
+    margin-bottom:10px;
     gap:8px;
   }
   .brand {
@@ -1088,7 +1072,6 @@ footer span:first-child {
   }
   .toolbar>.field {
     min-width:0;
-    flex:1;
   }
   .toolbar>.field:has(#coin) {
     flex:.9;
@@ -1101,28 +1084,21 @@ footer span:first-child {
     align-self:end;
   }
   .advanced {
-    margin:8px 0 10px;
+    margin:8px 0;
     gap:6px;
   }
   .advanced>details>summary {
     font-size:11px;
     gap:6px;
-    padding:7px 9px;
-    min-height:44px;
+    padding:7px 6px;
+    justify-content:center;
   }
   #model-name {
-    font-size:10px;
+    display:none;
   }
   .advanced>details {
     flex:1 1 0;
     min-width:0;
-  }
-  .advanced>details>summary {
-    justify-content:center;
-    padding:7px 6px;
-  }
-  #model-name {
-    display:none;
   }
   .settings-body {
     top:50px;
@@ -1148,9 +1124,6 @@ footer span:first-child {
   .threshold {
     flex-wrap:wrap;
   }
-  .threshold input {
-    width:130px;
-  }
   .research-top {
     gap:8px;
   }
@@ -1172,15 +1145,13 @@ footer span:first-child {
   .player .field:first-child {
     width:100%;
   }
-  .chart-card {
-    padding:11px 7px 9px;
-    border-radius:10px;
-  }
   .eyebrow {
     font-size:7px;
     letter-spacing:1.2px;
   }
   .chart-card {
+    padding:8px 7px 9px;
+    border-radius:10px;
     grid-template-areas:
       "title icons"
       "replay replay"
@@ -1202,15 +1173,10 @@ footer span:first-child {
     letter-spacing:-.3px;
   }
   #chart-price {
-    font-size:12px;
     margin-left:6px;
   }
   .icon-btns {
     gap:3px;
-  }
-  .icon-btns button {
-    width:44px;
-    height:44px;
   }
   .chart-meta {
     font-size:9px;
@@ -1244,7 +1210,6 @@ footer span:first-child {
   }
   .zoom-btns {
     width:100%;
-    gap:4px;
     margin-top:2px;
   }
   .zoom-btns button {
@@ -1260,11 +1225,7 @@ footer span:first-child {
     margin-top:7px;
   }
   .panel {
-    display:block;
     padding:15px 13px;
-  }
-  .panel h2 {
-    font-size:14px;
   }
   .summary {
     font-size:11px;
@@ -1283,19 +1244,12 @@ footer span:first-child {
     font-size:10px;
   }
   footer {
-    font-size:9px;
+    font-size:10px;
     gap:8px;
     padding-top:12px;
-    margin-top:14px;
   }
   .chart-card:fullscreen .chart-wrap {
     height:calc(100vh - 250px);
-  }
-}
-
-@media(prefers-reduced-motion:reduce) {
-  * {
-    scroll-behavior:auto!important;
   }
 }
 
@@ -1844,15 +1798,6 @@ footer span:first-child {
     gap:5px;
     margin:4px 0 6px;
   }
-  .chart-card {
-    padding-top:8px;
-  }
-  .top {
-    margin-bottom:10px;
-  }
-  .advanced {
-    margin-bottom:8px;
-  }
   .read-btn {
     display:grid;
     grid-template-columns:auto auto minmax(0,1fr);
@@ -1867,12 +1812,10 @@ footer span:first-child {
   }
   .read-btn .rl-px {
     grid-column:2 / -1;
+    font-size:12px;
   }
   .read-btn .rl-k {
     display:none;
-  }
-  .read-btn .rl-px {
-    font-size:12px;
   }
   .read-btn .rl-d,.read-btn .rl-u {
     font-size:11px;
@@ -1899,9 +1842,6 @@ footer span:first-child {
     right:12px;
     bottom:12px;
     max-width:none;
-  }
-  footer {
-    font-size:10px;
   }
 }
 

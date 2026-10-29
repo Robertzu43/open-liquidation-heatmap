@@ -4,7 +4,6 @@
 const localZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 const MODEL_NAMES = { 1: "Wide clusters", 2: "Tight magnets", 3: "Flow skew" };
 const timeZone = () => state.timezone === "local" ? localZone : "UTC";
-const zoneLabel = () => state.timezone === "local" ? localZone : "UTC";
 const STORE = "open-liqmap-v1";
 const THEMES = {
   ember: {
@@ -48,7 +47,6 @@ const state = {
   timeFull: true,
   priceDirty: false,
   vmax: 1,
-  gamma: 3.5,
   heatCanvas: null,
   heatDirty: true,
   seq: 0,
@@ -62,7 +60,6 @@ const state = {
   layout: null,
   hover: null,
   drag: null,
-  models: [],
   replay: null,
   replaySeq: 0,
   replayController: null,
@@ -120,15 +117,6 @@ function pastView() {
 }
 
 // "All venues" is the aggregate: exchange "aggregate" always travels with mode "symbol".
-function normalizeVenue() {
-  if (state.mode === "symbol" || state.exchange === "aggregate") {
-    state.exchange = "aggregate";
-    state.mode = "symbol";
-  } else {
-    state.mode = "pair";
-  }
-}
-
 function setVenue(value) {
   state.exchange = VENUES.includes(value) ? value : "okx";
   state.mode = state.exchange === "aggregate" ? "symbol" : "pair";
@@ -191,9 +179,10 @@ function decodeF32(b64) {
 function fmtUsd(value) {
   const abs = Math.abs(Number(value) || 0);
   const sign = value < 0 ? "-" : "";
-  if (abs >= 1e9) return sign + "$" + (abs / 1e9).toFixed(1) + "B";
-  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
-  if (abs >= 1e3) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
+  // Pick the unit after rounding: 999,960 is $1.0M, not $1000.0K.
+  if (abs >= 999.95e6) return sign + "$" + (abs / 1e9).toFixed(1) + "B";
+  if (abs >= 999.95e3) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
+  if (abs >= 999.5) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
   return sign + "$" + abs.toFixed(0);
 }
 
@@ -212,10 +201,7 @@ function fmtPct(value, digits) {
 
 // Funding is a fraction per interval: 0.0001 is +0.0100%.
 function fmtRate(rate) {
-  if (!num(rate)) return "—";
-  const text = Math.abs(rate * 100).toFixed(4);
-  if (Number(text) === 0) return "0.0000%";
-  return (rate < 0 ? "−" : "+") + text + "%";
+  return num(rate) ? fmtPct(rate * 100, 4) : "—";
 }
 
 function fmtCountdown(ms) {
@@ -256,7 +242,7 @@ function fmtStamp(ms, withTime) {
     opts.hour = "2-digit";
     opts.minute = "2-digit";
   }
-  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " " + zoneLabel();
+  return new Intl.DateTimeFormat("en-GB", opts).format(new Date(ms)) + " " + timeZone();
 }
 
 function fmtAxis(ms, withTime, narrow) {
@@ -335,11 +321,12 @@ function restore() {
     if (!raw) return;
     const saved = JSON.parse(raw);
     const ranges = ["12h", "24h", "3d", "7d", "30d", "90d", "180d", "1y", "2y"];
-    if (VENUES.includes(saved.exchange)) state.exchange = saved.exchange;
+    if (VENUES.includes(saved.exchange)) setVenue(saved.exchange);
     state.coin = normalizeCoin(saved.coin) || state.coin;
     if (ranges.includes(saved.range)) state.range = saved.range;
     if ([1, 2, 3].includes(Number(saved.model))) state.model = Number(saved.model);
-    if (saved.mode === "pair" || saved.mode === "symbol") state.mode = saved.mode;
+    // A stored mode "symbol" means All venues, whatever venue is stored beside it.
+    if (saved.mode === "symbol") setVenue("aggregate");
     if (saved.bar in BAR_S && barFits(state.range, saved.bar)) state.bar = saved.bar;
     if (THEMES[saved.theme]) state.theme = saved.theme;
     if (Number.isFinite(saved.threshold)) state.threshold = clamp(saved.threshold, 0, 1);
@@ -364,7 +351,6 @@ function restore() {
   } catch (_err) {
     /* ignore broken storage */
   }
-  normalizeVenue();
 }
 
 function restoreUrl() {
@@ -375,7 +361,6 @@ function restoreUrl() {
   if ([1, 2, 3].includes(Number(params.get("model")))) state.model = Number(params.get("model"));
   // Older links used ?mode=symbol for the aggregate; it still means All venues.
   if (params.get("mode") === "symbol") setVenue("aggregate");
-  normalizeVenue();
   if (THEMES[params.get("theme")]) state.theme = params.get("theme");
   if (["utc", "local"].includes(params.get("tz"))) state.timezone = params.get("tz");
   if (params.has("threshold") && Number.isFinite(Number(params.get("threshold")))) state.threshold = clamp(Number(params.get("threshold")), 0, 1);
@@ -415,7 +400,7 @@ function syncControls() {
   if (document.activeElement !== $("alert-pct")) $("alert-pct").value = String(state.alertPct);
   $("auto").value = String(state.auto);
   $("timezone").value = state.timezone;
-  $("timezone-note").textContent = zoneLabel() + " · event times";
+  $("timezone-note").textContent = timeZone() + " · event times";
   document.querySelectorAll(".tz-label").forEach(el => { el.textContent = state.timezone === "local" ? "local" : "UTC"; });
   $("model-name").textContent = MODEL_NAMES[state.model];
   document.querySelectorAll(".tab").forEach((button) => {
@@ -427,13 +412,9 @@ function syncControls() {
   $("history-controls").hidden = !canTravel;
   $("history-note").textContent = canTravel ? "Custom span: set As of and an optional To, then Load replay. Archive availability is not proof of point-in-time collection." : "Custom As of and replay need Binance single venue. The presets above switch to it for you.";
   $("bar").value = state.bar;
-  $("bar").disabled = !canTravel;
-  $("bar-field").classList.toggle("disabled", !canTravel);
   $("asof-input").value = state.asof == null ? "" : toInputValue(state.asof);
-  $("asof-input").disabled = !canTravel;
-  $("asof-field").classList.toggle("disabled", !canTravel);
-  $("live").disabled = !canTravel || state.asof == null;
-  if ($("rp-load")) syncReplay();
+  $("live").disabled = state.asof == null;
+  syncReplay();
   document.querySelectorAll(".swatch").forEach((button) => {
     button.classList.toggle("on", button.dataset.theme === state.theme);
     button.setAttribute("aria-pressed", String(button.dataset.theme === state.theme));
@@ -774,7 +755,6 @@ function rebuildHeat() {
   const img = ctx.createImageData(nT, bins);
   const vmax = robustMax(data.heatA);
   state.vmax = vmax;
-  state.gamma = gammaOf(state.threshold);
   const theme = THEMES[state.theme];
   const bg = [20, 22, 15];
   for (let b = 0; b < bins; b++) {
@@ -975,7 +955,7 @@ function drawScale(ctx, L) {
   ctx.fillStyle = "#d5dccb";
   ctx.font = "10px ui-monospace, monospace";
   ctx.textAlign = "right";
-  const gamma = state.gamma || gammaOf(state.threshold);
+  const gamma = gammaOf(state.threshold);
   const usdAt = (intensity) => (intensity <= 0 ? 0 : state.vmax * Math.pow(intensity, 1 / gamma));
   ctx.fillText(fmtUsd(usdAt(1)), barX - 4, L.plotY + 10);
   ctx.fillText(fmtUsd(usdAt(0.5)), barX - 4, L.plotY + L.plotH * 0.5);
@@ -1595,10 +1575,6 @@ function renderReading(data) {
     : "Modeled short liquidation exposure within ±5% of price divided by long exposure";
 }
 
-function showMk(id, on) {
-  $(id).hidden = !on;
-}
-
 function fmtHours(hours) {
   return hours >= 1 ? `${Number(hours.toFixed(2))}h` : `${Math.round(hours * 60)}m`;
 }
@@ -1660,7 +1636,7 @@ function renderMarket() {
   const mc = data.market_context && typeof data.market_context === "object" ? data.market_context : {};
   const win = data.range || state.range;
   const change = mc.price_change_pct;
-  showMk("mk-chg", num(change));
+  $("mk-chg").hidden = !num(change);
   if (num(change)) {
     $("mk-chg-k").textContent = win;
     $("mk-chg-v").textContent = fmtPct(change, 2);
@@ -1670,7 +1646,7 @@ function renderMarket() {
   const live = isLive(data);
   const body = live && state.context && state.context.key === dataKey(data) ? state.context.body : null;
   const oi = num(mc.oi_usd) ? mc.oi_usd : body && num(body.open_interest_usd_total) ? body.open_interest_usd_total : null;
-  showMk("mk-oi", oi != null);
+  $("mk-oi").hidden = oi == null;
   if (oi != null) {
     const delta = mc.oi_change_pct;
     $("mk-oi-v").textContent = fmtUsd(oi);
@@ -1680,7 +1656,7 @@ function renderMarket() {
       (num(delta) ? `; ${fmtPct(delta, 1)} over the ${rangeLabel(win)} window` : "");
   }
   const funding = live && body ? fundingOf(body, data) : null;
-  showMk("mk-fund", Boolean(funding));
+  $("mk-fund").hidden = !funding;
   if (funding) {
     $("mk-fund-k").textContent = funding.label;
     $("mk-fund-v").textContent = fmtRate(funding.rate) + (funding.hours ? " /" + fmtHours(funding.hours) : "");
@@ -2131,10 +2107,7 @@ function frameAsof(r, idx) {
 
 function syncReplay() {
   const r = state.replay;
-  const canTravel = historyOn();
-  $("rp-load").disabled = !canTravel || state.asof == null;
-  $("to-input").disabled = !canTravel;
-  $("to-field").classList.toggle("disabled", !canTravel);
+  $("rp-load").disabled = state.asof == null;
   ["rp-back", "rp-play", "rp-fwd", "rp-scrub"].forEach((id) => {
     $(id).disabled = !r;
   });
@@ -2144,8 +2117,6 @@ function syncReplay() {
     $("rp-scrub").max = String(r.frames - 1);
     $("rp-scrub").value = String(r.idx);
     $("rp-time").textContent = `${fmtStamp(frameAsof(r, r.idx) * 1000, r.step < 86400000)} · ${r.idx + 1}/${r.frames}`;
-  } else if (!canTravel) {
-    $("rp-time").textContent = "Replay is Binance single venue only";
   } else {
     $("rp-time").textContent = state.asof == null ? "Set As of, then Load replay" : "Ready to load";
   }
@@ -2209,7 +2180,6 @@ async function startReplay(keepIdx, span) {
       cache: new Map(),
       controller: new AbortController(),
       reloaded: Boolean(keepIdx),
-      days: body.days,
       note: body.note,
       anchorFirst: keepIdx && prev ? prev.anchorFirst : null,
       anchorN: keepIdx && prev ? prev.anchorN : null,
@@ -2218,14 +2188,7 @@ async function startReplay(keepIdx, span) {
     await showFrame(state.replay.idx);
   } catch (err) {
     if (err.name === "AbortError" || seq !== state.replaySeq) return;
-    const message = err.message || "Could not load the replay.";
-    // A preset may have switched venue; never leave another venue's map labelled as this one.
-    if (!displayedMatchesState()) {
-      fail(message);
-    } else {
-      showBanner("error", [message]);
-      announce("Replay unavailable. " + message);
-    }
+    replayFailed(err.message || "Could not load the replay.");
   } finally {
     if (seq === state.replaySeq) {
       state.replayController = null;
@@ -2280,15 +2243,16 @@ async function showFrame(idx) {
     }
     r.playing = false;
     syncReplay();
-    const message = err.message || "Could not load this frame.";
-    if (!displayedMatchesState()) {
-      fail(message);
-    } else {
-      showBanner("error", [message]);
-      announce("Replay unavailable. " + message);
-    }
+    replayFailed(err.message || "Could not load this frame.");
     return false;
   }
+}
+
+// A preset may have switched venue; never leave another venue's map labelled as this one.
+function replayFailed(message) {
+  if (!displayedMatchesState()) return fail(message);
+  showBanner("error", [message]);
+  announce("Replay unavailable. " + message);
 }
 
 async function playLoop() {
@@ -2423,18 +2387,8 @@ function wire() {
   const commitCoin = () => {
     const next = normalizeCoin(coin.value);
     if (!next && coin.value.trim()) showBanner("error", [`${coin.value.trim()} is not a ticker. ${COIN_HINT}`]);
-    if (!next || next === state.coin) {
-      coin.value = state.coin;
-      return;
-    }
-    stopReplay();
-    state.coin = next;
-    coin.value = next;
-    state.timeFull = true;
-    state.priceDirty = false;
-    persist();
-    renderWatch();
-    load("coin");
+    if (!next || next === state.coin) coin.value = state.coin;
+    else switchCoin(next);
   };
   coin.addEventListener("change", commitCoin);
   coin.addEventListener("keydown", (event) => {
@@ -2664,7 +2618,6 @@ async function bootStatus() {
   try {
     const response = await fetch("/api/status");
     const body = await response.json();
-    state.models = body.models || [];
     const sources = (body.capabilities || {}).observed_liquidations;
     if (Array.isArray(sources)) state.liqSources = sources;
     (body.models || []).forEach((model) => {
