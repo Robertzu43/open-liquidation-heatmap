@@ -117,7 +117,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:  # noqa: N802 — stdlib handler name
         # Any page the user visits can send requests here; with DNS rebinding it could also read the replies.
-        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+        # Static files carry no data or work, so a link from another site still opens the page.
+        if self.headers.get("Sec-Fetch-Site") == "cross-site" and urlparse(self.path).path.startswith("/api/"):
             self._send_json({"error": "Requests from other websites are refused. Open this address directly.", "code": "forbidden"}, status=403)
             return
         if self.server.server_address[0] in LOOPBACK_BINDS and not LOOPBACK_HOST.fullmatch(self.headers.get("Host", "").lower()):

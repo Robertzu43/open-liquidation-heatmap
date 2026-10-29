@@ -361,7 +361,7 @@ Error responses preserve `error` as a string and add a stable `code`:
 | HTTP | Code | Meaning |
 | --- | --- | --- |
 | 400 | `invalid_request` | Validation or bounds failure; fix the query |
-| 403 | `forbidden` | Sent by another website (`Sec-Fetch-Site: cross-site`), or, on a loopback bind, addressed to a `Host` other than `127.0.0.1`, `localhost` or `[::1]` |
+| 403 | `forbidden` | An `/api/` request sent by another website (`Sec-Fetch-Site: cross-site`), or, on a loopback bind, addressed to a `Host` other than `127.0.0.1`, `localhost` or `[::1]` |
 | 404 | `not_found` | No such route / asset |
 | 409 | `replay_expired` | No loaded span covers the requested replay frame; also `replay_expired: true` |
 | 429 | `busy` | Expensive request slots are occupied; retry with backoff |

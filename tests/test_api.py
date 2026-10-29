@@ -371,8 +371,24 @@ def test_loopback_server_refuses_other_websites(http_api, headers, expected):
             assert http_api('/api/v1/heatmap?range=12h', headers)[0] == 403
 
 
-def test_non_loopback_bind_accepts_any_host_but_not_cross_site(http_api):
+def test_non_loopback_bind_accepts_any_host_but_not_cross_site_api_calls(http_api):
     http_api.app.server_address = ('192.0.2.10', http_api.app.server_port)  # as if started with --host 192.0.2.10
     assert http_api('/healthz', {'Host': 'liq.lan:8765'})[0] == 200
-    status, body = http_api('/healthz', {'Host': 'liq.lan:8765', 'Sec-Fetch-Site': 'cross-site'})
+    status, body = http_api('/api/v1/status', {'Host': 'liq.lan:8765', 'Sec-Fetch-Site': 'cross-site'})
     assert (status, body['code']) == (403, 'forbidden')
+
+
+def test_a_link_from_another_website_still_opens_the_page():
+    """Static files carry no data or work; only cross-site API calls are refused."""
+    app = server.BoundedThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
+    thread = threading.Thread(target=app.serve_forever, daemon=True)
+    thread.start()
+    try:
+        headers = {'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Host': f'127.0.0.1:{app.server_port}'}
+        request = urllib.request.Request(f'http://127.0.0.1:{app.server_port}/', headers=headers)
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200 and b'<html' in response.read()
+    finally:
+        app.shutdown()
+        app.server_close()
+        thread.join()
