@@ -7,8 +7,6 @@ leverage tiers, this much notional would be forced out at this price."
 
 from __future__ import annotations
 
-import bisect
-import itertools
 import hashlib
 import json
 import math
@@ -19,7 +17,7 @@ import numpy as np
 MODEL_VERSION = "2.0.0"
 DECAY_REFERENCE_SECONDS = 300
 MMR = 0.005
-VENUES = ("binance", "bybit", "bybit_uta", "okx")
+VENUES = ("binance", "bybit", "okx")
 
 # Relative weight of each leverage tier. Weights in a model sum to 1.
 MODELS: dict[int, dict] = {
@@ -56,16 +54,6 @@ MODELS: dict[int, dict] = {
 }
 
 
-def liq_price_long(entry: float, leverage: float, mmr: float = MMR) -> float:
-    """Isolated long liquidation price at zero fee, zero extra margin, zero cum."""
-    return liq_price(entry, leverage, "long", mmr)
-
-
-def liq_price_short(entry: float, leverage: float, mmr: float = MMR) -> float:
-    """Isolated short liquidation price at zero fee, zero extra margin, zero cum."""
-    return liq_price(entry, leverage, "short", mmr)
-
-
 def liq_price(
     entry: float,
     leverage: float,
@@ -87,8 +75,6 @@ def liq_price(
     _validate_liq(entry, leverage, side, mmr, qty, cum, fee, extra_margin, venue)
     if venue == "bybit":
         return _bybit_classic(entry, leverage, side, mmr, qty, cum, extra_margin)
-    if venue == "bybit_uta":
-        return _bybit_uta(entry, leverage, side, mmr, qty, cum, fee, extra_margin)
     if venue == "okx":
         return _okx_liq(entry, leverage, side, mmr, qty, fee, extra_margin)
     return _binance_liq(entry, leverage, side, mmr, qty, cum, extra_margin)
@@ -124,7 +110,7 @@ def _validate_liq(
     if cum < 0:
         raise ValueError("cum must be >= 0")
     if venue == "bybit" and fee != 0:
-        raise ValueError("the Bybit classic isolated formula has no close-fee term; use venue='bybit_uta'")
+        raise ValueError("the Bybit classic isolated formula has no close-fee term")
     if venue == "okx" and cum != 0:
         raise ValueError("OKX isolated tiers adjust mmr; they do not take cum")
 
@@ -183,101 +169,6 @@ def _bybit_classic(
     if side == "long":
         return entry - cushion - extra
     return entry + cushion + extra
-
-
-def _bybit_uta(
-    entry: float,
-    leverage: float,
-    side: str,
-    mmr: float,
-    qty: float,
-    deduction: float,
-    fee: float,
-    extra_margin: float,
-) -> float:
-    if side == "long":
-        numerator = (
-            entry * qty
-            - entry * qty / leverage
-            - extra_margin / (1.0 - fee)
-            - deduction
-        )
-        denominator = qty * (1.0 - mmr)
-        if denominator <= 0:
-            raise ValueError("UTA long denominator must be positive")
-        return numerator / denominator
-    numerator = (
-        entry * qty
-        + entry * qty / leverage
-        + extra_margin / (1.0 + fee)
-        + deduction
-    )
-    return numerator / (qty * (1.0 + mmr))
-
-
-def fade_swept(
-    levels: list[tuple[float, float, str]] | tuple[tuple[float, float, str], ...],
-    bars: list[tuple[float, float]] | tuple[tuple[float, float], ...],
-) -> list[tuple[float, float, str]]:
-    """Drop levels whose price was traded in ``bars``.
-
-    ``levels`` are ``(price, intensity, side)``. ``bars`` are later
-    ``(high, low)`` prints, oldest first. A long is swept when any low is at
-    or below its price. A short is swept when any high is at or above its price.
-    """
-    parsed_bars: list[tuple[float, float]] = []
-    for high, low in bars:
-        if not math.isfinite(high) or not math.isfinite(low):
-            raise ValueError("bars must be finite")
-        if high < low:
-            raise ValueError("bar high must be >= low")
-        parsed_bars.append((float(high), float(low)))
-    kept: list[tuple[float, float, str]] = []
-    for price, intensity, side in levels:
-        if side not in ("long", "short"):
-            raise ValueError(f"side must be 'long' or 'short', got {side!r}")
-        if not math.isfinite(price) or not math.isfinite(intensity):
-            raise ValueError("levels must be finite")
-        if intensity < 0:
-            raise ValueError("intensity must be >= 0")
-        if side == "long":
-            swept = any(low <= price for _high, low in parsed_bars)
-        else:
-            swept = any(high >= price for high, _low in parsed_bars)
-        if not swept:
-            kept.append((float(price), float(intensity), side))
-    return kept
-
-
-def bin_intensity(
-    prices: list[float] | tuple[float, ...],
-    intensities: list[float] | tuple[float, ...],
-    edges: list[float] | tuple[float, ...],
-) -> list[float]:
-    """Sum intensity into ``[edges[i], edges[i + 1])``. The last bin is closed."""
-    if len(prices) != len(intensities):
-        raise ValueError("prices and intensities must have the same length")
-    if len(edges) < 2:
-        raise ValueError("edges need at least two boundaries")
-    bounds = [float(edge) for edge in edges]
-    if any(not math.isfinite(edge) for edge in bounds):
-        raise ValueError("edges must be finite")
-    if any(right <= left for left, right in itertools.pairwise(bounds)):
-        raise ValueError("edges must be strictly increasing")
-    totals = [0.0] * (len(bounds) - 1)
-    for price, intensity in zip(prices, intensities, strict=True):
-        if not math.isfinite(price) or not math.isfinite(intensity):
-            raise ValueError("prices and intensities must be finite")
-        if intensity < 0:
-            raise ValueError("intensity must be >= 0")
-        if price < bounds[0] or price > bounds[-1]:
-            continue
-        if price == bounds[-1]:
-            totals[-1] += float(intensity)
-            continue
-        index = bisect.bisect_right(bounds, price) - 1
-        totals[index] += float(intensity)
-    return totals
 
 
 @dataclass

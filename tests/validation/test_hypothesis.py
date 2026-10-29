@@ -34,7 +34,7 @@ def _finite_pair(fn: PriceFn, entry: float, leverage: int, mmr: float, venue: st
             assert price > entry
 
 
-@pytest.mark.parametrize("venue", ["binance", "bybit", "bybit_uta", "okx"])
+@pytest.mark.parametrize("venue", ["binance", "bybit", "okx"])
 @given(entry=_ENTRY, leverage=_LEVERAGE, mmr=_MMR)
 @example(entry=100, leverage=10, mmr=0.005)
 def test_oracle_long_below_short_above_and_finite(
@@ -43,7 +43,7 @@ def test_oracle_long_below_short_above_and_finite(
     _finite_pair(oracle.liq_price, entry, leverage, mmr, venue)
 
 
-@pytest.mark.parametrize("venue", ["binance", "bybit_uta", "okx"])
+@pytest.mark.parametrize("venue", ["binance", "bybit", "okx"])
 @given(entry=_ENTRY, leverage=_LEVERAGE, mmr=_MMR)
 @example(entry=100, leverage=10, mmr=0.005)
 def test_model_long_below_short_above_and_finite(
@@ -52,7 +52,7 @@ def test_model_long_below_short_above_and_finite(
     _finite_pair(model.liq_price, entry, leverage, mmr, venue)
 
 
-@pytest.mark.parametrize("venue", ["binance", "bybit", "bybit_uta", "okx"])
+@pytest.mark.parametrize("venue", ["binance", "bybit", "okx"])
 @given(
     entry=_ENTRY,
     low=_LEVERAGE,

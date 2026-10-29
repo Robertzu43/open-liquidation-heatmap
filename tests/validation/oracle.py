@@ -6,7 +6,7 @@ on each branch.
 
 Shared margin-balance formula (maintenance amount is zero, no close fee, no
 extra margin), used by Binance USD-M isolated one-way positions and, in that
-same limit, by OKX USDT swaps and Bybit's unified-account formula::
+same limit, by OKX USDT swaps::
 
     long:  entry * (1 - 1/leverage) / (1 - mmr)
     short: entry * (1 + 1/leverage) / (1 + mmr)
@@ -33,9 +33,6 @@ Bybit's older isolated USDT article uses a different, entry-notional formula
 ``venue="bybit"`` branch:
 https://www.bybit.com/en/help-center/article/Liquidation-Price-USDT-Contract
 
-Bybit unified-account isolated formula (fee applies to extra margin):
-https://www.bybit.com/en/help-center/article/UTA-Trading-Rules-Liquidation-Process
-
 OKX USDT-margined isolated estimated liquidation price:
 https://www.okx.com/en-us/help/vii-introduction-to-the-isolated-mode-of-single-multi-currency-portfolio-margin
 """
@@ -44,11 +41,7 @@ from __future__ import annotations
 
 import math
 
-VENUES = ("binance", "bybit", "bybit_uta", "okx")
-
-# Venues whose zero-fee, zero-extra, zero-cum price is the margin-balance
-# formula above. Bybit's older article is not in this set.
-MARGIN_BALANCE_VENUES = ("binance", "bybit_uta", "okx")
+VENUES = ("binance", "bybit", "okx")
 
 
 def liq_price(
@@ -74,8 +67,6 @@ def liq_price(
     _validate(entry, leverage, side, mmr, qty, cum, fee, extra_margin, venue)
     if venue == "bybit":
         return _bybit_classic(entry, leverage, side, mmr, qty, cum, extra_margin)
-    if venue == "bybit_uta":
-        return _bybit_uta(entry, leverage, side, mmr, qty, cum, fee, extra_margin)
     if venue == "okx":
         return _okx(entry, leverage, side, mmr, qty, fee, extra_margin)
     return _binance(entry, leverage, side, mmr, qty, cum, extra_margin)
@@ -115,10 +106,7 @@ def _validate(
     ):
         raise ValueError("inputs must be finite")
     if venue == "bybit" and fee != 0:
-        raise ValueError(
-            "the Bybit classic isolated formula has no close-fee term; "
-            "use venue='bybit_uta'"
-        )
+        raise ValueError("the Bybit classic isolated formula has no close-fee term")
     if venue == "okx" and cum != 0:
         raise ValueError("OKX isolated tiers adjust mmr; they do not take cum")
 
@@ -199,42 +187,3 @@ def _bybit_classic(
     if side == "long":
         return entry - cushion - extra
     return entry + cushion + extra
-
-
-def _bybit_uta(
-    entry: float,
-    leverage: float,
-    side: str,
-    mmr: float,
-    qty: float,
-    deduction: float,
-    fee: float,
-    extra_margin: float,
-) -> float:
-    """Bybit unified-account isolated formula.
-
-    The published long form is
-
-        (entry * qty - entry * qty / leverage
-            - extra / (1 - fee) - deduction) / (qty * (1 - mmr))
-    """
-    if side == "long":
-        if fee >= 1:
-            raise ValueError("fee must be < 1")
-        numerator = (
-            entry * qty
-            - entry * qty / leverage
-            - extra_margin / (1.0 - fee)
-            - deduction
-        )
-        denominator = qty * (1.0 - mmr)
-        if denominator <= 0:
-            raise ValueError("UTA long denominator must be positive")
-        return numerator / denominator
-    numerator = (
-        entry * qty
-        + entry * qty / leverage
-        + extra_margin / (1.0 + fee)
-        + deduction
-    )
-    return numerator / (qty * (1.0 + mmr))

@@ -26,7 +26,7 @@ PriceFn = Callable[..., float]
 
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("leverage", LEVERAGES)
-@pytest.mark.parametrize("venue", ["binance", "okx", "bybit_uta"])
+@pytest.mark.parametrize("venue", ["binance", "okx"])
 def test_zero_tier_price_matches_oracle(side: str, leverage: int, venue: str) -> None:
     """Four-argument prices for the venues that share the margin-balance formula."""
     expected = oracle.liq_price(ENTRY, leverage, side, TIER1_MMR, qty=2.5, venue=venue)
@@ -80,21 +80,6 @@ def test_bybit_help_center_funding_taken_from_position_margin(price_of: PriceFn)
     assert got == pytest.approx(19_900)
 
 
-def test_bybit_uta_help_center_long_with_fee(price_of: PriceFn) -> None:
-    # 1 BTC long at 40_000, 50x, MMR 0.5%, taker fee 0.055%, 3_000 extra → 36_380.25.
-    got = price_of(
-        40_000,
-        50,
-        "long",
-        0.005,
-        qty=1,
-        extra_margin=3_000,
-        fee=0.00055,
-        venue="bybit_uta",
-    )
-    assert got == pytest.approx(36_380.25, abs=0.01)
-
-
 def test_bybit_classic_is_not_the_binance_price() -> None:
     """The published 50x example is only a couple of dollars from Binance.
 
@@ -116,11 +101,8 @@ def test_bybit_classic_is_not_the_binance_price() -> None:
     assert abs(binance_wide - classic_wide) > 100
 
 
-def test_bybit_uta_without_fee_or_extra_matches_binance() -> None:
+def test_okx_without_fee_or_extra_matches_binance() -> None:
     args = (20_000.0, 50.0, "short", 0.005)
-    assert oracle.liq_price(*args, venue="bybit_uta") == pytest.approx(
-        oracle.liq_price(*args, venue="binance")
-    )
     assert oracle.liq_price(*args, venue="okx") == pytest.approx(
         oracle.liq_price(*args, venue="binance")
     )
