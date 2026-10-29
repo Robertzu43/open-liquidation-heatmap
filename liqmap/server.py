@@ -6,6 +6,7 @@ import argparse
 import gzip
 import json
 import logging
+import re
 import threading
 import time
 from importlib import resources
@@ -16,7 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from liqmap import __version__
 from liqmap.data import DataError, RequestDeadlineExceeded, check_deadline, request_deadline
 from liqmap.market import context_payload, liquidations_payload, watchlist_payload
-from liqmap.service import ReplayExpired, SourceUnavailable, features_payload, levels_payload, load_heatmap, readiness_payload, replay_payload, status_payload, symbols_payload
+from liqmap.service import ReplayExpired, SourceUnavailable, features_payload, levels_payload, load_heatmap, replay_payload, status_payload
 
 log = logging.getLogger("liqmap.server")
 MAX_HTTP_WORKERS = 16
@@ -25,6 +26,9 @@ REQUEST_DEADLINE_S = 60
 OVERLOAD_SEND_TIMEOUT_S = 0.1
 MAX_EXPENSIVE_REQUESTS = 4
 _expensive = threading.BoundedSemaphore(MAX_EXPENSIVE_REQUESTS)
+# server_address holds the bound IP, so --host localhost reads 127.0.0.1 here.
+LOOPBACK_BINDS = {"127.0.0.1", "::1"}
+LOOPBACK_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
 
 
 class ClientDisconnected(Exception):
@@ -32,8 +36,9 @@ class ClientDisconnected(Exception):
 
 
 def web_root() -> Path:
+    # An installed copy sits in site-packages, where a top-level "web" may belong to another package.
     checkout = Path(__file__).resolve().parent.parent / "web"
-    return checkout if checkout.is_dir() else Path(resources.files("liqmap_web"))
+    return checkout if (checkout / "index.html").is_file() else Path(resources.files("liqmap_web"))
 
 
 WEB_ROOT = web_root()
@@ -111,6 +116,13 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def do_GET(self) -> None:  # noqa: N802 — stdlib handler name
+        # Any page the user visits can send requests here; with DNS rebinding it could also read the replies.
+        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            self._send_json({"error": "Requests from other websites are refused. Open this address directly.", "code": "forbidden"}, status=403)
+            return
+        if self.server.server_address[0] in LOOPBACK_BINDS and not LOOPBACK_HOST.fullmatch(self.headers.get("Host", "").lower()):
+            self._send_json({"error": "This server answers only Host 127.0.0.1, localhost or [::1]. Start it with --host to serve another name.", "code": "forbidden"}, status=403)
+            return
         token = request_deadline.set(time.monotonic() + REQUEST_DEADLINE_S)
         try:
             self._get()
@@ -125,10 +137,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/healthz":
                 self._send_json({"ok": True, "process": "healthy"})
-                return
-            if parsed.path == "/readyz":
-                payload = readiness_payload()
-                self._send_json(payload, status=200 if payload["ok"] else 503)
                 return
             route = parsed.path.replace("/api/v1/", "/api/", 1) if parsed.path.startswith("/api/v1/") else parsed.path
             expensive_routes = {
@@ -147,9 +155,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/api/status":
                 self._send_json(status_payload())
-                return
-            if route == "/api/symbols":
-                self._send_json(symbols_payload())
                 return
             self._static(parsed.path)
         except RequestDeadlineExceeded as exc:

@@ -4,7 +4,7 @@ Machine-readable contract: [OpenAPI 3.1](openapi.json).
 
 Run `python -m liqmap.server` and use `http://127.0.0.1:8765`. No API key is needed. Public sources can be unavailable or delayed; demo is explicitly synthetic. HTTP responses use UTF-8 strict JSON (non-finite scalars are never emitted), `Cache-Control: no-store`, and optional gzip.
 
-Application **0.4.0**, API schema **1.0**, model **2.0.0**. Everything added in 0.4.0 is additive: existing fields and routes keep their meaning.
+Application **0.4.0**, API schema **1.0**, model **2.0.0**.
 
 ## Routes and parameters
 
@@ -12,17 +12,15 @@ Application **0.4.0**, API schema **1.0**, model **2.0.0**. Everything added in 
 | --- | --- |
 | `GET /api/v1/heatmap` | Chart arrays, display analysis, exact logical features, market context and metadata |
 | `GET /api/v1/features` | Same metadata, market context, times and exact features, without chart arrays or display analysis |
-| `GET /api/v1/context` | Live funding and open-interest snapshot per venue (new in 0.4.0) |
-| `GET /api/v1/liquidations` | Observed recent OKX filled liquidation orders; exchange records, not model output (new in 0.4.0) |
-| `GET /api/v1/watchlist` | Nearest modeled liquidation clusters for up to six symbols (new in 0.4.0) |
-| `GET /api/v1/status` | Process configuration, available scenarios/ranges, capabilities and cached default-market readiness |
-| `GET /api/v1/symbols` | Suggested symbols and supported exchanges |
+| `GET /api/v1/context` | Live funding and open-interest snapshot per venue |
+| `GET /api/v1/liquidations` | Observed recent OKX filled liquidation orders; exchange records, not model output |
+| `GET /api/v1/watchlist` | Nearest modeled liquidation clusters for up to six symbols |
+| `GET /api/v1/status` | Process configuration, available scenarios/ranges and capabilities |
 | `GET /api/v1/levels` | Display-bin leverage breakdown at `t` and `price` |
 | `GET /api/v1/replay` | Load a bounded Binance archive span for subsequent offline frames |
 | `GET /healthz` | Process liveness; no exchange request |
-| `GET /readyz` | Cached default live-market observation; no exchange request |
 
-Each `/api/v1/...` route has a legacy `/api/...` compatibility alias, including the three new routes. Heatmap, features and levels use model 2.0.0; its numerical output is unchanged from 0.3.1 for every venue that 0.3.1 supported. Heatmap and features include schema and model versions, but levels does not. A schema version describes the envelope; a model version describes numerical semantics. Record both from the corresponding heatmap or features response for research. Unknown routes return 404.
+Each `/api/v1/...` route has a legacy `/api/...` compatibility alias. Heatmap, features and levels use model 2.0.0. Heatmap and features include schema and model versions, but levels does not. A schema version describes the envelope; a model version describes numerical semantics. Record both from the corresponding heatmap or features response for research. Unknown routes return 404.
 
 Heatmap, features and levels share these query parameters:
 
@@ -72,7 +70,7 @@ Both heatmap and features include these required metadata fields:
 | `feature_as_of` | Unix ms close of the final grid bar represented by `features` |
 | `model_metadata` | Parameter digest, units, warmup anchor, insufficient-history flag, per-bar venue coverage, excluded observations, OI accounting and flow-prior choices |
 
-Since 0.4.0 both also carry the optional [`market_context`](#market-context) object.
+Both also carry the [`market_context`](#market-context) object.
 
 Market identity remains at the root: `exchange`, `exchange_name`, `symbol` (e.g. `BTCUSDT`), `coin`, `mode`, `range`, `bar`, `bar_seconds`, `model`, `source`, `venues`, `note`, `warnings`, `stale`, `times`. The `model` object supplies scenario weights, decay, churn, rendering kernel and liquidation formulas. For the aggregate, `venues` lists the venues actually included.
 
@@ -81,9 +79,9 @@ Market identity remains at the root: `exchange`, `exchange_name`, `symbol` (e.g.
 `quality` contains:
 
 - `status`: `synthetic`, `stale`, `degraded`, `observed`, or `unknown`. Observed means source data were loaded with provenance; it is not an exchange audit or quality guarantee.
-- `synthetic`, `stale`, `degraded`: explicit booleans. Live sources, including Binance archive fallback, are stale when the latest bar with both observed price and open interest is older than twice the bar interval. Aggregate sources exclude stale venues, mark missing or incomplete venue coverage degraded, and refresh cached aggregates when a component ages out. Since 0.4.0 the aggregate expects OKX, Binance and Bybit, so a missing Bybit also marks it degraded. Historical/as-of/replay views retain the loader assessment of their requested boundary. Root `stale` agrees with `quality.stale`.
+- `synthetic`, `stale`, `degraded`: explicit booleans. Live sources, including Binance archive fallback, are stale when the latest bar with both observed price and open interest is older than twice the bar interval. Aggregate sources exclude stale venues, mark missing or incomplete venue coverage degraded, and refresh cached aggregates when a component ages out. The aggregate expects OKX, Binance and Bybit. Historical/as-of/replay views retain the loader assessment of their requested boundary. Root `stale` agrees with `quality.stale`.
 - `source_as_of`: same source bar-open Unix ms as root `as_of`.
-- `coverage`: `candle_observed`, `oi_observed`, `flow_observed`, each `{observed: integer, total: integer}` or null if masks are unavailable. Filled values do not increase observed counts. Bybit publishes no historical taker flow, so a Bybit view reports zero observed flow bars.
+- `coverage`: `candle_observed`, `oi_observed`, `flow_observed`, each `{observed: integer, total: integer}`. Filled values do not increase observed counts. Bybit publishes no historical taker flow, so a Bybit view reports zero observed flow bars.
 - `degraded`: true when candle/OI observation masks contain gaps; a degraded source is not ready. Missing flow is disclosed by its mask and model prior.
 - `coverage_basis`: `source_masks` when loader provenance exists, otherwise `inferred_from_series`; inferred masks do not establish observation history.
 - `historical_availability`: `known` only when every OI availability boundary is positive and finite, provenance explicitly says `availability="recorded_receipt"` or `"known_publication"`, and history is neither reconstructed archive nor synthetic; otherwise `unknown`. This does not certify availability of every other input. Current archive loaders cannot retrospectively prove receipt times.
@@ -95,7 +93,7 @@ The history anchor is the beginning of the loaded window; unknown earlier invent
 
 ## Market context
 
-Added in 0.4.0. Heatmap and features responses include a `market_context` object. It is additive: `schema_version` stays `1.0`, and clients that ignore it keep working. Treat it as optional, because older servers do not send it.
+Heatmap and features responses include a `market_context` object.
 
 Every value describes the **displayed window**. With `visible_bars`, that is the displayed tail, not the full modeled history.
 
@@ -132,7 +130,7 @@ All dollar amounts below are estimated **entry-notional USD**, using quote price
 
 Each imbalance row is `{window_pct, long_usd, short_usd, short_to_long}`. The ratio is null when the long denominator is zero, including an empty window. Window sizes and legacy `analysis.distance_pct` are **percent**, ratios can exceed one, concentration is a fraction, persistence is seconds, and price is USDT per base asset. Zero modeled inventory means no retained cohorts under this history and scenario; it does not establish zero actual market risk. Missing source information is disclosed in quality and model metadata, rather than upgraded to verified observations.
 
-The display-bin `analysis.summary` text now says "short liquidation cluster" and "long liquidation cluster" where 0.3 said "shelf". The numbers behind it did not change. Do not parse the summary text; use `analysis` fields or `features`.
+Do not parse the display-bin `analysis.summary` text; use `analysis` fields or `features`.
 
 ## Binary arrays
 
@@ -164,9 +162,9 @@ print(payload['quality']['status'], payload['features'])
 
 ## Status and capabilities
 
-`GET /api/v1/status` returns `ok`, `schema_version`, `version` (the application version, `0.4.0`), `readiness`, `default`, `exchanges`, `ranges`, `models`, `mmr` and `coins`. `exchanges` lists `okx`, `binance`, `bybit` and `demo`; the aggregate is a view over the live venues, not a separate entry.
+`GET /api/v1/status` returns `ok`, `schema_version`, `version` (the application version, `0.4.0`), `default`, `exchanges`, `ranges`, `models`, `mmr` and `coins`. `exchanges` lists `okx`, `binance`, `bybit` and `demo`; the aggregate is a view over the live venues, not a separate entry.
 
-Since 0.4.0 it also returns `capabilities`:
+It also returns `capabilities`:
 
 ```json
 "capabilities": {"context_venues": ["okx", "binance", "bybit"], "observed_liquidations": ["okx"], "watchlist_max_symbols": 6}
@@ -177,8 +175,6 @@ Since 0.4.0 it also returns `capabilities`:
 | `context_venues` | Live venues `/api/v1/context` can query |
 | `observed_liquidations` | Venues whose filled liquidation orders `/api/v1/liquidations` can return |
 | `watchlist_max_symbols` | Most symbols one `/api/v1/watchlist` request accepts |
-
-Detect 0.4 features from `capabilities` rather than from the version string. A 0.3 server has no `capabilities` field.
 
 ## Live-only routes
 
@@ -235,7 +231,7 @@ Behavior:
 - Venue errors are isolated. A blocked or failing venue appears with `ok: false`; the others are still returned.
 - When every live venue in the request fails, the route returns 503 `source_unavailable`. In pair mode that means the one requested venue failed.
 - Responses are cached for **30 seconds**, at most **32 entries**. Two requests within 30 seconds can return the same snapshot.
-- The route counts against the expensive-request slots and the 60-second cooperative budget (see [errors](#errors-and-readiness)).
+- The route counts against the expensive-request slots and the 60-second cooperative budget (see [errors](#errors-and-health)).
 
 ```sh
 curl 'http://127.0.0.1:8765/api/v1/context?exchange=okx&symbol=BTC'
@@ -358,13 +354,14 @@ curl 'http://127.0.0.1:8765/api/v1/watchlist?exchange=aggregate&mode=symbol&rang
 curl 'http://127.0.0.1:8765/api/v1/watchlist?exchange=demo&symbols=BTC,ETH'
 ```
 
-## Errors and readiness
+## Errors and health
 
 Error responses preserve `error` as a string and add a stable `code`:
 
 | HTTP | Code | Meaning |
 | --- | --- | --- |
 | 400 | `invalid_request` | Validation or bounds failure; fix the query |
+| 403 | `forbidden` | Sent by another website (`Sec-Fetch-Site: cross-site`), or, on a loopback bind, addressed to a `Host` other than `127.0.0.1`, `localhost` or `[::1]` |
 | 404 | `not_found` | No such route / asset |
 | 409 | `replay_expired` | No loaded span covers the requested replay frame; also `replay_expired: true` |
 | 429 | `busy` | Expensive request slots are occupied; retry with backoff |
@@ -377,4 +374,4 @@ The same codes apply to the context, liquidations and watchlist routes. Heatmap,
 
 For example, an unavailable source returns `{"error":"Could not reach public source...","code":"source_unavailable"}` with HTTP 503; an expired frame returns `{"error":"This replay is no longer loaded. Load it again.","code":"replay_expired","replay_expired":true}` with HTTP 409. A delayed source can still return HTTP 200 with `quality.status="stale"`; inspect quality before use. The server never silently labels synthetic values live.
 
-`/healthz` returns `{"ok":true,"process":"healthy"}`. `/readyz` returns `{ok, process, data}` with HTTP 200 only if the default **OKX / BTC / 24h / pair / live** cache contains a nonsynthetic, nonstale observation with provenance and complete candle/OI observation masks, within its 45-second series TTL, whose bar close is no older than twice its 5-minute bar interval (**600 seconds / 10 minutes**). Its `data` contains `status`, `market`, `freshness_budget_seconds: 600`, and source/timestamp when available. All other states return 503: `unknown`, `expired`, `stale`, `synthetic`, `degraded`. Another market, demo or historical response cannot satisfy the probe. The probe performs no network request and starts unknown until a client requests the default live view. This explicit bar-based budget is a source-availability signal, not a latency SLA; consumers needing tighter freshness must check event timestamps themselves. HTTP 429/503 responses include `Retry-After: 5`; apply bounded exponential backoff and jitter. The transport admits 16 connection workers with a 10-second socket idle timeout; when all workers are occupied, even probes can receive 503 `server_busy`. A cooperative 60-second handler budget propagates through source HTTP calls, retries and archive work, and rejects late success before response headers; it does not forcibly preempt CPU work or every in-flight socket operation. See [operations](OPERATIONS.md).
+`/healthz` returns `{"ok":true,"process":"healthy"}` and makes no exchange request; it says nothing about data freshness, which each response reports in `quality`. HTTP 429/503 responses include `Retry-After: 5`; apply bounded exponential backoff and jitter. The transport admits 16 connection workers with a 10-second socket idle timeout; when all workers are occupied, even `/healthz` can receive 503 `server_busy`. A cooperative 60-second handler budget propagates through source HTTP calls, retries and archive work, and rejects late success before response headers; it does not forcibly preempt CPU work or every in-flight socket operation. See [operations](OPERATIONS.md).

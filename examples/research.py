@@ -53,24 +53,6 @@ def run(directory):
                   feature='declared_score', units='normalized-score')
     (directory / 'evaluation.json').write_text(canonical_json(config) + '\n', encoding='utf-8')
     held_out = evaluate(**config)
-    # A contract example for a future/user-owned strategy simulator. The diagnostic
-    # above deliberately does not consume this object or produce strategy PnL.
-    strategy_contract = {
-        'purpose': 'synthetic-interface-contract-only; not a runnable strategy backtest',
-        'strategy_id': 'user-must-declare-before-held-out-run',
-        'market': {'exchange': 'binance', 'symbol': 'BTCUSDT'},
-        'fees_bps_per_fill': 5.0, 'slippage_bps_per_fill': 3.0,
-        'execution_delay_ms': 1000, 'funding_policy': 'supply timestamped funding charges',
-        'fill_policy': 'declare executable prices, partial fills and rejected orders',
-        'position_sizing': 'supply predeclared sizing and leverage limits',
-        'input_fields_required': ['signal_available_at', 'decision_at', 'fill_at',
-                                  'quantity', 'executable_price', 'funding_charge'],
-        'output_metrics_required': ['net_pnl', 'fees', 'slippage', 'funding',
-                                    'turnover', 'max_drawdown', 'trade_count',
-                                    'uncertainty_method', 'missing_data_coverage'],
-    }
-    (directory / 'strategy-input-contract.example.json').write_text(
-        canonical_json(strategy_contract) + '\n', encoding='utf-8')
     print(json.dumps({'evidence': 'synthetic interface test only', 'capture': str(capture_path),
                       'inspection': inspect_capture(replay), 'agreement': agreement,
                       'held_out_diagnostic': held_out}, indent=2))

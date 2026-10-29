@@ -11,7 +11,7 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-e2b15a"></a>
 </p>
 <p align="center">
-  <a href="#quickstart">Quickstart</a> · <a href="#read-the-chart-in-30-seconds">Read the chart</a> · <a href="#run-with-a-coding-agent">For coding agents</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a> · <a href="docs/RELEASE_REVIEW.md">Release evidence</a>
+  <a href="#quickstart">Quickstart</a> · <a href="#read-the-chart-in-30-seconds">Read the chart</a> · <a href="#run-with-a-coding-agent">For coding agents</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a>
 </p>
 
 Open Liq is a free liquidation heatmap for crypto futures traders that runs on your own computer. It estimates where leveraged longs and shorts on OKX, Binance and Bybit USDT perpetuals would be liquidated if price moved there, and draws those levels as bands around the price chart. Beside the estimate it shows what the exchanges actually report: open interest, funding and recent OKX liquidation orders. You need no exchange account and no API key, and Open Liq never sees your positions. Every assumption behind the bands is published, and a local API returns the same numbers for your own research.
@@ -62,9 +62,9 @@ python3 -m pip install .
 liqmap
 ```
 
-Open **http://127.0.0.1:8765**. The default market is live OKX BTC/USDT. Switch the venue to Binance, Bybit or All venues from the venue menu. Live views refresh every 60 seconds by default. The server binds to your local machine unless explicitly configured otherwise.
+Open `http://127.0.0.1:8765` in your browser. The default market is live OKX BTC/USDT. Switch the venue to Binance, Bybit or All venues from the venue menu. Live views refresh every 60 seconds by default. The server binds to your local machine unless explicitly configured otherwise.
 
-For offline exploration, open **http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1**. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
+For offline exploration, open `http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1`. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
 
 On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
 
@@ -120,7 +120,7 @@ The sidebar and reading line summarize display bins. For research that must not 
 | Responsive chart | Phone layout, keyboard/touch controls, UTC/local display, shareable views, PNG and JSON exports |
 | Local-first installation | Wheel packaging, console commands, offline demo, no paid runtime service |
 
-Read [what changed in 0.4.0](CHANGELOG.md). **Application 0.4.0, API 1.0 and model 2.0.0 are separate versions.** The model is unchanged from 0.3.1. All venues now includes Bybit, so its totals differ from 0.3.1.
+Read [what changed in 0.4.0](CHANGELOG.md). **Application 0.4.0, API 1.0 and model 2.0.0 are separate versions.**
 
 ## Data coverage
 
@@ -171,7 +171,7 @@ curl 'http://127.0.0.1:8765/api/v1/liquidations?exchange=okx&symbol=BTC&range=24
 
 `funding_rate` is a fraction per funding interval: `0.0001` is 0.01%. The liquidations route returns observed OKX orders, not model output.
 
-Start with [API.md](docs/API.md) and the [OpenAPI specification](docs/openapi.json) for query parameters, field semantics, grid decoding and errors. Select a longer `range` for model history and a smaller `visible_bars` for its displayed tail; the hidden observations still seed the model. `/healthz` checks the process; `/readyz` separately reports the cached default live market. Unknown or stale data is not ready.
+Start with [API.md](docs/API.md) and the [OpenAPI specification](docs/openapi.json) for query parameters, field semantics, grid decoding and errors. Select a longer `range` for model history and a smaller `visible_bars` for its displayed tail; the hidden observations still seed the model. `/healthz` checks the process only; each response's `quality` reports stale, degraded or synthetic data.
 
 ## Research and recording
 
@@ -186,13 +186,13 @@ liqmap-research export /tmp/open-liq-captures/*.json > /tmp/features.csv
 python examples/research.py
 ```
 
-The [research guide](docs/VALIDATION.md) explains tamper-evident hashes, normalized reference input, chronological held-out diagnostics and why reconstructed archives cannot establish historical publication times. It includes a strategy input contract for costs/slippage; the toolkit does not place trades.
+The [research guide](docs/VALIDATION.md) explains tamper-evident hashes, normalized reference input, chronological held-out diagnostics and why reconstructed archives cannot establish historical publication times. The toolkit does not place trades.
 
 ## Measured performance
 
 ![Offline synthetic workload benchmark: model generation latency and compressed payload sizes](docs/assets/benchmark.png)
 
-The chart measures **local synthetic workloads**, with cached source data and freshly computed models/payloads. It excludes HTTP and exchange latency. It shows medians and observed min/max over seven repetitions per case; different ranges contain different bar counts. The raw report also records a fresh local server’s cold/warm HTTP requests, a concurrent burst and observed memory, against declared small-workload budgets. Neither measurement establishes a production SLA, maximum-load bound or model accuracy.
+The chart measures **local synthetic workloads**, with cached source data and freshly computed models/payloads. It excludes HTTP and exchange latency. It shows medians and observed min/max over seven repetitions per case; different ranges contain different bar counts. It does not establish a production SLA, maximum-load bound or model accuracy.
 
 [Raw environment and samples](docs/assets/benchmark.json) · Reproduce with `python scripts/benchmark.py` (needs the `dev` extra for matplotlib).
 
@@ -210,13 +210,13 @@ python tests/browser/smoke.py --url http://127.0.0.1:8767
 python scripts/check_install.py
 ```
 
-There is no hosted CI. Run these commands before every push: lint, the Python suite, JavaScript syntax, offline browser acceptance and wheel installation away from the checkout. The browser suite exercises normal controls, failures and recovery, replay, exports, the watchlist, liquidation dots and responsive layouts. Live exchange tests are opt-in: `RUN_NETWORK=1 python -m pytest -q -m network` checks the public venues reachable from your network. Local results and unverified platforms are recorded in the [release review](docs/RELEASE_REVIEW.md).
+There is no hosted CI. Run these commands before every push: lint, the Python suite, JavaScript syntax, offline browser acceptance and wheel installation away from the checkout. The browser suite exercises normal controls, failures and recovery, replay, exports, the watchlist, liquidation dots and responsive layouts. Live exchange tests are opt-in: `RUN_NETWORK=1 python -m pytest -q -m network` checks the public venues reachable from your network.
 
 ## Replacing a paid data provider?
 
 Open Liq gives you inspectable modeling and control of your research inputs. It is **not a drop-in replacement** for a provider-specific strategy: coverage, timing, definitions and estimates differ. Compare authorized, timestamp-aligned datasets; freeze parameters; evaluate held-out outcomes after costs; and shadow-run before deciding. No provider dataset or prospective trading evidence was available for this release.
 
-[Migration](docs/MIGRATION.md) · [Operations](docs/OPERATIONS.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
+[Operations](docs/OPERATIONS.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
 
 ## Keep the heatmap glowing
 

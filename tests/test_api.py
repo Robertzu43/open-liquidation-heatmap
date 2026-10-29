@@ -18,14 +18,16 @@ def http_api():
     # A short poll keeps shutdown fast; each test starts its own server.
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
-    def get(path):
+    def get(path, headers=None):
+        request = urllib.request.Request(f'http://127.0.0.1:{app.server_port}{path}', headers=headers or {})
         try:
-            response = urllib.request.urlopen(f'http://127.0.0.1:{app.server_port}{path}', timeout=10)
+            response = urllib.request.urlopen(request, timeout=10)
         except urllib.error.HTTPError as exc:
             response = exc
         with response:
             raw = response.read()
             return response.status, json.loads(raw, parse_constant=lambda value: pytest.fail(f'nonfinite JSON: {value}'))
+    get.app = app
     yield get
     app.shutdown()
     app.server_close()
@@ -71,17 +73,11 @@ def test_validation_has_stable_error_code(http_api, query):
     assert isinstance(body['error'], str)
 
 
-def test_health_is_distinct_from_source_readiness(http_api):
+def test_health_reports_the_process_only(http_api):
     assert http_api('/healthz') == (200, {'ok': True, 'process': 'healthy'})
-    status, ready = http_api('/readyz')
-    assert status == 503
-    assert ready['process'] == 'healthy'
-    assert ready['data']['status'] == 'unknown'
-    http_api('/api/v1/heatmap?exchange=demo&range=12h')
-    assert http_api('/readyz')[0] == 503
 
 
-def test_stale_source_never_claims_readiness_and_source_failure_is_503(http_api):
+def test_stale_source_is_reported_and_source_failure_is_503(http_api):
     loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('12h'))
     loaded.source = 'fixture-exchange'
     loaded.series.exchange = 'okx'
@@ -91,7 +87,6 @@ def test_stale_source_never_claims_readiness_and_source_failure_is_503(http_api)
         status, body = http_api('/api/v1/heatmap?range=12h')
     assert status == 200
     assert body['quality']['status'] == 'stale'
-    assert http_api('/readyz')[0] == 503
     service._cache.clear()
     with mock.patch.object(service, 'load_market', side_effect=DataError('fixture unavailable')):
         status, body = http_api('/api/v1/heatmap?range=12h')
@@ -109,7 +104,8 @@ def test_json_serialization_rejects_nonfinite_without_partial_response(http_api)
 def test_replay_expired_and_unknown_route_have_stable_codes(http_api):
     status, body = http_api('/api/v1/heatmap?exchange=binance&asof=1609459200&replay=1')
     assert (status, body['code']) == (409, 'replay_expired')
-    assert http_api('/api/v1/nope')[0] == 404
+    for path in ('/api/v1/nope', '/readyz', '/api/v1/symbols', '/api/symbols'):
+        assert http_api(path)[0] == 404, path
 
 
 def test_overload_is_retryable_and_health_remains_available(http_api):
@@ -122,24 +118,6 @@ def test_overload_is_retryable_and_health_remains_available(http_api):
         assert http_api('/healthz')[0] == 200
 
 
-def test_ready_requires_current_default_market_observation(http_api):
-    loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
-    loaded.source = 'fixture-exchange'
-    loaded.series.exchange = 'okx'
-    loaded.series.provenance['history_kind'] = 'exchange_history'
-    with mock.patch.object(service, 'load_market', return_value=loaded):
-        assert http_api('/api/v1/heatmap?symbol=ETH')[0] == 200
-        assert http_api('/readyz')[0] == 503
-        assert http_api('/api/v1/heatmap')[0] == 200
-        status, body = http_api('/readyz')
-        assert status == 200
-        assert body['data']['status'] == 'observed'
-        with mock.patch.object(service.time, 'time', return_value=service.time.time() + service.SERIES_TTL['24h'] + 1):
-            assert http_api('/readyz')[0] == 503
-    loaded.as_of = 1609459200000
-    assert http_api('/readyz')[0] == 503
-
-
 def test_failed_source_releases_expensive_slot(http_api):
     with mock.patch.object(service, 'load_market', side_effect=DataError('temporary outage')):
         for _ in range(server.MAX_EXPENSIVE_REQUESTS + 1):
@@ -147,10 +125,15 @@ def test_failed_source_releases_expensive_slot(http_api):
     assert http_api('/api/v1/heatmap?exchange=demo&range=12h')[0] == 200
 
 
-def test_installed_assets_fallback_is_resolvable(tmp_path):
-    with mock.patch.object(server.Path, 'is_dir', return_value=False), mock.patch.object(server.resources, 'files', return_value=tmp_path) as files:
-        assert server.web_root() == tmp_path
+def test_installed_copy_ignores_another_packages_web_folder(tmp_path, monkeypatch):
+    site = tmp_path.resolve()
+    monkeypatch.setattr(server, '__file__', str(site / 'liqmap' / 'server.py'))
+    (site / 'web').mkdir()  # another distribution's top-level package beside liqmap in site-packages
+    with mock.patch.object(server.resources, 'files', return_value=site / 'liqmap_web') as files:
+        assert server.web_root() == site / 'liqmap_web'
     files.assert_called_once_with('liqmap_web')
+    (site / 'web' / 'index.html').write_text('<html>')  # a source checkout
+    assert server.web_root() == site / 'web'
 
 
 def test_server_default_bind_and_version_match_installed_release():
@@ -224,7 +207,7 @@ def test_visible_tail_preserves_history_fingerprint_features_and_level_mapping(h
     assert http_api('/api/v1/heatmap?exchange=demo&range=12h&visible_bars=145')[0] == 400
 
 
-def test_recently_fetched_live_source_thirty_minutes_old_is_stale_not_ready(http_api):
+def test_recently_fetched_live_source_thirty_minutes_old_is_stale(http_api):
     loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
     loaded.source = 'okx'
     loaded.series.exchange = 'okx'
@@ -238,10 +221,6 @@ def test_recently_fetched_live_source_thirty_minutes_old_is_stale_not_ready(http
     assert body['quality']['status'] == 'stale'
     assert body['quality']['stale'] is True
     assert body['stale'] is True
-    status, ready = http_api('/readyz')
-    assert status == 503
-    assert ready['data']['status'] == 'stale'
-    assert ready['data']['freshness_budget_seconds'] == 600
 
 
 @pytest.fixture
@@ -362,6 +341,7 @@ def test_status_advertises_market_capabilities(http_api):
     assert status == 200
     assert body['capabilities']['observed_liquidations'] == ['okx']
     assert body['capabilities']['watchlist_max_symbols'] == 6
+    assert 'readiness' not in body
 
 
 @pytest.mark.parametrize('path', ['/%2e%2e/pyproject.toml', '/..%2fpyproject.toml', '/../pyproject.toml',
@@ -369,3 +349,30 @@ def test_status_advertises_market_capabilities(http_api):
 def test_static_files_never_leave_the_web_folder(http_api, path):
     status, body = http_api(path)
     assert (status, body['code']) == (404, 'not_found')
+
+
+@pytest.mark.parametrize('headers,expected', [
+    ({'Sec-Fetch-Site': 'cross-site'}, 403),
+    ({'Host': 'attacker.example'}, 403),  # DNS rebinding: a hostile name resolving to 127.0.0.1
+    ({'Host': '127.0.0.1.attacker.example:80'}, 403),
+    ({'Host': 'localhost:8765'}, 200),
+    ({'Host': '127.0.0.1:8765'}, 200),
+    ({'Host': '[::1]:8765'}, 200),
+    ({'Sec-Fetch-Site': 'same-origin'}, 200),
+    ({'Sec-Fetch-Site': 'none'}, 200),  # typed into the address bar
+    ({}, 200),  # curl and scripts send no Sec-Fetch headers
+])
+def test_loopback_server_refuses_other_websites(http_api, headers, expected):
+    with mock.patch.object(service, 'load_market', side_effect=AssertionError('a refused request must not load data')):
+        status, body = http_api('/api/v1/status', headers)
+        assert status == expected
+        if expected == 403:
+            assert body['code'] == 'forbidden' and isinstance(body['error'], str)
+            assert http_api('/api/v1/heatmap?range=12h', headers)[0] == 403
+
+
+def test_non_loopback_bind_accepts_any_host_but_not_cross_site(http_api):
+    http_api.app.server_address = ('192.0.2.10', http_api.app.server_port)  # as if started with --host 192.0.2.10
+    assert http_api('/healthz', {'Host': 'liq.lan:8765'})[0] == 200
+    status, body = http_api('/healthz', {'Host': 'liq.lan:8765', 'Sec-Fetch-Site': 'cross-site'})
+    assert (status, body['code']) == (403, 'forbidden')
