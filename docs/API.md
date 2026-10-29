@@ -15,12 +15,10 @@ Application **0.4.0**, API schema **1.0**, model **2.0.0**. Everything added in 
 | `GET /api/v1/context` | Live funding and open-interest snapshot per venue (new in 0.4.0) |
 | `GET /api/v1/liquidations` | Observed recent OKX filled liquidation orders; exchange records, not model output (new in 0.4.0) |
 | `GET /api/v1/watchlist` | Nearest modeled liquidation clusters for up to six symbols (new in 0.4.0) |
-| `GET /api/v1/status` | Process configuration, available scenarios/ranges, capabilities and cached default-market readiness |
-| `GET /api/v1/symbols` | Suggested symbols and supported exchanges |
+| `GET /api/v1/status` | Process configuration, available scenarios/ranges and capabilities |
 | `GET /api/v1/levels` | Display-bin leverage breakdown at `t` and `price` |
 | `GET /api/v1/replay` | Load a bounded Binance archive span for subsequent offline frames |
 | `GET /healthz` | Process liveness; no exchange request |
-| `GET /readyz` | Cached default live-market observation; no exchange request |
 
 Each `/api/v1/...` route has a legacy `/api/...` compatibility alias, including the three new routes. Heatmap, features and levels use model 2.0.0; its numerical output is unchanged from 0.3.1 for every venue that 0.3.1 supported. Heatmap and features include schema and model versions, but levels does not. A schema version describes the envelope; a model version describes numerical semantics. Record both from the corresponding heatmap or features response for research. Unknown routes return 404.
 
@@ -164,7 +162,7 @@ print(payload['quality']['status'], payload['features'])
 
 ## Status and capabilities
 
-`GET /api/v1/status` returns `ok`, `schema_version`, `version` (the application version, `0.4.0`), `readiness`, `default`, `exchanges`, `ranges`, `models`, `mmr` and `coins`. `exchanges` lists `okx`, `binance`, `bybit` and `demo`; the aggregate is a view over the live venues, not a separate entry.
+`GET /api/v1/status` returns `ok`, `schema_version`, `version` (the application version, `0.4.0`), `default`, `exchanges`, `ranges`, `models`, `mmr` and `coins`. `exchanges` lists `okx`, `binance`, `bybit` and `demo`; the aggregate is a view over the live venues, not a separate entry.
 
 Since 0.4.0 it also returns `capabilities`:
 
@@ -235,7 +233,7 @@ Behavior:
 - Venue errors are isolated. A blocked or failing venue appears with `ok: false`; the others are still returned.
 - When every live venue in the request fails, the route returns 503 `source_unavailable`. In pair mode that means the one requested venue failed.
 - Responses are cached for **30 seconds**, at most **32 entries**. Two requests within 30 seconds can return the same snapshot.
-- The route counts against the expensive-request slots and the 60-second cooperative budget (see [errors](#errors-and-readiness)).
+- The route counts against the expensive-request slots and the 60-second cooperative budget (see [errors](#errors-and-health)).
 
 ```sh
 curl 'http://127.0.0.1:8765/api/v1/context?exchange=okx&symbol=BTC'
@@ -358,7 +356,7 @@ curl 'http://127.0.0.1:8765/api/v1/watchlist?exchange=aggregate&mode=symbol&rang
 curl 'http://127.0.0.1:8765/api/v1/watchlist?exchange=demo&symbols=BTC,ETH'
 ```
 
-## Errors and readiness
+## Errors and health
 
 Error responses preserve `error` as a string and add a stable `code`:
 
@@ -378,4 +376,4 @@ The same codes apply to the context, liquidations and watchlist routes. Heatmap,
 
 For example, an unavailable source returns `{"error":"Could not reach public source...","code":"source_unavailable"}` with HTTP 503; an expired frame returns `{"error":"This replay is no longer loaded. Load it again.","code":"replay_expired","replay_expired":true}` with HTTP 409. A delayed source can still return HTTP 200 with `quality.status="stale"`; inspect quality before use. The server never silently labels synthetic values live.
 
-`/healthz` returns `{"ok":true,"process":"healthy"}`. `/readyz` returns `{ok, process, data}` with HTTP 200 only if the default **OKX / BTC / 24h / pair / live** cache contains a nonsynthetic, nonstale observation with provenance and complete candle/OI observation masks, within its 45-second series TTL, whose bar close is no older than twice its 5-minute bar interval (**600 seconds / 10 minutes**). Its `data` contains `status`, `market`, `freshness_budget_seconds: 600`, and source/timestamp when available. All other states return 503: `unknown`, `expired`, `stale`, `synthetic`, `degraded`. Another market, demo or historical response cannot satisfy the probe. The probe performs no network request and starts unknown until a client requests the default live view. This explicit bar-based budget is a source-availability signal, not a latency SLA; consumers needing tighter freshness must check event timestamps themselves. HTTP 429/503 responses include `Retry-After: 5`; apply bounded exponential backoff and jitter. The transport admits 16 connection workers with a 10-second socket idle timeout; when all workers are occupied, even probes can receive 503 `server_busy`. A cooperative 60-second handler budget propagates through source HTTP calls, retries and archive work, and rejects late success before response headers; it does not forcibly preempt CPU work or every in-flight socket operation. See [operations](OPERATIONS.md).
+`/healthz` returns `{"ok":true,"process":"healthy"}` and makes no exchange request; it says nothing about data freshness, which each response reports in `quality`. HTTP 429/503 responses include `Retry-After: 5`; apply bounded exponential backoff and jitter. The transport admits 16 connection workers with a 10-second socket idle timeout; when all workers are occupied, even `/healthz` can receive 503 `server_busy`. A cooperative 60-second handler budget propagates through source HTTP calls, retries and archive work, and rejects late success before response headers; it does not forcibly preempt CPU work or every in-flight socket operation. See [operations](OPERATIONS.md).

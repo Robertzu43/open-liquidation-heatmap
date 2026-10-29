@@ -394,24 +394,6 @@ def _metadata(loaded, heat, *, historical: bool = False) -> dict:
     }
 
 
-def readiness_payload() -> dict:
-    """Observe the default live market cache without issuing a network request."""
-    key = ("okx", "BTC", "24h", "pair", RANGES["24h"]["bar"], None)
-    with _guard:
-        hit = _cache.get(key)
-    freshness_budget = 2 * int(RANGES["24h"]["bar_seconds"])
-    data = {"status": "unknown", "market": {"exchange": "okx", "symbol": "BTC", "range": "24h"}, "freshness_budget_seconds": freshness_budget}
-    ready = False
-    if hit is not None:
-        stamp, loaded = hit
-        quality = _quality(loaded)
-        expired = time.time() - stamp >= SERIES_TTL["24h"]
-        stale = quality["stale"] or is_stale(loaded.as_of, loaded.series.bar_seconds, limit_s=freshness_budget)
-        data.update({"status": "expired" if expired else "stale" if stale else quality["status"], "source": loaded.source, "source_as_of": int(loaded.as_of)})
-        ready = not expired and not stale and quality["status"] == "observed"
-    return {"ok": ready, "process": "healthy", "data": data}
-
-
 def _observed_oi_mask(series) -> np.ndarray:
     """Bars whose USD open interest was observed, not forward-filled.
 
@@ -589,7 +571,6 @@ def status_payload() -> dict:
     return {
         "ok": True,
         "schema_version": SCHEMA_VERSION,
-        "readiness": readiness_payload(),
         "version": __version__,
         "default": {"exchange": "okx", "symbol": "BTC", "range": "24h", "model": 1, "mode": "pair"},
         "exchanges": [
@@ -606,18 +587,6 @@ def status_payload() -> dict:
         "mmr": MMR,
         "coins": list(COINS),
         "capabilities": capabilities(),
-    }
-
-
-def symbols_payload() -> dict:
-    return {
-        "coins": list(COINS),
-        "exchanges": [
-            {"id": key, "name": value}
-            for key, value in EXCHANGE_NAMES.items()
-            if key != "aggregate"
-        ],
-        "quote": "USDT",
     }
 
 

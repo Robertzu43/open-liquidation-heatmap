@@ -17,7 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from liqmap import __version__
 from liqmap.data import DataError, RequestDeadlineExceeded, check_deadline, request_deadline
 from liqmap.market import context_payload, liquidations_payload, watchlist_payload
-from liqmap.service import ReplayExpired, SourceUnavailable, features_payload, levels_payload, load_heatmap, readiness_payload, replay_payload, status_payload, symbols_payload
+from liqmap.service import ReplayExpired, SourceUnavailable, features_payload, levels_payload, load_heatmap, replay_payload, status_payload
 
 log = logging.getLogger("liqmap.server")
 MAX_HTTP_WORKERS = 16
@@ -138,10 +138,6 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/healthz":
                 self._send_json({"ok": True, "process": "healthy"})
                 return
-            if parsed.path == "/readyz":
-                payload = readiness_payload()
-                self._send_json(payload, status=200 if payload["ok"] else 503)
-                return
             route = parsed.path.replace("/api/v1/", "/api/", 1) if parsed.path.startswith("/api/v1/") else parsed.path
             expensive_routes = {
                 "/api/heatmap": self._heatmap, "/api/features": self._features, "/api/levels": self._levels,
@@ -159,9 +155,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if route == "/api/status":
                 self._send_json(status_payload())
-                return
-            if route == "/api/symbols":
-                self._send_json(symbols_payload())
                 return
             self._static(parsed.path)
         except RequestDeadlineExceeded as exc:

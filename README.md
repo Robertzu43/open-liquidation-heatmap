@@ -171,7 +171,7 @@ curl 'http://127.0.0.1:8765/api/v1/liquidations?exchange=okx&symbol=BTC&range=24
 
 `funding_rate` is a fraction per funding interval: `0.0001` is 0.01%. The liquidations route returns observed OKX orders, not model output.
 
-Start with [API.md](docs/API.md) and the [OpenAPI specification](docs/openapi.json) for query parameters, field semantics, grid decoding and errors. Select a longer `range` for model history and a smaller `visible_bars` for its displayed tail; the hidden observations still seed the model. `/healthz` checks the process; `/readyz` separately reports the cached default live market. Unknown or stale data is not ready.
+Start with [API.md](docs/API.md) and the [OpenAPI specification](docs/openapi.json) for query parameters, field semantics, grid decoding and errors. Select a longer `range` for model history and a smaller `visible_bars` for its displayed tail; the hidden observations still seed the model. `/healthz` checks the process only; each response's `quality` reports stale, degraded or synthetic data.
 
 ## Research and recording
 

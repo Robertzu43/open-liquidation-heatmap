@@ -73,17 +73,11 @@ def test_validation_has_stable_error_code(http_api, query):
     assert isinstance(body['error'], str)
 
 
-def test_health_is_distinct_from_source_readiness(http_api):
+def test_health_reports_the_process_only(http_api):
     assert http_api('/healthz') == (200, {'ok': True, 'process': 'healthy'})
-    status, ready = http_api('/readyz')
-    assert status == 503
-    assert ready['process'] == 'healthy'
-    assert ready['data']['status'] == 'unknown'
-    http_api('/api/v1/heatmap?exchange=demo&range=12h')
-    assert http_api('/readyz')[0] == 503
 
 
-def test_stale_source_never_claims_readiness_and_source_failure_is_503(http_api):
+def test_stale_source_is_reported_and_source_failure_is_503(http_api):
     loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('12h'))
     loaded.source = 'fixture-exchange'
     loaded.series.exchange = 'okx'
@@ -93,7 +87,6 @@ def test_stale_source_never_claims_readiness_and_source_failure_is_503(http_api)
         status, body = http_api('/api/v1/heatmap?range=12h')
     assert status == 200
     assert body['quality']['status'] == 'stale'
-    assert http_api('/readyz')[0] == 503
     service._cache.clear()
     with mock.patch.object(service, 'load_market', side_effect=DataError('fixture unavailable')):
         status, body = http_api('/api/v1/heatmap?range=12h')
@@ -111,7 +104,8 @@ def test_json_serialization_rejects_nonfinite_without_partial_response(http_api)
 def test_replay_expired_and_unknown_route_have_stable_codes(http_api):
     status, body = http_api('/api/v1/heatmap?exchange=binance&asof=1609459200&replay=1')
     assert (status, body['code']) == (409, 'replay_expired')
-    assert http_api('/api/v1/nope')[0] == 404
+    for path in ('/api/v1/nope', '/readyz', '/api/v1/symbols', '/api/symbols'):
+        assert http_api(path)[0] == 404, path
 
 
 def test_overload_is_retryable_and_health_remains_available(http_api):
@@ -122,24 +116,6 @@ def test_overload_is_retryable_and_health_remains_available(http_api):
         status, body = http_api('/api/v1/heatmap?exchange=demo')
         assert (status, body['code']) == (429, 'busy')
         assert http_api('/healthz')[0] == 200
-
-
-def test_ready_requires_current_default_market_observation(http_api):
-    loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
-    loaded.source = 'fixture-exchange'
-    loaded.series.exchange = 'okx'
-    loaded.series.provenance['history_kind'] = 'exchange_history'
-    with mock.patch.object(service, 'load_market', return_value=loaded):
-        assert http_api('/api/v1/heatmap?symbol=ETH')[0] == 200
-        assert http_api('/readyz')[0] == 503
-        assert http_api('/api/v1/heatmap')[0] == 200
-        status, body = http_api('/readyz')
-        assert status == 200
-        assert body['data']['status'] == 'observed'
-        with mock.patch.object(service.time, 'time', return_value=service.time.time() + service.SERIES_TTL['24h'] + 1):
-            assert http_api('/readyz')[0] == 503
-    loaded.as_of = 1609459200000
-    assert http_api('/readyz')[0] == 503
 
 
 def test_failed_source_releases_expensive_slot(http_api):
@@ -231,7 +207,7 @@ def test_visible_tail_preserves_history_fingerprint_features_and_level_mapping(h
     assert http_api('/api/v1/heatmap?exchange=demo&range=12h&visible_bars=145')[0] == 400
 
 
-def test_recently_fetched_live_source_thirty_minutes_old_is_stale_not_ready(http_api):
+def test_recently_fetched_live_source_thirty_minutes_old_is_stale(http_api):
     loaded = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
     loaded.source = 'okx'
     loaded.series.exchange = 'okx'
@@ -245,10 +221,6 @@ def test_recently_fetched_live_source_thirty_minutes_old_is_stale_not_ready(http
     assert body['quality']['status'] == 'stale'
     assert body['quality']['stale'] is True
     assert body['stale'] is True
-    status, ready = http_api('/readyz')
-    assert status == 503
-    assert ready['data']['status'] == 'stale'
-    assert ready['data']['freshness_budget_seconds'] == 600
 
 
 @pytest.fixture
@@ -369,6 +341,7 @@ def test_status_advertises_market_capabilities(http_api):
     assert status == 200
     assert body['capabilities']['observed_liquidations'] == ['okx']
     assert body['capabilities']['watchlist_max_symbols'] == 6
+    assert 'readiness' not in body
 
 
 @pytest.mark.parametrize('path', ['/%2e%2e/pyproject.toml', '/..%2fpyproject.toml', '/../pyproject.toml',

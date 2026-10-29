@@ -319,10 +319,10 @@
     },
     "/api/v1/status": {
       "get": {
-        "summary": "Process configuration, capabilities and cached default-market readiness",
+        "summary": "Process configuration, scenarios, ranges and capabilities",
         "responses": {
           "200": {
-            "description": "Supported capabilities",
+            "description": "Server configuration",
             "content": {
               "application/json": {
                 "schema": {
@@ -330,16 +330,6 @@
                 }
               }
             }
-          }
-        }
-      }
-    },
-    "/api/v1/symbols": {
-      "get": {
-        "summary": "Symbols",
-        "responses": {
-          "200": {
-            "description": "Supported capabilities"
           }
         }
       }
@@ -859,23 +849,10 @@
         "summary": "Process health",
         "responses": {
           "200": {
-            "description": "Healthy/ready"
+            "description": "The process is running"
           },
           "503": {
-            "description": "Not ready"
-          }
-        }
-      }
-    },
-    "/readyz": {
-      "get": {
-        "summary": "Cached default-live-market readiness, independent of process liveness",
-        "responses": {
-          "200": {
-            "description": "Healthy/ready"
-          },
-          "503": {
-            "description": "Not ready"
+            "description": "All connection workers are busy (server_busy)"
           }
         }
       }
@@ -1047,9 +1024,6 @@
           "version": {
             "type": "string",
             "description": "Application version, e.g. 0.4.0"
-          },
-          "readiness": {
-            "type": "object"
           },
           "default": {
             "type": "object"
