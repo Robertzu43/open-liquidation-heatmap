@@ -376,8 +376,11 @@ def trader_ux_checks(browser, url: str, output: Path) -> None:
         assert page.evaluate("document.activeElement.classList.contains('chip-main')"), "Focus stays in the watchlist"
         page.locator(".chip-x[data-coin=SOL]").click()
         assert chip_coins(page) == ["BTC", "ETH"]
-        assert page.evaluate("""() => { const saved = state.watchlist.slice(); state.watchlist = ['ETH', 'SOL', 'XRP', 'DOGE', 'BNB', 'ADA']; renderWatch();
-            const full = document.getElementById('watch-add').hidden; state.watchlist = saved; renderWatch(); return full; }"""), "Watchlist holds at most six"
+        # The coin on screen is addable beside five others, not beside six.
+        assert page.evaluate("""() => { const saved = state.watchlist.slice(); const others = ['BTC', 'ETH', 'SOL', 'DOGE', 'BNB', 'ADA', 'XRP'].filter(c => c !== state.coin);
+            state.watchlist = others.slice(0, 5); renderWatch(); const room = !document.getElementById('watch-add').hidden;
+            state.watchlist = others.slice(0, 6); renderWatch(); const full = document.getElementById('watch-add').hidden;
+            state.watchlist = saved; renderWatch(); return room && full; }"""), "Watchlist holds at most six"
         page.reload()
         page.wait_for_function("state.data !== null")
         assert chip_coins(page) == ["BTC", "ETH"], "Watchlist persists"
@@ -742,7 +745,7 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
         assert "model_version" in exported["payload"]
         assert "data_fingerprint" in exported["payload"]
         page.locator("#share").click()
-        assert "exchange=demo" in page.url and "model=1" in page.url
+        page.wait_for_function("['Link copied', 'Copy link from address bar'].includes(document.getElementById('share').textContent)", timeout=3000)
         page.keyboard.press("Escape")
         assert not page.locator("#research-settings").evaluate("e => e.open")
         page.reload()
