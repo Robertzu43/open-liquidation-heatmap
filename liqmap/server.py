@@ -36,8 +36,9 @@ class ClientDisconnected(Exception):
 
 
 def web_root() -> Path:
+    # An installed copy sits in site-packages, where a top-level "web" may belong to another package.
     checkout = Path(__file__).resolve().parent.parent / "web"
-    return checkout if checkout.is_dir() else Path(resources.files("liqmap_web"))
+    return checkout if (checkout / "index.html").is_file() else Path(resources.files("liqmap_web"))
 
 
 WEB_ROOT = web_root()

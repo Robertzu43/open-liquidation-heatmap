@@ -149,10 +149,15 @@ def test_failed_source_releases_expensive_slot(http_api):
     assert http_api('/api/v1/heatmap?exchange=demo&range=12h')[0] == 200
 
 
-def test_installed_assets_fallback_is_resolvable(tmp_path):
-    with mock.patch.object(server.Path, 'is_dir', return_value=False), mock.patch.object(server.resources, 'files', return_value=tmp_path) as files:
-        assert server.web_root() == tmp_path
+def test_installed_copy_ignores_another_packages_web_folder(tmp_path, monkeypatch):
+    site = tmp_path.resolve()
+    monkeypatch.setattr(server, '__file__', str(site / 'liqmap' / 'server.py'))
+    (site / 'web').mkdir()  # another distribution's top-level package beside liqmap in site-packages
+    with mock.patch.object(server.resources, 'files', return_value=site / 'liqmap_web') as files:
+        assert server.web_root() == site / 'liqmap_web'
     files.assert_called_once_with('liqmap_web')
+    (site / 'web' / 'index.html').write_text('<html>')  # a source checkout
+    assert server.web_root() == site / 'web'
 
 
 def test_server_default_bind_and_version_match_installed_release():
