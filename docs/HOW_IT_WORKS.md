@@ -19,7 +19,7 @@ Venue components retain independent baselines and cohort inventories. Aggregatio
 Bybit candles and open interest come from the public v5 market API for USDT linear perpetuals.
 
 - **Closed bars only.** A candle or OI snapshot is kept only for a bar that had closed when the request was made.
-- **Native quantity, valued at the close.** Bybit's open-interest history reports base-asset quantity. Open Liq values it at the same bar's close to get USD.
+- **Native quantity, one side, valued at the close.** Bybit's `openInterest` field is the sum of both sides of every position; OKX and Binance count each contract once. Open Liq reads Bybit's single-side field (`singleOpenInterest`) and halves the both-sides figure when a row lacks it, so the three venues are comparable. It values that base-asset quantity at the same bar's close to get USD.
 - **OI timing.** A snapshot describes a bar only when its timestamp falls inside that bar's `[open, close)` interval. When several do, the last one is used. A snapshot from after the close is never used.
 - **12-hour bars.** Bybit has no 12-hour OI period. A 12-hour bar uses the last 4-hour snapshot inside it.
 - **No taker flow.** Bybit publishes no historical taker buy/sell volume. Bybit flow is reported as unobserved, and Model 3 uses its neutral allocation for Bybit. Account long/short ratios are not substituted.

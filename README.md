@@ -129,7 +129,7 @@ Read [what changed in 0.4.0](CHANGELOG.md). **Application 0.4.0, API 1.0 and mod
 | OKX | USDT perpetual candles, native open interest, taker flow where available, funding, recent filled liquidation orders | Default venue. The only source of observed liquidations |
 | Binance | USDT-M perpetual candles, native open interest, taker flow, funding | Falls back to the public archive when the live API is blocked |
 | Binance archives | Delayed public history | As-of views and replay. Original publication time is generally unknown |
-| Bybit | USDT perpetual candles, native open interest, funding (public v5 API) | No historical taker flow, so Flow skew is neutral for Bybit. 12-hour bars use the last 4-hour OI snapshot in each bar. No archive fallback: if Bybit blocks your region, it is reported unavailable |
+| Bybit | USDT perpetual candles, native open interest counted once per contract like OKX and Binance, funding (public v5 API) | No historical taker flow, so Flow skew is neutral for Bybit. 12-hour bars use the last 4-hour OI snapshot in each bar. No archive fallback: if Bybit blocks your region, it is reported unavailable |
 | All venues | OKX, Binance and Bybit inventories, each kept separate before summing | A missing or stale venue is left out, and coverage is reported as degraded |
 | Demo | Seeded synthetic series | No exchange calls |
 

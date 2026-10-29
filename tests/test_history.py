@@ -7,6 +7,8 @@ import time
 import unittest
 from unittest import mock
 
+import pytest
+
 from liqmap import data, service
 from liqmap.model import MODELS
 from liqmap.data import (
@@ -309,6 +311,7 @@ class ReplayServiceTests(unittest.TestCase):
             service.replay_payload("BTC", "2y", "5m", str(T_2021), "")
 
 
+@pytest.mark.network
 @unittest.skipUnless(os.environ.get("RUN_NETWORK") == "1", "network test; set RUN_NETWORK=1")
 class NetworkHistoryTests(unittest.TestCase):
     def test_btc_2021_05_19_from_archive(self):
