@@ -376,35 +376,6 @@ class Heatmap:
         return self.logical_features[-1] if self.logical_features else {}
 
 
-def _nearest_bin(centers: np.ndarray, price: float) -> int:
-    i = int(np.searchsorted(centers, price))
-    if i <= 0:
-        return 0
-    if i >= len(centers):
-        return len(centers) - 1
-    if abs(centers[i - 1] - price) <= abs(centers[i] - price):
-        return i - 1
-    return i
-
-
-def _deposit(book: np.ndarray, index: int, amount: float, kernel: tuple[float, ...]) -> None:
-    if amount <= 0:
-        return
-    half = len(kernel) // 2
-    weights = []
-    indexes = []
-    for offset, weight in enumerate(kernel):
-        j = index + offset - half
-        if 0 <= j < len(book) and weight > 0:
-            indexes.append(j)
-            weights.append(weight)
-    if not indexes:
-        return
-    scale = float(sum(weights))
-    for j, weight in zip(indexes, weights, strict=True):
-        book[j] += amount * (weight / scale)
-
-
 def _clusters(centers: np.ndarray, values: np.ndarray, side: str, spot: float) -> list[dict]:
     if len(values) == 0 or float(values.max()) <= 0:
         return []

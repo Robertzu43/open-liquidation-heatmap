@@ -1576,6 +1576,13 @@ def load_span(coin: str, pair: str, spec: dict, from_s: int, to_s: int | None) -
     note = ""
     if first_frame > first:
         note = f"Data for {pair} starts later; replay begins at {_fmt_utc((first_frame + bar_s) * 1000)}."
+    # Never offer frames past the newest bar any source has, e.g. when the archive lags and live is blocked.
+    data_end = max((raw.last_candle_ms for raw in (archive, live) if raw is not None and raw.last_candle_ms is not None), default=None)
+    if data_end is not None and data_end // 1000 < last:
+        last = data_end // 1000
+        note = " ".join(part for part in (note, f"Binance data ends at {_fmt_utc(data_end + bar_s * 1000)}; the replay stops there.") if part)
+    if last < first_frame:
+        raise DataError(f"Binance has no {pair} data between those times. Choose an earlier time.")
     days = len(_dates_between(int(grid[0]), int(grid[-1]) + bar_s * 1000))
     log.info("replay span %s %s bar=%s frames=%s days=%s live=%s", pair, spec["key"], spec["bar"], (last - first_frame) // bar_s + 1, days, live is not None)
     return Span(coin, pair, spec, archive, live, first_frame, last, days, note)

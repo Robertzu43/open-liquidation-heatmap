@@ -53,7 +53,9 @@ MAX_INSTRUMENT_CACHE = 64
 BINANCE_DEFAULT_FUNDING_HOURS = 8
 FUNDING_BASIS_HOURS = 8
 DEMO_FUNDING_HOURS = 8
-OKX_LIQUIDATION_NOTE = "Observed OKX liquidation orders at bankruptcy price. Coverage is limited to the most recent orders OKX publishes."
+# Observed: OKX's public liquidation feed reaches back only about 22 to 24 hours.
+OKX_LIQUIDATION_RETENTION_S = 22 * 3600
+OKX_LIQUIDATION_NOTE = "Observed OKX liquidation orders at bankruptcy price. OKX publishes only about the last day of orders, so coverage starts at coverage.from_ms."
 
 
 class _TTLCache:
@@ -498,6 +500,8 @@ def _okx_liquidations(coin: str, spec: dict) -> tuple[list[dict], bool]:
                     raise SourceUnavailable(str(exc)) from exc
                 events = [event for event in (_okx_event(item, contract_base) for item in rows) if event and event["ts"] >= start_ms]
                 events.sort(key=lambda event: event["ts"])
+                # A window older than the feed keeps cannot be complete, even when the feed ran out.
+                truncated = truncated or int(spec["seconds"]) > OKX_LIQUIDATION_RETENTION_S
                 hit = (events, truncated)
                 _liquidation_cache.put(key, hit)
     events, truncated = hit
@@ -580,7 +584,10 @@ def watchlist_symbols(raw: str) -> list[str]:
         raise DataError(f"symbols accepts at most {MAX_WATCHLIST_SYMBOLS} symbols.")
     coins: list[str] = []
     for part in parts:
-        coin, _pair = normalize_symbol(part)
+        try:
+            coin, _pair = normalize_symbol(part)
+        except DataError:
+            coin = part.upper()  # Reported as its own failed item; the others still load.
         if coin not in coins:
             coins.append(coin)
     return coins
@@ -602,6 +609,7 @@ def _failed_item(coin: str, error: str) -> dict:
 
 def _watch_item(exchange: str, coin: str, range_name: str, mode: str, model_id: int) -> dict:
     try:
+        normalize_symbol(coin)
         loaded = get_series(exchange, coin, range_name, mode)
         heat = build_heatmap(loaded.series, model_id)
         quality = _quality(loaded)
@@ -637,7 +645,7 @@ def watchlist_payload(exchange: str = "okx", range_key: str = "24h", model="1", 
         raise DataError("Model must be 1, 2, or 3.") from None
     public_model(model_id)
     coins = watchlist_symbols(symbols)
-    exchange_key, _coin, range_name, mode_key = _canonical(exchange, coins[0], range_key, mode)
+    exchange_key, _coin, range_name, mode_key = _canonical(exchange, "BTC", range_key, mode)
     with ThreadPoolExecutor(max_workers=min(3, len(coins))) as pool:
         futures = [pool.submit(copy_context().run, _watch_item, exchange_key, coin, range_name, mode_key, model_id) for coin in coins]
         items = [future.result() for future in futures]

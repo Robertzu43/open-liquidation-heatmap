@@ -331,7 +331,7 @@ def test_okx_liquidations_value_contracts_in_base_and_sort_ascending(monkeypatch
             liq(NOW_MS - 2000, px='80500', sz='1', pos='net', side='sell'),
             liq(NOW_MS - 4000, px='bad', sz='1')]
     fake = use_liquidations(monkeypatch, FakeLiquidations(rows))
-    payload = market.liquidations_payload('okx', 'BTC', 'pair', '24h')
+    payload = market.liquidations_payload('okx', 'BTC', 'pair', '12h')
     assert (payload['source'], payload['available'], payload['synthetic']) == ('okx', True, False)
     assert payload['events'] == [
         {'ts': NOW_MS - 3000, 'price': 81000.0, 'side': 'short', 'size_base': pytest.approx(0.05), 'usd': pytest.approx(0.05 * 81000)},
@@ -352,7 +352,7 @@ def test_okx_liquidation_pages_use_after_cursor_and_keep_shared_millisecond_orde
     rows[101] = liq(boundary, sz='9')
     pages = FakeLiquidations(rows)
     use_liquidations(monkeypatch, pages)
-    payload = market.liquidations_payload('okx', 'BTC', 'pair', '24h')
+    payload = market.liquidations_payload('okx', 'BTC', 'pair', '12h')
     assert payload['coverage']['count'] == 250
     assert sum(event['ts'] == boundary for event in payload['events']) == 4
     assert [params.get('after') for params in pages.params] == [None, str(boundary + 1), str(NOW_MS - 1000 - 197 * 1000 + 1)]
@@ -406,7 +406,7 @@ def test_okx_liquidation_failures_are_source_unavailable(monkeypatch):
 
 def test_empty_okx_answer_is_an_observed_empty_window(monkeypatch):
     use_liquidations(monkeypatch, lambda params: (200, {'code': '0', 'msg': '', 'data': []}))
-    payload = market.liquidations_payload('okx', 'BTC', 'pair', '24h')
+    payload = market.liquidations_payload('okx', 'BTC', 'pair', '12h')
     assert payload['events'] == []
     assert payload['coverage'] == {'from_ms': None, 'to_ms': None, 'count': 0, 'truncated': False}
 
@@ -478,7 +478,8 @@ def test_liquidations_validate_parameters():
 
 def test_watchlist_symbols_are_normalized_unique_and_bounded():
     assert market.watchlist_symbols(' btc, ETHUSDT ,BTC,sol,') == ['BTC', 'ETH', 'SOL']
-    for raw in ('', ' , ', 'A1,B2,C3,D4,E5,F6,G7', 'BTC,!'):
+    assert market.watchlist_symbols('BTC,!') == ['BTC', '!']  # The invalid one fails as its own item.
+    for raw in ('', ' , ', 'A1,B2,C3,D4,E5,F6,G7'):
         with pytest.raises(DataError):
             market.watchlist_symbols(raw)
 
@@ -610,3 +611,17 @@ def test_status_and_symbols_describe_capabilities():
     symbols = service.symbols_payload()
     assert symbols['features']['watchlist_max_symbols'] == 6
     assert 'OKX only' in symbols['features']['observed_liquidations']
+
+
+@pytest.mark.parametrize('range_key,truncated', [('12h', False), ('24h', True), ('7d', True)])
+def test_ranges_older_than_okx_liquidation_retention_are_marked_incomplete(monkeypatch, range_key, truncated):
+    rows = [liq(NOW_MS - (i + 1) * 600_000) for i in range(60)]  # The feed runs out after 10 hours.
+    use_liquidations(monkeypatch, FakeLiquidations(rows))
+    payload = market.liquidations_payload('okx', 'BTC', 'pair', range_key)
+    assert payload['coverage']['truncated'] is truncated
+
+
+def test_watchlist_reports_an_invalid_symbol_as_its_own_failed_item():
+    payload = market.watchlist_payload('demo', '12h', '1', 'pair', 'BTC,ABCDEFGHIJKLM,eth,btcusdt')
+    assert [(item['coin'], item['ok']) for item in payload['items']] == [('BTC', True), ('ABCDEFGHIJKLM', False), ('ETH', True)]
+    assert 'Symbol must be' in payload['items'][1]['error']

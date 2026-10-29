@@ -365,3 +365,10 @@ def test_status_advertises_market_capabilities(http_api):
     assert body['capabilities']['observed_liquidations'] == ['okx']
     assert body['capabilities']['watchlist_max_symbols'] == 6
     assert body['capabilities']['context'] is True
+
+
+@pytest.mark.parametrize('path', ['/%2e%2e/pyproject.toml', '/..%2fpyproject.toml', '/../pyproject.toml',
+                                  '/%2e%2e%2fliqmap%2fserver.py', '//etc/passwd', '/assets/../../README.md'])
+def test_static_files_never_leave_the_web_folder(http_api, path):
+    status, body = http_api(path)
+    assert (status, body['code']) == (404, 'not_found')

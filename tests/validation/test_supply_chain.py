@@ -28,6 +28,7 @@ TEXT_SUFFIXES = {
 }
 SKIP_DIRS = {
     ".git",
+    ".claude",  # Local agent worktrees: other checkouts, not this tree.
     ".venv",
     "venv",
     "__pycache__",

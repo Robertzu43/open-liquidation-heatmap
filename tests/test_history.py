@@ -188,8 +188,28 @@ class ReplaySpanTests(unittest.TestCase):
                     a, b = getattr(framed, name), getattr(direct, name)
                     self.assertTrue(((a == b) | (a != a) & (b != b)).all(), f"{name} differs at -{back} bars")
                 self.assertEqual(framed.note, direct.note)
-        self.assertEqual(span.last_end_open, end)
+        self.assertEqual(span.last_end_open, end - 2 * 900)  # The two newest bars have no candles, so frames stop before them.
         self.assertEqual(span.frames, (span.last_end_open - span.first_end_open) // 900 + 1)
+
+    def test_span_stops_at_the_last_bar_with_data(self):
+        klines, metrics = self._stubs()
+        cutoff = (T_2021 - 86_400) * 1000  # The archive ends a day before the requested end.
+
+        def early_klines(symbol, interval, start_ms, end_ms):
+            return [row for row in klines(symbol, interval, start_ms, end_ms) if row[0] < cutoff]
+
+        def early_metrics(symbol, start_ms, end_ms):
+            return [row for row in metrics(symbol, start_ms, end_ms) if row[0] < cutoff]
+
+        spec = range_spec("24h", "15m")
+        with mock.patch.object(data, "_load_vision_klines", side_effect=early_klines), \
+             mock.patch.object(data, "_load_vision_metrics", side_effect=early_metrics), \
+             mock.patch.object(data, "_fold_binance_live", return_value=None):
+            span = data.load_span("BTC", "BTCUSDT", spec, T_2021 - 3 * 86_400, T_2021)
+            self.assertEqual(span.last_end_open * 1000, (cutoff - 1) // 900_000 * 900_000)  # Newest bar opening before the cutoff.
+            self.assertIn("ends at", span.note)
+            last = span.frame(span.last_end_open)
+        self.assertFalse(last.stale)
 
     def test_span_trims_to_first_data(self):
         klines, metrics = self._stubs()
