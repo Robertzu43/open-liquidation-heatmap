@@ -71,7 +71,8 @@ const state = {
   context: null,
   liqs: null,
   watchSeq: 0,
-  watchController: null,
+  watchBusy: false,
+  watchQueued: null,
   watch: { key: "", items: {}, at: 0, sig: "" },
   alerts: {},
   fundingNext: null,
@@ -510,7 +511,9 @@ async function load(reason) {
   setLoading(true, quiet ? "Refreshing…" : label);
   const params = mapParams();
   try {
-    const response = await fetch("/api/heatmap?" + params.toString(), { signal: controller.signal });
+    const response = await fetchRetry("/api/heatmap?" + params.toString(), controller.signal, () => {
+      if (seq === state.seq) setLoading(true, quiet ? "Refreshing…" : "Server busy · retrying…");
+    });
     const body = await response.json();
     if (seq !== state.seq) return;
     if (!response.ok) throw new Error(body.error || "Request failed");
@@ -1371,8 +1374,34 @@ function displayedMatchesState() {
     data.coin === state.coin && data.range === state.range && data.mode === state.mode;
 }
 
+function wait(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
+// The server answers 429 when its few expensive slots are taken (other tabs,
+// or work a cancelled request left behind). Retry twice before reporting it.
+async function fetchRetry(url, signal, onRetry) {
+  for (let attempt = 0; ; attempt++) {
+    const response = await fetch(url, { signal });
+    if (response.status !== 429 || attempt >= 2) return response;
+    if (onRetry) onRetry(attempt + 1);
+    await wait(1500 * (attempt + 1), signal);
+  }
+}
+
 async function getJson(url, signal) {
-  const response = await fetch(url, { signal });
+  const response = await fetchRetry(url, signal);
   let body = null;
   try {
     body = await response.json();
@@ -1387,13 +1416,13 @@ async function getJson(url, signal) {
   return body;
 }
 
+// Context and liquidation requests are cheap to restart. The watchlist is
+// single-flight instead: aborting it would not free the server's work.
 function cancelSide() {
   state.sideSeq += 1;
   if (state.sideController) state.sideController.abort();
   state.sideController = null;
-  state.watchSeq += 1;
-  if (state.watchController) state.watchController.abort();
-  state.watchController = null;
+  state.watchQueued = null;
 }
 
 function afterLoad(data, reason) {
@@ -1402,7 +1431,7 @@ function afterLoad(data, reason) {
     checkAlerts(data);
   }
   renderWatch();
-  loadSide(data, reason === "auto" || reason === "refresh");
+  loadSide(data, reason === "auto");
 }
 
 // The server runs few expensive requests at once: context and liquidations go
@@ -1467,14 +1496,17 @@ function loadWatchlist(force) {
   const key = watchKeyOf(data);
   const sig = key + "|" + list.join(",");
   if (!force && state.watch.sig === sig && Date.now() - state.watch.at < WATCH_MIN_MS) return;
+  if (state.watchBusy) {
+    state.watchQueued = { force: Boolean(force || (state.watchQueued && state.watchQueued.force)) };
+    return;
+  }
+  state.watchBusy = true;
   const token = ++state.watchSeq;
-  if (state.watchController) state.watchController.abort();
-  const controller = new AbortController();
-  state.watchController = controller;
   const params = new URLSearchParams({
     exchange: data.exchange, range: data.range, model: String(data.model.id), mode: data.mode, symbols: list.join(","),
   });
-  getJson("/api/v1/watchlist?" + params.toString(), controller.signal).then((body) => {
+  getJson("/api/v1/watchlist?" + params.toString(), new AbortController().signal).then((body) => {
+    // A late answer for another venue, range or model is dropped.
     if (token !== state.watchSeq || watchKeyOf(state.data) !== key) return;
     if (state.watch.key !== key) state.watch = { key, items: {}, at: 0, sig: "" };
     (Array.isArray(body.items) ? body.items : []).forEach((item) => {
@@ -1491,7 +1523,10 @@ function loadWatchlist(force) {
     state.watch.sig = sig;
     renderWatch();
   }).finally(() => {
-    if (state.watchController === controller) state.watchController = null;
+    state.watchBusy = false;
+    const queued = state.watchQueued;
+    state.watchQueued = null;
+    if (queued) loadWatchlist(queued.force);
   });
 }
 
@@ -1555,11 +1590,11 @@ function fundingOf(body, data) {
   let next = null;
   let hours = null;
   if (aggregate) {
+    // The weighted rate is already scaled to the basis interval (8 hours).
     rate = num(body.funding_rate_oi_weighted) ? body.funding_rate_oi_weighted : null;
     const times = ok.map((venue) => venue.next_funding_time).filter((t) => num(t) && t > Date.now());
     next = times.length ? Math.min(...times) : null;
-    const spans = [...new Set(ok.map((venue) => venue.funding_interval_hours).filter(num))];
-    hours = spans.length === 1 ? spans[0] : null;
+    hours = num(body.funding_basis_hours) ? body.funding_basis_hours : 8;
   } else {
     const venue = ok.find((item) => item.exchange === data.exchange) || (ok.length === 1 ? ok[0] : null);
     if (venue) {
@@ -1576,7 +1611,7 @@ function fundingOf(body, data) {
       `${num(venue.next_funding_time) ? " · next " + fmtClock(venue.next_funding_time) : ""}` +
       `${num(venue.open_interest_usd) ? " · OI " + fmtUsd(venue.open_interest_usd) : ""}`;
   });
-  if (aggregate) lines.unshift(`Open-interest-weighted funding ${fmtRate(rate)}`);
+  if (aggregate) lines.unshift(`Open-interest-weighted funding ${fmtRate(rate)} per ${fmtHours(hours)} (each venue scaled to ${fmtHours(hours)})`);
   if (body.synthetic) lines.push("Synthetic demo values.");
   if (body.note) lines.push(String(body.note));
   lines.push("Positive funding: longs pay shorts.");
@@ -1628,7 +1663,7 @@ function renderMarket() {
     $("mk-fund-k").textContent = funding.label;
     $("mk-fund-v").textContent = fmtRate(funding.rate) + (funding.hours ? " /" + fmtHours(funding.hours) : "");
     $("mk-fund").title = funding.detail + (funding.next ? `\nNext funding ${fmtClock(funding.next)}` : "");
-    $("mk-fund-sr").textContent = ". " + funding.detail.replace(/\n/g, ". ");
+    $("mk-fund-sr").textContent = ". " + funding.detail.split("\n").map((line) => /[.!?)]$/.test(line) ? line : line + ".").join(" ");
     state.fundingNext = funding.next;
   }
   tickFunding();
@@ -1650,8 +1685,20 @@ function liqEvents(data) {
   return Array.isArray(l.body.events) ? l.body.events : null;
 }
 
-function liqRadius(usd) {
-  return clamp(Math.sqrt(Math.max(0, Number(usd) || 0)) / 55, 2, 10);
+// Area follows USD: radius grows with the square root, against the feed's
+// 95th percentile (at least $100K) so one large order does not shrink the rest.
+function liqRef() {
+  const l = state.liqs;
+  if (!l || !l.body) return 100000;
+  if (l.ref == null) {
+    const usd = (Array.isArray(l.body.events) ? l.body.events : []).map((event) => Number(event && event.usd) || 0).sort((a, b) => a - b);
+    l.ref = Math.max(100000, usd.length ? usd[Math.floor(0.95 * (usd.length - 1))] : 0);
+  }
+  return l.ref;
+}
+
+function liqRadius(usd, ref) {
+  return clamp(2 + 7 * Math.sqrt(Math.max(0, Number(usd) || 0) / ref), 2, 9);
 }
 
 // Bar i spans [times[i], times[i] + bar) and is drawn over index i - 0.5 .. i + 0.5.
@@ -1664,6 +1711,31 @@ function drawLiqDots(ctx, L, data) {
   if (!events || !events.length) return;
   const n = data.times.length;
   const scale = L.width < 520 ? 0.8 : 1;
+  const ref = liqRef();
+  const coverage = state.liqs.body.coverage || {};
+  // Only a truncated feed has an uncovered stretch; otherwise blank means none.
+  const start = coverage.truncated && num(coverage.from_ms) ? liqIndex(coverage.from_ms, data) : null;
+  if (start != null && start > -0.5 + 2 && start < n - 0.5 && start > state.view.i0 && start < state.view.i1) {
+    const x = Math.round(xOf(start, L)) + 0.5;
+    ctx.save();
+    ctx.strokeStyle = "rgba(217, 242, 153, 0.45)";
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(x, L.plotY);
+    ctx.lineTo(x, L.plotY + L.plotH);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = "10px ui-monospace, monospace";
+    const label = liqWord() === "Synthetic" ? "demo liqs from here →" : "OKX liq feed starts →";
+    const w = ctx.measureText(label).width;
+    const lx = clamp(x + 5, L.plotX + 2, L.plotX + L.plotW - w - 6);
+    ctx.fillStyle = "rgba(12, 16, 15, 0.78)";
+    ctx.fillRect(lx - 3, L.plotY + 4, w + 6, 15);
+    ctx.fillStyle = "#d9f299";
+    ctx.textAlign = "left";
+    ctx.fillText(label, lx, L.plotY + 15);
+    ctx.restore();
+  }
   ctx.lineWidth = 1;
   ctx.strokeStyle = "rgba(12, 16, 15, 0.85)";
   for (const event of events) {
@@ -1674,8 +1746,8 @@ function drawLiqDots(ctx, L, data) {
     const y = yOf(event.price, L);
     if (y < L.plotY - 12 || y > L.plotY + L.plotH + 12) continue;
     ctx.beginPath();
-    ctx.arc(x, y, liqRadius(event.usd) * scale, 0, Math.PI * 2);
-    ctx.fillStyle = event.side === "long" ? "rgba(224, 122, 114, 0.82)" : "rgba(125, 206, 160, 0.82)";
+    ctx.arc(x, y, liqRadius(event.usd, ref) * scale, 0, Math.PI * 2);
+    ctx.fillStyle = event.side === "long" ? "rgba(224, 122, 114, 0.78)" : "rgba(125, 206, 160, 0.78)";
     ctx.fill();
     ctx.stroke();
   }
@@ -1685,6 +1757,7 @@ function nearestLiq(x, y, L, data) {
   const events = liqEvents(data);
   if (!events || !events.length) return null;
   const n = data.times.length;
+  const ref = liqRef();
   let best = null;
   let bestD = Infinity;
   for (const event of events) {
@@ -1692,7 +1765,7 @@ function nearestLiq(x, y, L, data) {
     const index = liqIndex(event.ts, data);
     if (index < -0.5 || index > n - 0.5) continue;
     const d = Math.hypot(xOf(index, L) - x, yOf(event.price, L) - y);
-    if (d <= Math.max(10, liqRadius(event.usd) + 3) && d < bestD) {
+    if (d <= Math.max(10, liqRadius(event.usd, ref) + 3) && d < bestD) {
       best = event;
       bestD = d;
     }
@@ -1717,10 +1790,11 @@ function renderLiqNote() {
       const demo = body.synthetic || body.source === "demo";
       const since = num(coverage.from_ms) ? " since " + fmtClock(coverage.from_ms) : "";
       const unit = demo ? (count === 1 ? "event" : "events") : (count === 1 ? "order" : "orders");
-      const orders = `${count.toLocaleString("en-US")} ${unit}${coverage.truncated ? ", most recent only" : ""}`;
+      const orders = `${count.toLocaleString("en-US")} ${unit}${coverage.truncated ? ", the most recent OKX returns" : ""}`;
+      const gap = coverage.truncated ? " Earlier in the window is not covered, not empty." : "";
       text = demo
         ? `Synthetic demo liquidations${since} (${orders}); not exchange data.`
-        : `Observed OKX liquidations${since} (${orders})${data.mode === "symbol" ? "; OKX only, other venues not included" : ""}. Dots sit at bankruptcy price, sized by USD.`;
+        : `Observed OKX liquidations${since} (${orders})${data.mode === "symbol" ? "; OKX only, Binance and Bybit not included" : ""}. Dots sit at bankruptcy price, sized by USD.${gap}`;
       drawn = events.length > 0;
     } else if (!body && l.status && l.status !== 404) {
       text = "Observed liquidations are unavailable right now.";
@@ -2353,7 +2427,11 @@ function wire() {
   });
   document.addEventListener("keydown", event => {
     if (event.key !== "Escape") return;
-    if (!$("toast").hidden) hideToast();
+    // One layer per press: the alert toast first, then an open panel.
+    if (!$("toast").hidden) {
+      hideToast();
+      return;
+    }
     document.querySelectorAll(".advanced > details[open]").forEach(panel => { panel.open = false; panel.querySelector("summary").focus(); });
   });
   document.querySelectorAll(".advanced > details").forEach(panel => panel.addEventListener("toggle", () => {
