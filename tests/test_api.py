@@ -18,14 +18,16 @@ def http_api():
     # A short poll keeps shutdown fast; each test starts its own server.
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
-    def get(path):
+    def get(path, headers=None):
+        request = urllib.request.Request(f'http://127.0.0.1:{app.server_port}{path}', headers=headers or {})
         try:
-            response = urllib.request.urlopen(f'http://127.0.0.1:{app.server_port}{path}', timeout=10)
+            response = urllib.request.urlopen(request, timeout=10)
         except urllib.error.HTTPError as exc:
             response = exc
         with response:
             raw = response.read()
             return response.status, json.loads(raw, parse_constant=lambda value: pytest.fail(f'nonfinite JSON: {value}'))
+    get.app = app
     yield get
     app.shutdown()
     app.server_close()
@@ -369,3 +371,30 @@ def test_status_advertises_market_capabilities(http_api):
 def test_static_files_never_leave_the_web_folder(http_api, path):
     status, body = http_api(path)
     assert (status, body['code']) == (404, 'not_found')
+
+
+@pytest.mark.parametrize('headers,expected', [
+    ({'Sec-Fetch-Site': 'cross-site'}, 403),
+    ({'Host': 'attacker.example'}, 403),  # DNS rebinding: a hostile name resolving to 127.0.0.1
+    ({'Host': '127.0.0.1.attacker.example:80'}, 403),
+    ({'Host': 'localhost:8765'}, 200),
+    ({'Host': '127.0.0.1:8765'}, 200),
+    ({'Host': '[::1]:8765'}, 200),
+    ({'Sec-Fetch-Site': 'same-origin'}, 200),
+    ({'Sec-Fetch-Site': 'none'}, 200),  # typed into the address bar
+    ({}, 200),  # curl and scripts send no Sec-Fetch headers
+])
+def test_loopback_server_refuses_other_websites(http_api, headers, expected):
+    with mock.patch.object(service, 'load_market', side_effect=AssertionError('a refused request must not load data')):
+        status, body = http_api('/api/v1/status', headers)
+        assert status == expected
+        if expected == 403:
+            assert body['code'] == 'forbidden' and isinstance(body['error'], str)
+            assert http_api('/api/v1/heatmap?range=12h', headers)[0] == 403
+
+
+def test_non_loopback_bind_accepts_any_host_but_not_cross_site(http_api):
+    http_api.app.server_address = ('192.0.2.10', http_api.app.server_port)  # as if started with --host 192.0.2.10
+    assert http_api('/healthz', {'Host': 'liq.lan:8765'})[0] == 200
+    status, body = http_api('/healthz', {'Host': 'liq.lan:8765', 'Sec-Fetch-Site': 'cross-site'})
+    assert (status, body['code']) == (403, 'forbidden')

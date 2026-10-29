@@ -6,6 +6,7 @@ import argparse
 import gzip
 import json
 import logging
+import re
 import threading
 import time
 from importlib import resources
@@ -25,6 +26,9 @@ REQUEST_DEADLINE_S = 60
 OVERLOAD_SEND_TIMEOUT_S = 0.1
 MAX_EXPENSIVE_REQUESTS = 4
 _expensive = threading.BoundedSemaphore(MAX_EXPENSIVE_REQUESTS)
+# server_address holds the bound IP, so --host localhost reads 127.0.0.1 here.
+LOOPBACK_BINDS = {"127.0.0.1", "::1"}
+LOOPBACK_HOST = re.compile(r"(127\.0\.0\.1|localhost|\[::1\])(:\d+)?")
 
 
 class ClientDisconnected(Exception):
@@ -111,6 +115,13 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
 
     def do_GET(self) -> None:  # noqa: N802 — stdlib handler name
+        # Any page the user visits can send requests here; with DNS rebinding it could also read the replies.
+        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+            self._send_json({"error": "Requests from other websites are refused. Open this address directly.", "code": "forbidden"}, status=403)
+            return
+        if self.server.server_address[0] in LOOPBACK_BINDS and not LOOPBACK_HOST.fullmatch(self.headers.get("Host", "").lower()):
+            self._send_json({"error": "This server answers only Host 127.0.0.1, localhost or [::1]. Start it with --host to serve another name.", "code": "forbidden"}, status=403)
+            return
         token = request_deadline.set(time.monotonic() + REQUEST_DEADLINE_S)
         try:
             self._get()

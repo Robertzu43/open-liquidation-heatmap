@@ -62,9 +62,9 @@ python3 -m pip install .
 liqmap
 ```
 
-Open **http://127.0.0.1:8765**. The default market is live OKX BTC/USDT. Switch the venue to Binance, Bybit or All venues from the venue menu. Live views refresh every 60 seconds by default. The server binds to your local machine unless explicitly configured otherwise.
+Open `http://127.0.0.1:8765` in your browser. The default market is live OKX BTC/USDT. Switch the venue to Binance, Bybit or All venues from the venue menu. Live views refresh every 60 seconds by default. The server binds to your local machine unless explicitly configured otherwise.
 
-For offline exploration, open **http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1**. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
+For offline exploration, open `http://127.0.0.1:8765/?exchange=demo&coin=BTC&range=24h&model=1`. Demo prices and positions are synthetic and labeled as such. A failed live request never silently becomes demo data.
 
 On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
 
