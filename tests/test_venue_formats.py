@@ -317,11 +317,12 @@ def test_request_parameters_stay_inside_documented_enums_and_limits():
 # Bybit
 # ---------------------------------------------------------------------------
 
-def test_bybit_kline_doc_example_is_returned_oldest_first_with_documented_columns(monkeypatch):
+def test_bybit_kline_doc_example_is_requested_once_with_documented_columns(monkeypatch):
     fake = recorder(lambda url, params: (200, BYBIT_KLINE_DOC))
     monkeypatch.setattr(data, "_get_json", fake)
     rows = data._bybit_klines("BTCUSD", "60", 1670601600000, 1670608800000)
-    assert rows == list(reversed(BYBIT_KLINE_DOC["result"]["list"]))  # documented "sort in reverse"
+    # Rows keep the documented "sort in reverse" order; fold_candles places each by its start time.
+    assert rows == BYBIT_KLINE_DOC["result"]["list"]
     [params] = named(fake, "kline")
     assert params == {"category": "linear", "symbol": "BTCUSD", "interval": "60",
                       "start": 1670601600000, "end": 1670608800000, "limit": 1000}

@@ -116,19 +116,22 @@ def test_bybit_twelve_hour_bars_use_last_four_hour_snapshot_inside_each_bar(monk
     assert fake.named('open-interest')[0]['intervalTime'] == '4h'
 
 
-def test_bybit_kline_pages_follow_end_cursor_and_oi_follows_page_cursor(monkeypatch):
-    grid = BASE + np.arange(1500) * FIVE
+def test_bybit_klines_take_one_page_and_oi_follows_page_cursor(monkeypatch):
+    grid = BASE + np.arange(730) * FIVE  # The longest built-in view: 2y of daily bars.
     use_grid(monkeypatch, grid, int(grid[-1]) + FIVE)
     fake = FakeBybit([kline(t, 100 + (i % 7)) for i, t in enumerate(grid)], [(int(t), 10) for t in grid])
     monkeypatch.setattr(data, '_get_json', fake)
-    series = data.fetch_bybit('BTC', 'BTCUSDT', fixture_spec(bars=1500)).series
-    klines = fake.named('kline')
-    assert len(klines) == 2
-    assert klines[0]['end'] == int(grid[-1]) + FIVE - 1
-    assert klines[1]['end'] == int(grid[500]) - 1
-    assert len(series.times) == 1500 and series.candle_observed.all() and series.oi_observed.all()
+    series = data.fetch_bybit('BTC', 'BTCUSDT', fixture_spec(bars=730)).series
+    assert len(fake.named('kline')) == 1
+    assert len(series.times) == 730 and series.candle_observed.all() and series.oi_observed.all()
     pages = fake.named('open-interest')
-    assert [params.get('cursor') for params in pages] == [None, '1', '2', '3', '4', '5', '6', '7']
+    assert [params.get('cursor') for params in pages] == [None, '1', '2', '3']
+
+
+def test_bybit_window_beyond_one_kline_page_is_refused_not_truncated(monkeypatch):
+    monkeypatch.setattr(data, '_get_json', lambda *args, **kwargs: pytest.fail('no request for an oversized window'))
+    with pytest.raises(data.DataError, match='1000 bars'):
+        data.fetch_bybit('BTC', 'BTCUSDT', fixture_spec(bars=1001))
 
 
 def test_bybit_oi_cursor_pagination_stops_on_repeated_cursor(monkeypatch):

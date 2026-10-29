@@ -928,28 +928,13 @@ def _bybit_single_side(item: dict, single: str, both: str) -> float:
 
 
 def _bybit_klines(pair: str, interval: str, start_ms: int, end_ms: int) -> list:
-    """Kline rows oldest first. Bybit returns newest first, up to 1,000 per call."""
-    rows: dict[int, list] = {}
-    cursor_end = int(end_ms)
-    for _ in range(8):
-        check_deadline()
-        result = _bybit_result("/v5/market/kline", {
-            "category": "linear", "symbol": pair, "interval": interval,
-            "start": int(start_ms), "end": cursor_end, "limit": 1000,
-        })
-        batch = result.get("list") or []
-        oldest = None
-        for row in batch:
-            try:
-                ts = int(row[0])
-            except (TypeError, ValueError, IndexError):
-                continue
-            rows.setdefault(ts, row)
-            oldest = ts if oldest is None else min(oldest, ts)
-        if len(batch) < 1000 or oldest is None or oldest <= start_ms or oldest - 1 >= cursor_end:
-            break
-        cursor_end = oldest - 1
-    return [rows[key] for key in sorted(rows)]
+    """Kline rows in Bybit's newest-first order; fold_candles places each by its time."""
+    # shortcut: one 1,000-row page covers every built-in range (at most 730 bars); page if a longer Bybit window is added.
+    check_deadline()
+    return _bybit_result("/v5/market/kline", {
+        "category": "linear", "symbol": pair, "interval": interval,
+        "start": int(start_ms), "end": int(end_ms), "limit": 1000,
+    }).get("list") or []
 
 
 def _bybit_open_interest(pair: str, interval: str, start_ms: int, end_ms: int) -> list:
@@ -984,6 +969,8 @@ def fetch_bybit(coin: str, pair: str, spec: dict) -> LoadedSeries:
     unavailable and Flow skew uses its neutral fallback for this venue. Account
     long/short ratios are not substituted for taker flow.
     """
+    if int(spec["seconds"]) // int(spec["bar_seconds"]) > 1000:
+        raise DataError("Bybit views are limited to 1000 bars, one kline page.")
     cutoff_ms = int(time.time() * 1000)
     grid = _window(spec)
     bar_ms = int(spec["bar_seconds"]) * 1000
