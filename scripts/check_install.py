@@ -25,8 +25,8 @@ def main():
         wheel = next(temp.glob("open_liquidation_heatmap-*.whl"))
         venv.create(temp / "venv", with_pip=True, system_site_packages=True)
         python = temp / "venv/bin/python"
-        # CI already exposes this version through inherited site-packages. Always
-        # install the wheel and its console scripts into the disposable venv.
+        # The parent environment may already expose this version through inherited
+        # site-packages. Always install the wheel and its console scripts into the disposable venv.
         subprocess.run([str(python), "-m", "pip", "install", "--ignore-installed", "--no-deps", str(wheel)], check=True)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))

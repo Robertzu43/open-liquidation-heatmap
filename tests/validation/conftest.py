@@ -1,7 +1,7 @@
 """Pytest hooks for the validation suite.
 
-Network tests stay skipped unless ``RUN_NETWORK=1``. The daily CI smoke job
-sets that variable; a normal ``pytest`` run does not.
+Network tests stay skipped unless ``RUN_NETWORK=1``. Set it to check the
+public venues reachable from your network; a normal ``pytest`` run does not.
 """
 
 from __future__ import annotations

@@ -1,6 +1,6 @@
 """Offline browser acceptance. Start python -m liqmap.server, then run this file.
 
-Uses only the deterministic demo API. --url and --output support CI/local runs.
+Uses only the deterministic demo API. --url and --output point it at a local server and a capture folder.
 Requires Playwright and Chromium (python -m playwright install chromium);
 --chromium points at a specific Chromium build when the bundled one is missing.
 """

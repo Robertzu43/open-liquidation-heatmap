@@ -200,6 +200,7 @@ The chart measures **local synthetic workloads**, with cached source data and fr
 
 ```bash
 python -m pip install '.[dev,browser]'
+python -m ruff check .
 python -m pytest -q -ra
 node --check web/app.js
 python -m playwright install chromium
@@ -209,7 +210,7 @@ python tests/browser/smoke.py --url http://127.0.0.1:8767
 python scripts/check_install.py
 ```
 
-The [CI workflow](.github/workflows/ci.yml) covers Python tests, wheel installation away from the checkout, JavaScript syntax and offline browser acceptance. The browser suite exercises normal controls, failures/recovery, replay, exports and responsive layouts. Live exchange tests are separate from deterministic offline checks. Local results and unverified platforms are recorded in the [release review](docs/RELEASE_REVIEW.md); a committed workflow is not evidence of a successful remote CI run.
+There is no hosted CI. Run these commands before every push: lint, the Python suite, JavaScript syntax, offline browser acceptance and wheel installation away from the checkout. The browser suite exercises normal controls, failures and recovery, replay, exports, the watchlist, liquidation dots and responsive layouts. Live exchange tests are opt-in: `RUN_NETWORK=1 python -m pytest -q -m network` checks the public venues reachable from your network. Local results and unverified platforms are recorded in the [release review](docs/RELEASE_REVIEW.md).
 
 ## Replacing a paid data provider?
 

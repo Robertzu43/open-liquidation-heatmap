@@ -22,7 +22,8 @@ Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchange
 - All venues moved from the Research panel into the venue picker. As-of views and replay moved from the Research panel into the new Replay panel.
 - Replay keeps candles in view: each frame can widen the price axis, and it never narrows during playback.
 - The main map retries a busy server twice before showing an error, and side requests (context, liquidations, watchlist) are sequenced after the map so one browser stays within the 4 expensive-request slots.
-- The CI Python job runs `ruff check` (pyflakes, syntax and bugbear rules) before the tests.
+- `ruff check` (pyflakes, syntax and bugbear rules) is part of local verification.
+- The GitHub Actions workflow is removed. Verification runs locally with the commands in the README.
 - The three new routes have `/api/` aliases, use the 4 expensive-request slots, the 60-second cooperative budget, 400 `invalid_request` validation and strict finite JSON.
 - The README leads with how to read the chart; methodology and evidence stay in the linked docs.
 
