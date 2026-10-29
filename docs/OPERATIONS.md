@@ -11,7 +11,7 @@ Open Liq makes outbound HTTPS requests only to public market endpoints:
 | `www.okx.com` | OKX candles, open interest, taker flow, funding, observed liquidation orders |
 | `fapi.binance.com` | Binance live USDT-M candles, open interest, taker flow, funding |
 | `data.binance.vision` | Binance public archive: fallback, as-of views and replay |
-| `api.bybit.com` | Bybit candles, open interest and tickers (new in 0.4.0) |
+| `api.bybit.com` | Bybit candles, open interest and tickers |
 
 Allow these in an egress firewall. Demo views make no outbound requests. The exchanges see normal requests from your IP address and may rate-limit or block it.
 

@@ -11,7 +11,7 @@
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-e2b15a"></a>
 </p>
 <p align="center">
-  <a href="#quickstart">Quickstart</a> · <a href="#read-the-chart-in-30-seconds">Read the chart</a> · <a href="#run-with-a-coding-agent">For coding agents</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a> · <a href="docs/RELEASE_REVIEW.md">Release evidence</a>
+  <a href="#quickstart">Quickstart</a> · <a href="#read-the-chart-in-30-seconds">Read the chart</a> · <a href="#run-with-a-coding-agent">For coding agents</a> · <a href="docs/API.md">API reference</a> · <a href="docs/HOW_IT_WORKS.md">Methodology</a> · <a href="docs/VALIDATION.md">Validation</a> · <a href="examples/research.py">Research example</a>
 </p>
 
 Open Liq is a free liquidation heatmap for crypto futures traders that runs on your own computer. It estimates where leveraged longs and shorts on OKX, Binance and Bybit USDT perpetuals would be liquidated if price moved there, and draws those levels as bands around the price chart. Beside the estimate it shows what the exchanges actually report: open interest, funding and recent OKX liquidation orders. You need no exchange account and no API key, and Open Liq never sees your positions. Every assumption behind the bands is published, and a local API returns the same numbers for your own research.
@@ -120,7 +120,7 @@ The sidebar and reading line summarize display bins. For research that must not 
 | Responsive chart | Phone layout, keyboard/touch controls, UTC/local display, shareable views, PNG and JSON exports |
 | Local-first installation | Wheel packaging, console commands, offline demo, no paid runtime service |
 
-Read [what changed in 0.4.0](CHANGELOG.md). **Application 0.4.0, API 1.0 and model 2.0.0 are separate versions.** The model is unchanged from 0.3.1. All venues now includes Bybit, so its totals differ from 0.3.1.
+Read [what changed in 0.4.0](CHANGELOG.md). **Application 0.4.0, API 1.0 and model 2.0.0 are separate versions.**
 
 ## Data coverage
 
@@ -210,13 +210,13 @@ python tests/browser/smoke.py --url http://127.0.0.1:8767
 python scripts/check_install.py
 ```
 
-There is no hosted CI. Run these commands before every push: lint, the Python suite, JavaScript syntax, offline browser acceptance and wheel installation away from the checkout. The browser suite exercises normal controls, failures and recovery, replay, exports, the watchlist, liquidation dots and responsive layouts. Live exchange tests are opt-in: `RUN_NETWORK=1 python -m pytest -q -m network` checks the public venues reachable from your network. Local results and unverified platforms are recorded in the [release review](docs/RELEASE_REVIEW.md).
+There is no hosted CI. Run these commands before every push: lint, the Python suite, JavaScript syntax, offline browser acceptance and wheel installation away from the checkout. The browser suite exercises normal controls, failures and recovery, replay, exports, the watchlist, liquidation dots and responsive layouts. Live exchange tests are opt-in: `RUN_NETWORK=1 python -m pytest -q -m network` checks the public venues reachable from your network.
 
 ## Replacing a paid data provider?
 
 Open Liq gives you inspectable modeling and control of your research inputs. It is **not a drop-in replacement** for a provider-specific strategy: coverage, timing, definitions and estimates differ. Compare authorized, timestamp-aligned datasets; freeze parameters; evaluate held-out outcomes after costs; and shadow-run before deciding. No provider dataset or prospective trading evidence was available for this release.
 
-[Migration](docs/MIGRATION.md) · [Operations](docs/OPERATIONS.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
+[Operations](docs/OPERATIONS.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
 
 ## Keep the heatmap glowing
 

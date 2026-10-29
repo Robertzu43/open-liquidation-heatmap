@@ -12,7 +12,7 @@ For advanced Python callers, old series that omit native OI remain a labeled `le
 
 Missing, nonpositive or invalid OI breaks the flow baseline. The first valid observation after a break re-establishes the baseline; it does not create an opening cohort for the unobserved interval. An observed existing inventory can still be swept by a valid later price bar. Price bars synthesized for display cannot trigger liquidation sweeps.
 
-Venue components retain independent baselines and cohort inventories. Aggregation sums those inventories; it does not difference a fluctuating sum of available venues. Since 0.4.0 the aggregate combines OKX, Binance and Bybit. Each venue also keeps its own flow prior and its own liquidation-price helper. Coverage changes and exclusions are exposed as metadata. A missing venue is missing information, not evidence that its positions closed.
+Venue components retain independent baselines and cohort inventories. Aggregation sums those inventories; it does not difference a fluctuating sum of available venues. The aggregate combines OKX, Binance and Bybit. Each venue also keeps its own flow prior and its own liquidation-price helper. Coverage changes and exclusions are exposed as metadata. A missing venue is missing information, not evidence that its positions closed.
 
 ### Bybit data contract and OI timing
 
@@ -111,7 +111,7 @@ A dot near a band does not confirm the model, and no dots in a period the feed d
 
 The causal regression suite checks native-unit invariance, same-bar ordering, future-prefix invariance, missing-source transitions, invalid OI recovery, exact/profile accounting and time-normalized decay. Parser tests exercise public-source fields and masks. API and research tests exercise timestamps, hashes, versioned contracts and malformed data.
 
-These establish selected implementation properties. They do **not** establish predictive accuracy, account-level liquidation sizes, a trading edge, or numerical equivalence to CoinGlass. See [validation](VALIDATION.md) and the [release review](RELEASE_REVIEW.md) for actual evidence and remaining gates.
+These establish selected implementation properties. They do **not** establish predictive accuracy, account-level liquidation sizes, a trading edge, or numerical equivalence to CoinGlass. See [validation](VALIDATION.md) for actual evidence and remaining gates.
 
 ## Sources and scope
 

@@ -874,7 +874,8 @@
           "as_of",
           "units",
           "time_semantics",
-          "model_metadata"
+          "model_metadata",
+          "market_context"
         ],
         "properties": {
           "schema_version": {
@@ -952,7 +953,7 @@
       },
       "MarketContext": {
         "type": "object",
-        "description": "Additive in 0.4.0; optional for older servers. Computed over the displayed window.",
+        "description": "Computed over the displayed window.",
         "properties": {
           "price_change_pct": {
             "type": [
