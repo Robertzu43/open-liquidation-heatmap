@@ -193,7 +193,7 @@ def test_invalid_native_okx_observation_is_missing_not_an_exception(monkeypatch)
     monkeypatch.setattr(data, '_window', lambda spec: grid)
     def pages(path, *args):
         if path.endswith('open-interest-history'):
-            return [[str(t),'9999',base,'500'] for t,base in zip(grid,['5','bad','6'])]
+            return [[str(t),'9999',base,'500'] for t,base in zip(grid,['5','bad','6'],strict=True)]
         if path.endswith('taker-volume-contract'):
             return []
         return [[str(t),'100','101','99','100','0','0','10','1'] for t in grid]

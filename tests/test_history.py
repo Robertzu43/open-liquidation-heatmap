@@ -132,7 +132,7 @@ class ArchiveHistoryTests(unittest.TestCase):
 
 class LivePagingTests(unittest.TestCase):
     def test_klines_page_past_1500_rows(self):
-        spec = range_spec("7d", "5m")  # 2,016 bars
+        self.assertEqual(range_spec("7d", "5m")["seconds"] // 300, 2016)
         end_open = 1_800_000_000 // 300 * 300 - 300
         bar_ms = 300_000
 
@@ -169,7 +169,6 @@ class ReplaySpanTests(unittest.TestCase):
         return klines, metrics
 
     def test_frames_equal_direct_views(self):
-        bar_ms = 900_000
         end = history_end_open(T_2021, 900)
         # Gaps right at several window edges, so trimming and the 3-bar fill are exercised.
         gaps = {(end - k * 900) * 1000 for k in (0, 1, 95, 96, 97, 140, 141, 142, 143)}
