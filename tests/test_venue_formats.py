@@ -238,11 +238,9 @@ CCXT_BINANCE_KLINES = json.loads("""
 # Current OpenAPI examples. The docs page (market-data#open-interest-statistics, #mark-price,
 # #open-interest, #get-funding-rate-info) shows these values; Binance's generated Go connector
 # carries them as JSON: github.com/binance/binance-connector-go/blob/master/clients/derivativestradingusdsfutures/tests/unit/restapi/api_market_data_test.go,
-# retrieved 2026-10-29. openInterestHist timestamp = end of the period; takerlongshortRatio
-# timestamp = start of the period (github.com/binance/binance-connector-java/blob/master/clients/
-# derivatives-trading-usds-futures/docs/{OpenInterestStatistics,TakerBuySellVolume}ResponseInner.md).
+# retrieved 2026-10-29. openInterestHist timestamp = end of the period (github.com/binance/binance-connector-java/
+# blob/master/clients/derivatives-trading-usds-futures/docs/OpenInterestStatisticsResponseInner.md).
 BINANCE_OI_HIST_DOC = json.loads('[{"symbol":"BTCUSDT","sumOpenInterest":"20403.12345678","sumOpenInterestValue":"176196512.12345678","CMCCirculatingSupply":"165880.538","timestamp":1591261042378}]')
-BINANCE_TAKER_DOC = json.loads('[{"buySellRatio":"1.5586","buyVol":"387.3300","sellVol":"248.5030","timestamp":1591261042378}]')
 BINANCE_PREMIUM_DOC = json.loads('{"symbol":"BTCUSDT","markPrice":"11793.63104562","indexPrice":"11781.80495970","estimatedSettlePrice":"11781.16138815","lastFundingRate":"0.00038246","interestRate":"0.00010000","nextFundingTime":1597392000000,"time":1597370495002}')
 BINANCE_OI_DOC = json.loads('{"openInterest":"10659.509","symbol":"BTCUSDT","time":1589437530011}')
 BINANCE_FUNDING_INFO_DOC = json.loads('[{"symbol":"BLZUSDT","adjustedFundingRateCap":"0.02500000","adjustedFundingRateFloor":"-0.02500000","fundingIntervalHours":8,"disclaimer":false}]')
@@ -304,12 +302,12 @@ def test_request_parameters_stay_inside_documented_enums_and_limits():
     # Bybit open-interest intervalTime enum has no 12-hour value: 5min,15min,30min,1h,4h,1d (limit 1..200).
     assert set(data.BYBIT_OI.values()) <= {"5min", "15min", "30min", "1h", "4h", "1d"}
     assert data.BYBIT_OI["12h"] == "4h"
-    # Binance kline intervals and the openInterestHist/takerlongshortRatio periods
+    # Binance kline intervals and the openInterestHist periods
     # (binance-connector-python models/enums.py, generated from the OpenAPI spec).
     kline = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "8h", "12h", "1d", "3d", "1w", "1M"}
     period = {"5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d"}
     assert set(data.BAR_SECONDS) <= kline and set(data.BAR_SECONDS) <= period
-    # openInterestHist serves the latest month only; takerlongshortRatio the latest 30 days.
+    # openInterestHist serves the latest month only.
     assert data.LIVE_OI_DAYS < 30
 
 
@@ -442,13 +440,13 @@ def test_bybit_captured_region_block_and_documented_rate_limit_403_are_explained
 # Binance USD-M
 # ---------------------------------------------------------------------------
 
-def binance_range_server(klines, oi_rows, taker_rows):
+def binance_range_server(klines, oi_rows):
     """Answers like fapi: rows with startTime <= time <= endTime, oldest first, at most ``limit``."""
     def stamp(row):
         return int(row[0]) if isinstance(row, list) else int(row["timestamp"])
 
     def handler(url, params):
-        table = klines if url.endswith("/klines") else oi_rows if url.endswith("/openInterestHist") else taker_rows
+        table = klines if url.endswith("/klines") else oi_rows
         rows = sorted((row for row in table if params["startTime"] <= stamp(row) <= params["endTime"]), key=stamp)
         return 200, rows[:params["limit"]]
 
@@ -459,8 +457,7 @@ def test_binance_live_fold_parses_documented_and_captured_rows(monkeypatch):
     # A daily grid spanning every published sample: 2017-07-03 .. 2024-04-10 UTC.
     start, end = 1499040000000, 1712707200000
     grid = np.arange(start, end + 1, DAY_MS, dtype=np.int64)
-    fake = binance_range_server(BINANCE_KLINE_DOC + CCXT_BINANCE_KLINES,
-                                BINANCE_OI_HIST_OLD_DOC + BINANCE_OI_HIST_DOC, BINANCE_TAKER_DOC)
+    fake = binance_range_server(BINANCE_KLINE_DOC + CCXT_BINANCE_KLINES, BINANCE_OI_HIST_OLD_DOC + BINANCE_OI_HIST_DOC)
     monkeypatch.setattr(data, "_get_json", fake)
     raw = data._fold_binance_live("BTCUSDT", "1d", grid)
     assert raw is not None and raw.source == "binance-live"
@@ -475,21 +472,24 @@ def test_binance_live_fold_parses_documented_and_captured_rows(monkeypatch):
     assert (raw.open[captured], raw.high[captured], raw.low[captured], raw.close[captured]) == (71481.9, 71481.9, 70459.4, 70459.4)
     assert raw.volume[captured] == pytest.approx(142.9638 + 8518.176 + 108661.5584)
     assert int(np.isfinite(raw.close).sum()) == 2
+    # Flow: taker buy quote volume (index 10) over quote volume (index 7), summed over the bar.
+    assert raw.share[doc] == pytest.approx(28.46694368 / 2434.19055334)
+    assert raw.share[captured] == pytest.approx((142.9638 + 4359.726 + 929.1213) / (142.9638 + 8518.176 + 108661.5584))
+    assert int(np.isfinite(raw.share).sum()) == 2
 
     old, new = day(1583127900000), day(1591261042378)
     # sumOpenInterestValue is USD, sumOpenInterest native base; the later print in a bar wins.
     assert raw.oi[old] == pytest.approx(149940752.14464448) and raw.oi_base[old] == pytest.approx(20401.367)
     assert raw.oi[new] == pytest.approx(176196512.12345678) and raw.oi_base[new] == pytest.approx(20403.12345678)
-    assert math.isnan(raw.share[old])  # No taker row shares that timestamp.
-    assert raw.share[new] == pytest.approx(387.33 / (387.33 + 248.503))
+    assert math.isnan(raw.share[old]) and math.isnan(raw.share[new])  # No kline on those days.
     assert int(np.isfinite(raw.oi).sum()) == 2
 
-    for endpoint in ("klines", "openInterestHist", "takerlongshortRatio"):
+    assert {name for name, _params in fake.calls} == {"klines", "openInterestHist"}
+    for endpoint in ("klines", "openInterestHist"):
         first = named(fake, endpoint)[0]
         assert first["symbol"] == "BTCUSDT" and first["startTime"] == start and first["endTime"] == end + DAY_MS
     assert named(fake, "klines")[0]["interval"] == "1d" and named(fake, "klines")[0]["limit"] == 1500
     assert named(fake, "openInterestHist")[0]["period"] == "1d" and named(fake, "openInterestHist")[0]["limit"] == 500
-    assert named(fake, "takerlongshortRatio")[0]["period"] == "1d"
 
 
 def test_binance_context_parses_documented_snapshots(monkeypatch):
@@ -595,7 +595,7 @@ def test_live_binance_fold(bars):
     assert raw is not None, "Binance answered /fapi/v1/time but the live fold failed"
     closes = np.isfinite(raw.close)
     assert closes.mean() > 0.98 and (raw.close[closes] > 0).all() and raw.volume[closes].sum() > 0
-    # 600 bars need two openInterestHist and takerlongshortRatio pages; coverage shows paging works.
+    # 600 bars need two openInterestHist pages; coverage shows paging works.
     oi = np.isfinite(raw.oi)
     assert oi.mean() > 0.95 and (raw.oi[oi] > 0).all() and (raw.oi_base[oi] > 0).all()
     assert 1_000 < np.median(raw.oi_base[oi]) < 1_000_000

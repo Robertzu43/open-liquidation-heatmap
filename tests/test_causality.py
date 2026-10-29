@@ -153,11 +153,12 @@ def test_native_binance_live_and_archive_parser_paths(monkeypatch):
     raw = data._fold_binance_live('BTCUSDT','5m',grid)
     np.testing.assert_array_equal(raw.oi_base, [5,5,5])
     # Test the complete archive finalization independently of the wall-clock grid.
-    monkeypatch.setattr(data, '_load_vision_klines', lambda *args: [(int(t),100,101,99,100,10) for t in grid])
+    monkeypatch.setattr(data, '_load_vision_klines', lambda *args: [(int(t),100,101,99,100,10,5) for t in grid])
     monkeypatch.setattr(data, '_load_vision_metrics', lambda *args: [(int(t),500+i*50,.5,5) for i,t in enumerate(grid)])
     archive = data._fold_binance_archive('BTCUSDT','5m',grid)
     finished = data.finish_history(archive,900,{'bar_seconds':300,'seconds':900},'BTC','BTCUSDT')
     np.testing.assert_array_equal(finished.series.oi_base,[5,5,5])
+    np.testing.assert_array_equal(finished.series.long_share,[.5,.5,.5])  # Taker buy 5 of quote volume 10.
     assert finished.series.provenance['history_kind'] == 'reconstructed_archive'
     np.testing.assert_allclose(total(build_heatmap(finished.series,1)),0)
 
@@ -176,6 +177,26 @@ def test_okx_uses_base_oi_column_not_contract_count_or_usd(monkeypatch):
     loaded = data.fetch_okx('BTC','BTCUSDT',{'key':'fixture','bar':'5m','bar_seconds':300,'seconds':900})
     np.testing.assert_array_equal(loaded.series.oi_base,[5,5,5])
     np.testing.assert_allclose(total(build_heatmap(loaded.series,1)),0)
+
+
+def test_okx_candles_come_from_market_candles_alone(monkeypatch):
+    from liqmap import data
+    # /market/candles serves the latest 1,440 bars; every built-in window plus its lead bar fits.
+    assert max(spec['seconds'] // spec['bar_seconds'] + 1 for spec in data.RANGES.values()) <= 1440
+    grid = np.array([300000,600000,900000])
+    monkeypatch.setattr(data, '_window', lambda spec: grid)
+    paths = []
+    def pages(path, *args):
+        paths.append(path)
+        if path.endswith('open-interest-history'):
+            return [[str(t),'9999','5','500'] for t in grid]
+        if path.endswith('taker-volume-contract'):
+            return []
+        return [[str(t),'100','101','99','100','0','0','10','1'] for t in grid]
+    monkeypatch.setattr(data, '_okx_pages', pages)
+    data.fetch_okx('BTC','BTCUSDT',{'key':'fixture','bar':'5m','bar_seconds':300,'seconds':900})
+    assert paths == ['/api/v5/market/candles', '/api/v5/rubik/stat/contracts/open-interest-history',
+                     '/api/v5/rubik/stat/taker-volume-contract']
 
 
 def test_replay_bound_checked_before_grid_allocation(monkeypatch):
