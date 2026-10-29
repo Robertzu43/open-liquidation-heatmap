@@ -21,6 +21,7 @@ from liqmap.data import (
 from liqmap.model import (
     MODELS,
     MarketSeries,
+    analyze,
     bin_intensity,
     build_heatmap,
     fade_swept,
@@ -138,6 +139,20 @@ class ModelTests(unittest.TestCase):
         self.assertGreater(len(analysis["levels"]), 0)
         self.assertEqual([row["window_pct"] for row in analysis["imbalance"]], [1, 2, 5, 10])
         self.assertIn("BTC", analysis["summary"])
+
+    def test_summary_names_liquidation_clusters_without_trailing_disclaimer(self):
+        centers = np.linspace(90, 110, 41)
+        profile_long = np.where(np.abs(centers - 97) < 0.6, 1e6, 0.0)
+        profile_short = np.where(np.abs(centers - 103) < 0.6, 2e6, 0.0)
+        summary = analyze(centers, profile_long, profile_short, 100.0, "BTC")["summary"]
+        self.assertTrue(summary.startswith("BTC is trading at 100.00."))
+        self.assertIn("nearest short liquidation cluster is 103.00", summary)
+        self.assertIn("nearest long liquidation cluster is 97.00", summary)
+        self.assertNotIn("shel", summary.lower())
+        self.assertTrue(summary.endswith("long exposure."))
+        empty = analyze(centers, np.zeros(41), np.zeros(41), 100.0, "ETH")["summary"]
+        self.assertIn("No short liquidation cluster is resting above price", empty)
+        self.assertIn("No long liquidation cluster is resting below price", empty)
 
 
 class TierTests(unittest.TestCase):

@@ -8,14 +8,15 @@ from unittest import mock
 
 import pytest
 
-from liqmap import server, service
+from liqmap import market, server, service
 from liqmap.data import DataError, fetch_demo, range_spec
 
 
 @pytest.fixture
 def http_api():
     app = server.BoundedThreadingHTTPServer(('127.0.0.1', 0), server.Handler)
-    thread = threading.Thread(target=app.serve_forever, daemon=True)
+    # A short poll keeps shutdown fast; each test starts its own server.
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
     def get(path):
         try:
@@ -33,11 +34,15 @@ def http_api():
 
 @pytest.fixture(autouse=True)
 def clear_cache():
-    service._cache.clear()
-    service._spans.clear()
+    def clear():
+        service._cache.clear()
+        service._spans.clear()
+        market._context_cache.clear()
+        market._liquidation_cache.clear()
+        market._instruments.clear()
+    clear()
     yield
-    service._cache.clear()
-    service._spans.clear()
+    clear()
 
 
 def test_versioned_routes_preserve_heatmap_and_feature_contract(http_api):
@@ -237,3 +242,126 @@ def test_recently_fetched_live_source_thirty_minutes_old_is_stale_not_ready(http
     assert status == 503
     assert ready['data']['status'] == 'stale'
     assert ready['data']['freshness_budget_seconds'] == 600
+
+
+@pytest.fixture
+def offline_exchanges():
+    from liqmap import data
+    with mock.patch.object(data, '_get_json', side_effect=AssertionError('API tests must not contact an exchange')) as guard:
+        yield guard
+
+
+@pytest.mark.parametrize('prefix', ['/api/v1', '/api'])
+def test_demo_context_route_is_synthetic_and_offline(http_api, offline_exchanges, prefix):
+    status, body = http_api(prefix + '/context?exchange=demo&symbol=ETH')
+    assert status == 200
+    assert body['schema_version'] == '1.0'
+    assert (body['coin'], body['symbol'], body['exchange'], body['mode'], body['synthetic']) == ('ETH', 'ETHUSDT', 'demo', 'pair', True)
+    [venue] = body['venues']
+    assert set(venue) == {'exchange', 'name', 'ok', 'funding_rate', 'next_funding_time', 'funding_interval_hours',
+                          'open_interest_base', 'open_interest_usd', 'mark_price', 'observed_at', 'error'}
+    assert venue['ok'] is True and venue['exchange'] == 'demo'
+    assert body['funding_rate_oi_weighted'] == pytest.approx(venue['funding_rate'])
+    assert body['open_interest_usd_total'] == pytest.approx(venue['open_interest_usd'])
+    assert isinstance(body['generated_at'], int) and isinstance(body['note'], str)
+
+
+@pytest.mark.parametrize('prefix', ['/api/v1', '/api'])
+def test_demo_liquidations_route_is_synthetic_and_ordered(http_api, offline_exchanges, prefix):
+    status, body = http_api(prefix + '/liquidations?exchange=demo&symbol=BTC&range=12h')
+    assert status == 200
+    assert (body['schema_version'], body['coin'], body['source'], body['available'], body['synthetic']) == ('1.0', 'BTC', 'demo', True, True)
+    events = body['events']
+    assert events and [event['ts'] for event in events] == sorted(event['ts'] for event in events)
+    assert all(set(event) == {'ts', 'price', 'side', 'size_base', 'usd'} and event['side'] in {'long', 'short'} for event in events)
+    assert body['coverage'] == {'from_ms': events[0]['ts'], 'to_ms': events[-1]['ts'], 'count': len(events), 'truncated': False}
+    status, heat = http_api('/api/v1/heatmap?exchange=demo&symbol=BTC&range=12h')
+    assert heat['times'][0] < events[0]['ts'] and events[-1]['ts'] < heat['market_context']['window_end_ms']
+
+
+def test_binance_pair_liquidations_are_explicitly_unavailable(http_api, offline_exchanges):
+    status, body = http_api('/api/v1/liquidations?exchange=binance&symbol=BTC')
+    assert status == 200
+    assert body['available'] is False and body['events'] == [] and body['synthetic'] is False
+    assert 'OKX only' in body['note']
+
+
+@pytest.mark.parametrize('prefix', ['/api/v1', '/api'])
+def test_demo_watchlist_route_keeps_request_order(http_api, offline_exchanges, prefix):
+    status, body = http_api(prefix + '/watchlist?exchange=demo&range=12h&model=1&symbols=SOL,btc,ETH')
+    assert status == 200
+    assert {key: body[key] for key in ('schema_version', 'exchange', 'mode', 'range', 'model')} == {
+        'schema_version': '1.0', 'exchange': 'demo', 'mode': 'pair', 'range': '12h', 'model': 1}
+    assert [item['coin'] for item in body['items']] == ['SOL', 'BTC', 'ETH']
+    for item in body['items']:
+        assert set(item) == {'coin', 'ok', 'price', 'price_change_pct', 'quality', 'stale', 'above', 'below',
+                             'short_to_long_5pct', 'as_of', 'error'}
+        assert item['ok'] is True and item['quality'] == 'synthetic' and item['stale'] is False
+        assert set(item['above']) == {'price', 'distance_pct', 'usd'} and set(item['below']) == {'price', 'distance_pct', 'usd'}
+
+
+@pytest.mark.parametrize('path', [
+    '/api/v1/watchlist?exchange=demo&symbols=A1,B2,C3,D4,E5,F6,G7',
+    '/api/v1/watchlist?exchange=demo&symbols=',
+    '/api/v1/watchlist?exchange=demo',
+    '/api/v1/watchlist?exchange=kraken&symbols=BTC',
+    '/api/v1/watchlist?exchange=demo&symbols=BTC&asof=1609459200',
+    '/api/v1/watchlist?exchange=demo&symbols=BTC&bar=5m',
+    '/api/v1/watchlist?exchange=demo&symbols=BTC&model=9',
+    '/api/v1/watchlist?exchange=demo&symbols=BTC&symbols=ETH',
+    '/api/v1/context?exchange=kraken',
+    '/api/v1/context?exchange=demo&mode=wat',
+    '/api/v1/context?exchange=demo&symbol=!',
+    '/api/v1/context?exchange=demo&asof=1609459200',
+    '/api/v1/liquidations?exchange=kraken',
+    '/api/v1/liquidations?exchange=demo&range=5h',
+    '/api/v1/liquidations?exchange=demo&replay=1',
+    '/api/v1/liquidations?exchange=demo&replay=wat',
+])
+def test_market_routes_reject_bad_parameters(http_api, offline_exchanges, path):
+    status, body = http_api(path)
+    assert (status, body['code']) == (400, 'invalid_request')
+    assert isinstance(body['error'], str)
+
+
+def test_market_route_source_failures_are_503(http_api):
+    from liqmap import data
+    with mock.patch.object(data, '_get_json', return_value=(403, None)):
+        status, body = http_api('/api/v1/context?exchange=aggregate&symbol=BTC')
+        assert (status, body['code']) == (503, 'source_unavailable')
+        status, body = http_api('/api/v1/liquidations?exchange=okx&symbol=BTC')
+        assert (status, body['code']) == (503, 'source_unavailable')
+
+
+@pytest.mark.parametrize('path', ['/api/v1/context?exchange=demo', '/api/v1/liquidations?exchange=demo',
+                                  '/api/v1/watchlist?exchange=demo&symbols=BTC', '/api/context?exchange=demo'])
+def test_market_routes_share_the_expensive_gate(http_api, offline_exchanges, path):
+    with contextlib.ExitStack() as stack:
+        for _ in range(server.MAX_EXPENSIVE_REQUESTS):
+            assert server._expensive.acquire(blocking=False)
+            stack.callback(server._expensive.release)
+        status, body = http_api(path)
+        assert (status, body['code']) == (429, 'busy')
+        assert http_api('/healthz')[0] == 200
+    assert http_api(path)[0] == 200
+
+
+def test_heatmap_and_features_carry_displayed_market_context(http_api):
+    status, heat = http_api('/api/v1/heatmap?exchange=demo&range=12h&visible_bars=24')
+    assert status == 200
+    context = heat['market_context']
+    assert set(context) == {'price_change_pct', 'oi_usd', 'oi_change_pct', 'window_start_ms', 'window_end_ms'}
+    assert context['window_start_ms'] == heat['times'][0]
+    assert context['window_end_ms'] == heat['times'][-1] + heat['bar_seconds'] * 1000
+    assert isinstance(context['price_change_pct'], float) and context['oi_usd'] > 0
+    status, features = http_api('/api/v1/features?exchange=demo&range=12h&visible_bars=24')
+    assert features['market_context'] == context
+    assert heat['schema_version'] == features['schema_version'] == '1.0'
+
+
+def test_status_advertises_market_capabilities(http_api):
+    status, body = http_api('/api/v1/status')
+    assert status == 200
+    assert body['capabilities']['observed_liquidations'] == ['okx']
+    assert body['capabilities']['watchlist_max_symbols'] == 6
+    assert body['capabilities']['context'] is True

@@ -490,19 +490,16 @@ def analyze(centers: np.ndarray, profile_long: np.ndarray, profile_short: np.nda
         lean = "Within 5% of price, this window has little estimated exposure in the model."
 
     above_txt = (
-        f"The nearest short shelf is {fmt_px(nearest_above['price'])} ({nearest_above['distance_pct']:+.2f}%), about {fmt_usd(nearest_above['usd'])}."
+        f"The nearest short liquidation cluster is {fmt_px(nearest_above['price'])} ({nearest_above['distance_pct']:+.2f}%), about {fmt_usd(nearest_above['usd'])}."
         if nearest_above
-        else "No short shelf is resting above price in this window."
+        else "No short liquidation cluster is resting above price in this window."
     )
     below_txt = (
-        f"The nearest long shelf is {fmt_px(nearest_below['price'])} ({nearest_below['distance_pct']:+.2f}%), about {fmt_usd(nearest_below['usd'])}."
+        f"The nearest long liquidation cluster is {fmt_px(nearest_below['price'])} ({nearest_below['distance_pct']:+.2f}%), about {fmt_usd(nearest_below['usd'])}."
         if nearest_below
-        else "No long shelf is resting below price in this window."
+        else "No long liquidation cluster is resting below price in this window."
     )
-    summary = (
-        f"{coin} is trading at {fmt_px(spot)}. {above_txt} {below_txt} {lean} "
-        "These shelves are an estimate from open-interest changes and a fixed assumed leverage mix."
-    )
+    summary = f"{coin} is trading at {fmt_px(spot)}. {above_txt} {below_txt} {lean}"
     levels = sorted(long_levels + short_levels, key=lambda g: g["usd"], reverse=True)
     return {
         "price": spot,

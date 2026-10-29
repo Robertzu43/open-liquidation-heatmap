@@ -883,9 +883,9 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
 
 
 
-def _bybit_result(path: str, params: dict) -> dict:
-    """The ``result`` object of a Bybit v5 public response, or a DataError."""
-    status, payload = _get_json(f"{BYBIT_BASE}{path}", params, timeout=(4, 10), retries=2)
+def _bybit_payload(path: str, params: dict, *, timeout: tuple[float, float] = (4, 10), retries: int = 2) -> dict:
+    """A validated Bybit v5 public response whose ``result`` is an object, or a DataError."""
+    status, payload = _get_json(f"{BYBIT_BASE}{path}", params, timeout=timeout, retries=retries)
     if not isinstance(payload, dict):
         if status in (401, 403, 451):
             raise DataError(f"Bybit is not reachable from this network (HTTP {status}). Its public API blocks some regions.")
@@ -895,10 +895,14 @@ def _bybit_result(path: str, params: dict) -> dict:
         if "symbol" in message.lower():
             raise DataError(f"Bybit has no {params.get('symbol', 'such')} perpetual ({message}).")
         raise DataError(f"Bybit rejected the request ({message}).")
-    result = payload.get("result")
-    if not isinstance(result, dict):
+    if not isinstance(payload.get("result"), dict):
         raise DataError("Bybit returned an unexpected response.")
-    return result
+    return payload
+
+
+def _bybit_result(path: str, params: dict) -> dict:
+    """The ``result`` object of a Bybit v5 public response, or a DataError."""
+    return _bybit_payload(path, params)["result"]
 
 
 def _bybit_klines(pair: str, interval: str, start_ms: int, end_ms: int) -> list:

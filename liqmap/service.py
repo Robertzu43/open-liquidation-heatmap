@@ -55,6 +55,9 @@ SPAN_TTL = 1800
 MAX_SERIES_CACHE = 16
 MAX_SPAN_CACHE = 2
 SCHEMA_VERSION = "1.0"
+MAX_WATCHLIST_SYMBOLS = 6
+# Venues whose public API publishes filled liquidation orders this server reads.
+OBSERVED_LIQUIDATION_SOURCES = ("okx",)
 
 _cache: dict[tuple, tuple[float, object]] = {}
 _spans: dict[tuple, list] = {}
@@ -385,6 +388,45 @@ def readiness_payload() -> dict:
     return {"ok": ready, "process": "healthy", "data": data}
 
 
+def _observed_oi_mask(series) -> np.ndarray:
+    """Bars whose USD open interest was observed, not forward-filled.
+
+    An aggregate bar counts only when every component venue observed it, so a
+    missing venue cannot read as an open-interest drop.
+    """
+    oi = np.asarray(series.oi_usd, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        mask = np.asarray(series.oi_observed, dtype=bool) & np.isfinite(oi) & (oi > 0)
+    for part in series.components:
+        with np.errstate(invalid="ignore"):
+            part_ok = np.asarray(part.oi_observed, dtype=bool) & np.isfinite(part.oi_usd) & (part.oi_usd > 0)
+        mask &= np.isin(series.times, part.times[part_ok])
+    return mask
+
+
+def _pct_change(first: float, last: float) -> float | None:
+    if not (math.isfinite(first) and math.isfinite(last)) or first <= 0:
+        return None
+    return (last / first - 1.0) * 100.0
+
+
+def market_context(series) -> dict:
+    """Price and open-interest change over the bars of ``series``; null when not computable."""
+    close = np.asarray(series.close, dtype=np.float64)
+    price_change = _pct_change(float(close[0]), float(close[-1])) if len(close) >= 2 else None
+    oi = np.asarray(series.oi_usd, dtype=np.float64)
+    observed = np.flatnonzero(_observed_oi_mask(series))
+    oi_last = float(oi[observed[-1]]) if len(observed) else None
+    oi_change = _pct_change(float(oi[observed[0]]), float(oi[observed[-1]])) if len(observed) >= 2 else None
+    return _scrub({
+        "price_change_pct": price_change,
+        "oi_usd": oi_last,
+        "oi_change_pct": oi_change,
+        "window_start_ms": int(series.times[0]),
+        "window_end_ms": int(series.times[-1]) + int(series.bar_seconds) * 1000,
+    })
+
+
 def features_payload(*args, **kwargs) -> dict:
     payload = load_heatmap(*args, **kwargs)
     chart_fields = {"open", "high", "low", "close", "volume", "centers", "heat", "bins", "profile_long", "profile_short", "profile_long_tiers", "profile_short_tiers", "tiers", "price_view", "analysis"}
@@ -450,6 +492,7 @@ def load_heatmap(
         "venues": list(loaded.venues),
         "as_of": int(loaded.as_of),
         "stale": metadata["quality"]["stale"],
+        "market_context": market_context(series),
         "note": series.note,
         "warnings": metadata["quality"]["warnings"],
         "generated_at": int(time.time() * 1000),
@@ -540,6 +583,7 @@ def status_payload() -> dict:
         "models": [public_model(model_id) for model_id in (1, 2, 3)],
         "mmr": MMR,
         "coins": list(COINS),
+        "capabilities": capabilities(),
     }
 
 
@@ -552,4 +596,18 @@ def symbols_payload() -> dict:
             if key != "aggregate"
         ],
         "quote": "USDT",
+        "features": {
+            "context": "Live funding and open interest for okx, binance and bybit; demo is synthetic.",
+            "observed_liquidations": "Filled liquidation orders are observed from OKX only.",
+            "watchlist_max_symbols": MAX_WATCHLIST_SYMBOLS,
+        },
+    }
+
+
+def capabilities() -> dict:
+    return {
+        "context": True,
+        "context_venues": list(AGGREGATE_VENUES),
+        "observed_liquidations": list(OBSERVED_LIQUIDATION_SOURCES),
+        "watchlist_max_symbols": MAX_WATCHLIST_SYMBOLS,
     }
