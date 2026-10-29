@@ -29,7 +29,7 @@ Heatmap, features and levels share these query parameters:
 | Parameter | Default | Accepted values |
 | --- | --- | --- |
 | `exchange` | `okx` | `okx`, `binance`, `bybit`, `demo`, `aggregate` |
-| `symbol` | `BTC` | 2–12 letter/digit base ticker, optionally followed by USDT |
+| `symbol` | `BTC` | 1–16 letter/digit base ticker, optionally followed by USDT |
 | `range` | `24h` | `12h`, `24h`, `3d`, `7d`, `30d`, `90d`, `180d`, `1y`, `2y` |
 | `model` | `1` | `1`, `2`, `3`; inspect scenario assumptions in status and response |
 | `mode` | `pair` | `pair`, `symbol` (aggregate by base asset across OKX, Binance and Bybit) |
@@ -194,7 +194,7 @@ A live snapshot of funding and open interest for each venue. This is market cont
 | Parameter | Default | Accepted values |
 | --- | --- | --- |
 | `exchange` | `okx` | `okx`, `binance`, `bybit`, `demo`, `aggregate` |
-| `symbol` | `BTC` | 2–12 letter/digit base ticker, optionally followed by USDT |
+| `symbol` | `BTC` | 1–16 letter/digit base ticker, optionally followed by USDT |
 | `mode` | `pair` | `pair` (the selected venue) or `symbol` (OKX, Binance and Bybit for that base asset) |
 
 `exchange=aggregate` or `mode=symbol` returns all three live venues. `exchange=demo` returns synthetic values with `synthetic: true` and never contacts an exchange. `range` and `model` are ignored; `asof`, `bar` and `replay=1` are rejected.
@@ -254,7 +254,7 @@ Recent **filled liquidation orders reported by OKX**. These are exchange records
 | Parameter | Default | Accepted values |
 | --- | --- | --- |
 | `exchange` | `okx` | `okx`, `binance`, `bybit`, `demo`, `aggregate` |
-| `symbol` | `BTC` | 2–12 letter/digit base ticker, optionally followed by USDT |
+| `symbol` | `BTC` | 1–16 letter/digit base ticker, optionally followed by USDT |
 | `mode` | `pair` | `pair`, `symbol` |
 | `range` | `24h` | Same values as heatmap; the time window of interest |
 
@@ -294,7 +294,7 @@ Coverage:
 
 - The server reads up to **10 pages of the 100 most recent** filled orders, so at most 1,000 orders per request.
 - Events are limited to the requested `range`, newest last. `coverage.from_ms` and `coverage.to_ms` are the oldest and newest returned events. `count` is the number of events.
-- `coverage.truncated` is `true` when older orders were not fetched: the 10-page cap was reached inside the range, or a later page failed after earlier pages succeeded. If the first page fails, the route returns 503 `source_unavailable`. On a busy market or a long `range`, the start of the window may then have no data. No dots in an uncovered period does not mean no liquidations happened.
+- `coverage.truncated` is `true` when the range is not fully covered: the range starts more than 22 hours ago (OKX publishes only about the last 22 to 24 hours of liquidation orders), the 10-page cap was reached inside the range, or a later page failed after earlier pages succeeded. If the first page fails, the route returns 503 `source_unavailable`. On a busy market or a long `range`, the start of the window may then have no data. No dots in an uncovered period does not mean no liquidations happened.
 
 Reading the price: an exchange triggers liquidation from the mark price and maintenance margin, before the bankruptcy price is reached. The bankruptcy price therefore lies beyond the trigger: below it for a long, above it for a short. The modeled bands use a maintenance-margin trigger, so dots and bands are not expected to line up exactly.
 
@@ -319,7 +319,7 @@ The nearest modeled liquidation clusters for several coins in one request. Live 
 | `mode` | `pair` | `pair`, `symbol` |
 | `symbols` | — | Required. Comma-separated base tickers, 1–6. Duplicates are dropped. Example: `BTC,ETH,SOL` |
 
-`asof`, `bar` and `replay=1` are rejected. Use `/api/v1/features` for a historical or custom-bar view of one symbol. Missing, empty or more than six symbols return 400.
+`asof`, `bar` and `replay=1` are rejected. Use `/api/v1/features` for a historical or custom-bar view of one symbol. Missing, empty or more than six symbols return 400. An invalid symbol in the list is returned as its own item with `ok: false`.
 
 Response:
 

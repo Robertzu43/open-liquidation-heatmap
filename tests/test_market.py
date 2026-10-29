@@ -622,6 +622,6 @@ def test_ranges_older_than_okx_liquidation_retention_are_marked_incomplete(monke
 
 
 def test_watchlist_reports_an_invalid_symbol_as_its_own_failed_item():
-    payload = market.watchlist_payload('demo', '12h', '1', 'pair', 'BTC,ABCDEFGHIJKLM,eth,btcusdt')
-    assert [(item['coin'], item['ok']) for item in payload['items']] == [('BTC', True), ('ABCDEFGHIJKLM', False), ('ETH', True)]
+    payload = market.watchlist_payload('demo', '12h', '1', 'pair', 'BTC,ABCDEFGHIJKLMNOPQ,eth,btcusdt')
+    assert [(item['coin'], item['ok']) for item in payload['items']] == [('BTC', True), ('ABCDEFGHIJKLMNOPQ', False), ('ETH', True)]
     assert 'Symbol must be' in payload['items'][1]['error']

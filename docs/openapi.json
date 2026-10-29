@@ -618,7 +618,7 @@
               "type": "string",
               "default": "BTC"
             },
-            "description": "2-12 letter/digit base ticker, optionally followed by USDT"
+            "description": "1-16 letter/digit base ticker, optionally followed by USDT"
           },
           {
             "name": "mode",
@@ -688,7 +688,7 @@
               "type": "string",
               "default": "BTC"
             },
-            "description": "2-12 letter/digit base ticker, optionally followed by USDT"
+            "description": "1-16 letter/digit base ticker, optionally followed by USDT"
           },
           {
             "name": "mode",

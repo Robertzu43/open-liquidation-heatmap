@@ -1,4 +1,0 @@
--r requirements.txt
-pytest==9.2.0
-hypothesis==6.170.13
-ruff==0.17.3

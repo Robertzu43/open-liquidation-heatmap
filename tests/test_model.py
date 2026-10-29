@@ -183,7 +183,10 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(normalize_symbol("ETHUSDT"), ("ETH", "ETHUSDT"))
         self.assertEqual(normalize_symbol("sol-usdt"), ("SOL", "SOLUSDT"))
         self.assertEqual(normalize_symbol("XRP/USDT"), ("XRP", "XRPUSDT"))
-        for bad in ("", "A", "../etc", "BTC USDT", "http://evil", "USDT", "javascript:alert"):
+        # OKX lists one-letter perpetuals (A, S, W) and 13-letter tickers (LGELECTRONICS).
+        self.assertEqual(normalize_symbol("s"), ("S", "SUSDT"))
+        self.assertEqual(normalize_symbol("LGELECTRONICS"), ("LGELECTRONICS", "LGELECTRONICSUSDT"))
+        for bad in ("", "A" * 17, "../etc", "BTC USDT", "http://evil", "USDT", "javascript:alert"):
             with self.assertRaises(DataError):
                 normalize_symbol(bad)
 

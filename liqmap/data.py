@@ -86,7 +86,7 @@ LIVE_OI_DAYS = 29
 # First day of Binance's public 5-minute metrics archive (2020-09-01 UTC).
 METRICS_START_S = 1_598_918_400
 STALE_AFTER_S = 18 * 3600
-_SYMBOL_COIN = re.compile(r"^[A-Z0-9]{2,12}$")
+_SYMBOL_COIN = re.compile(r"^[A-Z0-9]{1,16}$")
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": USER_AGENT})
 _HEAD_CACHE: dict[str, tuple[float, bool]] = {}
@@ -186,7 +186,7 @@ def normalize_symbol(raw: str) -> tuple[str, str]:
     else:
         coin = text
     if not _SYMBOL_COIN.fullmatch(coin) or coin == "USDT":
-        raise DataError("Symbol must be 2–12 letters or digits, like BTC or ETHUSDT.")
+        raise DataError("Symbol must be 1–16 letters or digits, like BTC or ETHUSDT.")
     return coin, coin + "USDT"
 
 
