@@ -16,6 +16,7 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip setuptools wheel
       - run: python -m pip install '.[dev]'
+      - run: python -m ruff check .
       - run: python -m pytest -q -ra
       - run: python scripts/check_install.py
   macos:
