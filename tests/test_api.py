@@ -276,7 +276,7 @@ def test_demo_liquidations_route_is_synthetic_and_ordered(http_api, offline_exch
     assert all(set(event) == {'ts', 'price', 'side', 'size_base', 'usd'} and event['side'] in {'long', 'short'} for event in events)
     assert body['coverage'] == {'from_ms': events[0]['ts'], 'to_ms': events[-1]['ts'], 'count': len(events), 'truncated': False}
     status, heat = http_api('/api/v1/heatmap?exchange=demo&symbol=BTC&range=12h')
-    assert heat['times'][0] < events[0]['ts'] and events[-1]['ts'] < heat['market_context']['window_end_ms']
+    assert heat['times'][0] < events[0]['ts'] and events[-1]['ts'] < heat['feature_as_of']
 
 
 def test_binance_pair_liquidations_are_explicitly_unavailable(http_api, offline_exchanges):
@@ -350,9 +350,7 @@ def test_heatmap_and_features_carry_displayed_market_context(http_api):
     status, heat = http_api('/api/v1/heatmap?exchange=demo&range=12h&visible_bars=24')
     assert status == 200
     context = heat['market_context']
-    assert set(context) == {'price_change_pct', 'oi_usd', 'oi_change_pct', 'window_start_ms', 'window_end_ms'}
-    assert context['window_start_ms'] == heat['times'][0]
-    assert context['window_end_ms'] == heat['times'][-1] + heat['bar_seconds'] * 1000
+    assert set(context) == {'price_change_pct', 'oi_usd', 'oi_change_pct'}
     assert isinstance(context['price_change_pct'], float) and context['oi_usd'] > 0
     status, features = http_api('/api/v1/features?exchange=demo&range=12h&visible_bars=24')
     assert features['market_context'] == context
@@ -364,7 +362,6 @@ def test_status_advertises_market_capabilities(http_api):
     assert status == 200
     assert body['capabilities']['observed_liquidations'] == ['okx']
     assert body['capabilities']['watchlist_max_symbols'] == 6
-    assert body['capabilities']['context'] is True
 
 
 @pytest.mark.parametrize('path', ['/%2e%2e/pyproject.toml', '/..%2fpyproject.toml', '/../pyproject.toml',

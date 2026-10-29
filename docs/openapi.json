@@ -997,23 +997,12 @@
               "null"
             ],
             "description": "Percent change from the first to the last observed USD open interest; also moves with price"
-          },
-          "window_start_ms": {
-            "type": "integer",
-            "description": "First displayed bar open, Unix ms"
-          },
-          "window_end_ms": {
-            "type": "integer",
-            "description": "Last displayed bar close, Unix ms"
           }
         }
       },
       "Capabilities": {
         "type": "object",
         "properties": {
-          "context": {
-            "type": "boolean"
-          },
           "observed_liquidations": {
             "type": "array",
             "items": {

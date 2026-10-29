@@ -66,13 +66,13 @@ RANGES: dict[str, dict] = {
 # parameter mappings explicit: bare 12H/1D use UTC+8 on OKX.
 OKX_BAR = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12Hutc", "1d": "1Dutc"}
 OKX_STAT_PERIOD = {"5m": "5m", "15m": "15m", "1h": "1H", "4h": "4H", "12h": "12Hutc", "1d": "1Dutc"}
-# Bars a past Binance view may use. Open interest is published every 5 minutes.
 # Bybit v5 kline intervals. 720 minutes is the 12-hour bar.
 BYBIT_KLINE = {"5m": "5", "15m": "15", "1h": "60", "4h": "240", "12h": "720", "1d": "D"}
 # Bybit open-interest history has no 12-hour period. For 12-hour bars the last
 # 4-hour snapshot inside each closed bar is used; it never comes after the close.
 BYBIT_OI = {"5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h", "12h": "4h", "1d": "1d"}
 BYBIT_BASE = "https://api.bybit.com"
+# Bars a past Binance view may use. Open interest is published every 5 minutes.
 BAR_SECONDS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 4 * 3600, "12h": 12 * 3600, "1d": 86400}
 MAX_BARS = 3000
 MAX_REPLAY_DAYS = 730

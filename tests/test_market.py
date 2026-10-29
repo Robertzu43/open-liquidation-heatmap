@@ -436,7 +436,7 @@ def test_liquidation_and_instrument_caches_are_bounded(monkeypatch):
     assert sum(url.endswith('liquidation-orders') for url, _params, _kw in fake.calls) == 1
     instrument = lambda params: (200, {'code': '0', 'data': [{**OKX_INSTRUMENT['data'][0], 'ctValCcy': params['instId'].split('-')[0]}]})
     use_liquidations(monkeypatch, FakeLiquidations([liq(NOW_MS - 1000)]), instrument=instrument)
-    monkeypatch.setattr(market, 'MAX_INSTRUMENT_CACHE', 5)
+    monkeypatch.setattr(market._instruments, 'max_entries', 5)
     for idx in range(market.MAX_LIQUIDATION_CACHE + 8):
         market.liquidations_payload('okx', f'C{idx:03}', 'pair', '24h')
     assert len(market._liquidation_cache) == market.MAX_LIQUIDATION_CACHE
@@ -565,12 +565,10 @@ def test_market_context_uses_displayed_window_and_observed_open_interest():
         features = service.features_payload('demo', 'BTC', '12h', 1, visible_bars=20)
     context = tail['market_context']
     assert features['market_context'] == context
-    assert context['window_start_ms'] == tail['times'][0] == int(series.times[-20])
-    assert context['window_end_ms'] == int(series.times[-1]) + series.bar_seconds * 1000
+    assert tail['times'][0] == int(series.times[-20])
     assert context['price_change_pct'] == pytest.approx((series.close[-1] / series.close[-20] - 1) * 100)
     assert context['oi_usd'] == pytest.approx(series.oi_usd[-2])
     assert context['oi_change_pct'] == pytest.approx((series.oi_usd[-2] / series.oi_usd[-20] - 1) * 100)
-    assert full['market_context']['window_start_ms'] == full['times'][0]
     assert full['market_context']['price_change_pct'] == pytest.approx((series.close[-1] / series.close[0] - 1) * 100)
 
 
@@ -606,12 +604,9 @@ def test_aggregate_market_context_counts_only_bars_every_venue_observed():
 
 def test_status_and_symbols_describe_capabilities():
     status = service.status_payload()
-    assert status['capabilities'] == {'context': True, 'context_venues': ['okx', 'binance', 'bybit'],
+    assert status['capabilities'] == {'context_venues': ['okx', 'binance', 'bybit'],
                                       'observed_liquidations': ['okx'], 'watchlist_max_symbols': 6}
     assert any(row['id'] == 'bybit' and row['live'] for row in status['exchanges'])
-    symbols = service.symbols_payload()
-    assert symbols['features']['watchlist_max_symbols'] == 6
-    assert 'OKX only' in symbols['features']['observed_liquidations']
 
 
 @pytest.mark.parametrize('range_key,truncated', [('12h', False), ('24h', True), ('7d', True)])

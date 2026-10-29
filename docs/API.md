@@ -104,8 +104,6 @@ Every value describes the **displayed window**. With `visible_bars`, that is the
 | `price_change_pct` | number or null | Percent change from the first displayed close to the last displayed close |
 | `oi_usd` | number or null | Last observed open interest in USD. For the aggregate, the sum across the included venues |
 | `oi_change_pct` | number or null | Percent change from the first observed to the last observed USD open interest in the window |
-| `window_start_ms` | integer | Open of the first displayed bar, Unix ms |
-| `window_end_ms` | integer | Close of the last displayed bar, Unix ms |
 
 - Null means the value could not be computed from observed data, for example when the window has no observed open interest. Null is not zero.
 - USD open interest is native quantity times price. It rises and falls with price even when no position opens or closes. Compare `oi_change_pct` with `price_change_pct` before reading it as new positions. The model itself uses native quantity changes.
@@ -171,17 +169,16 @@ print(payload['quality']['status'], payload['features'])
 Since 0.4.0 it also returns `capabilities`:
 
 ```json
-"capabilities": {"context": true, "context_venues": ["okx", "binance", "bybit"], "observed_liquidations": ["okx"], "watchlist_max_symbols": 6}
+"capabilities": {"context_venues": ["okx", "binance", "bybit"], "observed_liquidations": ["okx"], "watchlist_max_symbols": 6}
 ```
 
 | Field | Meaning |
 | --- | --- |
-| `context` | `/api/v1/context` is available |
 | `context_venues` | Live venues `/api/v1/context` can query |
 | `observed_liquidations` | Venues whose filled liquidation orders `/api/v1/liquidations` can return |
 | `watchlist_max_symbols` | Most symbols one `/api/v1/watchlist` request accepts |
 
-Detect 0.4 features from `capabilities` rather than from the version string. A 0.3 server has no `capabilities` field. `/api/v1/symbols` also gains a short plain-text `features` object.
+Detect 0.4 features from `capabilities` rather than from the version string. A 0.3 server has no `capabilities` field.
 
 ## Live-only routes
 
@@ -351,7 +348,7 @@ Each item:
 Behavior:
 
 - Each symbol is built independently. A failing symbol returns `ok: false` and does not fail the others.
-- The whole request holds **one** expensive-request slot and builds symbols with up to **3 workers**.
+- The whole request holds **one** expensive-request slot. It loads symbols' market data with up to **3 workers**, then builds the models one at a time, because the model is CPU-bound.
 - Symbols use the same series cache as heatmap requests. A coin you already viewed within its cache lifetime is not fetched again.
 - The 60-second cooperative budget covers the whole request. If it runs out, ask for fewer symbols or a shorter range.
 

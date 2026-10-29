@@ -446,8 +446,6 @@ def market_context(series) -> dict:
         "price_change_pct": price_change,
         "oi_usd": oi_last,
         "oi_change_pct": oi_change,
-        "window_start_ms": int(series.times[0]),
-        "window_end_ms": int(series.times[-1]) + int(series.bar_seconds) * 1000,
     })
 
 
@@ -620,17 +618,11 @@ def symbols_payload() -> dict:
             if key != "aggregate"
         ],
         "quote": "USDT",
-        "features": {
-            "context": "Live funding and open interest for okx, binance and bybit; demo is synthetic.",
-            "observed_liquidations": "Filled liquidation orders are observed from OKX only.",
-            "watchlist_max_symbols": MAX_WATCHLIST_SYMBOLS,
-        },
     }
 
 
 def capabilities() -> dict:
     return {
-        "context": True,
         "context_venues": list(AGGREGATE_VENUES),
         "observed_liquidations": list(OBSERVED_LIQUIDATION_SOURCES),
         "watchlist_max_symbols": MAX_WATCHLIST_SYMBOLS,

@@ -100,8 +100,7 @@ class _TTLCache:
 
 _context_cache = _TTLCache(CONTEXT_TTL_S, MAX_CONTEXT_CACHE)
 _liquidation_cache = _TTLCache(LIQUIDATION_TTL_S, MAX_LIQUIDATION_CACHE)
-_instruments: dict[str, tuple[float, float]] = {}
-_instrument_lock = threading.Lock()
+_instruments = _TTLCache(INSTRUMENT_TTL_S, MAX_INSTRUMENT_CACHE)
 
 
 def _num(value) -> float | None:
@@ -396,24 +395,18 @@ def context_payload(exchange: str = "okx", symbol: str = "BTC", mode: str = "pai
 
 
 def _okx_contract_base(coin: str) -> float:
-    """Base-asset quantity of one OKX USDT swap contract, cached in a bounded dict."""
+    """Base-asset quantity of one OKX USDT swap contract, cached."""
     inst = f"{coin}-USDT-SWAP"
-    now = time.time()
-    with _instrument_lock:
-        hit = _instruments.get(inst)
-        if hit is not None and now - hit[0] < INSTRUMENT_TTL_S:
-            return hit[1]
+    hit = _instruments.get((inst,))
+    if hit is not None:
+        return hit
     row = _okx_first("/api/v5/public/instruments", {"instType": "SWAP", "instId": inst}, inst)
     value = _num(row.get("ctVal"))
     multiplier = _num(row.get("ctMult"))
     multiplier = 1.0 if multiplier is None else multiplier
     if value is None or value <= 0 or multiplier <= 0 or str(row.get("ctValCcy") or "").upper() != coin:
         raise DataError(f"OKX did not publish a {coin} contract value for {inst}.")
-    with _instrument_lock:
-        _instruments.pop(inst, None)
-        while len(_instruments) >= MAX_INSTRUMENT_CACHE:
-            _instruments.pop(next(iter(_instruments)))
-        _instruments[inst] = (now, value * multiplier)
+    _instruments.put((inst,), value * multiplier)
     return value * multiplier
 
 
@@ -608,18 +601,29 @@ def _failed_item(coin: str, error: str) -> dict:
     }
 
 
-def _watch_item(exchange: str, coin: str, range_name: str, mode: str, model_id: int) -> dict:
+def _watch_series(exchange: str, coin: str, range_name: str, mode: str):
+    """The loaded series, or a failed item. Only this network part runs in threads."""
     try:
         normalize_symbol(coin)
-        loaded = get_series(exchange, coin, range_name, mode)
-        heat = build_heatmap(loaded.series, model_id)
-        quality = _quality(loaded)
+        return get_series(exchange, coin, range_name, mode)
     except RequestDeadlineExceeded:
         raise
     except DataError as exc:
         return _failed_item(coin, str(exc))
     except Exception:  # noqa: BLE001 — one symbol must not sink the others
         log.exception("watchlist %s %s failed", exchange, coin)
+        return _failed_item(coin, "The server failed while building this symbol.")
+
+
+def _watch_item(coin: str, loaded, model_id: int) -> dict:
+    # Model builds are CPU-bound: run them one at a time, not across threads that share the GIL.
+    if isinstance(loaded, dict):
+        return loaded
+    try:
+        heat = build_heatmap(loaded.series, model_id)
+        quality = _quality(loaded)
+    except Exception:  # noqa: BLE001 — one symbol must not sink the others
+        log.exception("watchlist %s build failed", coin)
         return _failed_item(coin, "The server failed while building this symbol.")
     analysis = heat.analysis
     five = next((row for row in analysis["imbalance"] if row["window_pct"] == 5), None)
@@ -648,8 +652,12 @@ def watchlist_payload(exchange: str = "okx", range_key: str = "24h", model="1", 
     coins = watchlist_symbols(symbols)
     exchange_key, _coin, range_name, mode_key = _canonical(exchange, "BTC", range_key, mode)
     with ThreadPoolExecutor(max_workers=min(3, len(coins))) as pool:
-        futures = [pool.submit(copy_context().run, _watch_item, exchange_key, coin, range_name, mode_key, model_id) for coin in coins]
-        items = [future.result() for future in futures]
+        futures = [pool.submit(copy_context().run, _watch_series, exchange_key, coin, range_name, mode_key) for coin in coins]
+        series = [future.result() for future in futures]
+    items = []
+    for coin, loaded in zip(coins, series, strict=True):
+        check_deadline()
+        items.append(_watch_item(coin, loaded, model_id))
     return _scrub({
         "schema_version": SCHEMA_VERSION,
         "exchange": exchange_key,
