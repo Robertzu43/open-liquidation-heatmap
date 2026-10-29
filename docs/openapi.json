@@ -3,7 +3,7 @@
   "info": {
     "title": "Open Liq Research API",
     "version": "1.0",
-    "description": "Application0.3.0/model2.0.0. Estimated entry-notional exposure; not exchange positions. Detailed field semantics and operational caps in API.md. Legacy /api aliases remain."
+    "description": "Application 0.4.0 / model 2.0.0. Heatmap exposure is an estimated entry-notional model output, not exchange position records. /api/v1/liquidations returns observed OKX exchange records, which are not model inputs. Detailed field semantics and operational caps are in API.md. Every /api/v1/ route also has a legacy /api/ alias."
   },
   "servers": [
     {
@@ -25,6 +25,7 @@
               "enum": [
                 "okx",
                 "binance",
+                "bybit",
                 "demo",
                 "aggregate"
               ]
@@ -84,7 +85,8 @@
                 "pair",
                 "symbol"
               ]
-            }
+            },
+            "description": "symbol combines OKX, Binance and Bybit for the base asset."
           },
           {
             "name": "asof",
@@ -92,7 +94,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Binance pair mode only."
           },
           {
             "name": "bar",
@@ -108,7 +111,8 @@
                 "12h",
                 "1d"
               ]
-            }
+            },
+            "description": "Binance pair mode only."
           },
           {
             "name": "visible_bars",
@@ -174,6 +178,7 @@
               "enum": [
                 "okx",
                 "binance",
+                "bybit",
                 "demo",
                 "aggregate"
               ]
@@ -233,7 +238,8 @@
                 "pair",
                 "symbol"
               ]
-            }
+            },
+            "description": "symbol combines OKX, Binance and Bybit for the base asset."
           },
           {
             "name": "asof",
@@ -241,7 +247,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Binance pair mode only."
           },
           {
             "name": "bar",
@@ -257,7 +264,8 @@
                 "12h",
                 "1d"
               ]
-            }
+            },
+            "description": "Binance pair mode only."
           },
           {
             "name": "visible_bars",
@@ -311,10 +319,17 @@
     },
     "/api/v1/status": {
       "get": {
-        "summary": "Status",
+        "summary": "Process configuration, capabilities and cached default-market readiness",
         "responses": {
           "200": {
-            "description": "Supported capabilities"
+            "description": "Supported capabilities",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
           }
         }
       }
@@ -343,6 +358,7 @@
               "enum": [
                 "okx",
                 "binance",
+                "bybit",
                 "demo",
                 "aggregate"
               ]
@@ -402,7 +418,8 @@
                 "pair",
                 "symbol"
               ]
-            }
+            },
+            "description": "symbol combines OKX, Binance and Bybit for the base asset."
           },
           {
             "name": "asof",
@@ -410,7 +427,8 @@
             "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Binance pair mode only."
           },
           {
             "name": "bar",
@@ -426,7 +444,8 @@
                 "12h",
                 "1d"
               ]
-            }
+            },
+            "description": "Binance pair mode only."
           },
           {
             "name": "visible_bars",
@@ -558,6 +577,271 @@
         }
       }
     },
+    "/api/v1/context": {
+      "get": {
+        "summary": "Live funding and open-interest snapshot per venue (context, not a model input)",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "okx",
+              "enum": [
+                "okx",
+                "binance",
+                "bybit",
+                "demo",
+                "aggregate"
+              ]
+            },
+            "description": "demo is synthetic and never contacts an exchange"
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC"
+            },
+            "description": "2-12 letter/digit base ticker, optionally followed by USDT"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pair",
+              "enum": [
+                "pair",
+                "symbol"
+              ]
+            },
+            "description": "symbol (or exchange=aggregate) covers all live venues for the base asset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "At least one venue answered, or demo. Failed venues have ok=false.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContextResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request: validation or bounds failure"
+          },
+          "429": {
+            "description": "busy: all expensive-request slots are occupied; Retry-After supplied"
+          },
+          "503": {
+            "description": "source_unavailable when every live venue failed; also server_busy or deadline_exceeded"
+          }
+        },
+        "description": "Live only: asof, bar or replay=1 returns 400 invalid_request."
+      }
+    },
+    "/api/v1/liquidations": {
+      "get": {
+        "summary": "Observed recent OKX filled liquidation orders (exchange records, not model output)",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "okx",
+              "enum": [
+                "okx",
+                "binance",
+                "bybit",
+                "demo",
+                "aggregate"
+              ]
+            },
+            "description": "binance or bybit in pair mode returns available=false; aggregate uses OKX; demo is synthetic"
+          },
+          {
+            "name": "symbol",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "BTC"
+            },
+            "description": "2-12 letter/digit base ticker, optionally followed by USDT"
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pair",
+              "enum": [
+                "pair",
+                "symbol"
+              ]
+            },
+            "description": "symbol (or exchange=aggregate) covers all live venues for the base asset"
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "24h",
+              "enum": [
+                "12h",
+                "24h",
+                "3d",
+                "7d",
+                "30d",
+                "90d",
+                "180d",
+                "1y",
+                "2y"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Observed events, or available=false with a note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiquidationsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request: validation or bounds failure"
+          },
+          "429": {
+            "description": "busy: all expensive-request slots are occupied; Retry-After supplied"
+          },
+          "503": {
+            "description": "Source unavailable, server_busy or deadline_exceeded"
+          }
+        },
+        "description": "Live only: asof, bar or replay=1 returns 400 invalid_request."
+      }
+    },
+    "/api/v1/watchlist": {
+      "get": {
+        "summary": "Nearest modeled liquidation clusters for up to six symbols",
+        "parameters": [
+          {
+            "name": "exchange",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "okx",
+              "enum": [
+                "okx",
+                "binance",
+                "bybit",
+                "demo",
+                "aggregate"
+              ]
+            }
+          },
+          {
+            "name": "range",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "24h",
+              "enum": [
+                "12h",
+                "24h",
+                "3d",
+                "7d",
+                "30d",
+                "90d",
+                "180d",
+                "1y",
+                "2y"
+              ]
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "enum": [
+                1,
+                2,
+                3
+              ]
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "pair",
+              "enum": [
+                "pair",
+                "symbol"
+              ]
+            },
+            "description": "symbol (or exchange=aggregate) covers all live venues for the base asset"
+          },
+          {
+            "name": "symbols",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "examples": [
+                "BTC,ETH,SOL"
+              ]
+            },
+            "description": "Comma-separated base tickers, 1-6. Duplicates are dropped; items keep request order. Missing or empty returns 400."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "One item per symbol; a failed symbol has ok=false and an error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "invalid_request: validation or bounds failure"
+          },
+          "429": {
+            "description": "busy: all expensive-request slots are occupied; Retry-After supplied"
+          },
+          "503": {
+            "description": "server_busy or deadline_exceeded"
+          }
+        },
+        "description": "Live only: asof, bar or replay=1 returns 400 invalid_request."
+      }
+    },
     "/healthz": {
       "get": {
         "summary": "Process health",
@@ -615,7 +899,8 @@
             "pattern": "^sha256:[a-f0-9]{64}$"
           },
           "exchange": {
-            "type": "string"
+            "type": "string",
+            "description": "okx, binance, bybit, demo or aggregate"
           },
           "symbol": {
             "type": "string"
@@ -670,6 +955,565 @@
           },
           "model_metadata": {
             "type": "object"
+          },
+          "market_context": {
+            "$ref": "#/components/schemas/MarketContext"
+          }
+        }
+      },
+      "MarketContext": {
+        "type": "object",
+        "description": "Additive in 0.4.0; optional for older servers. Computed over the displayed window.",
+        "properties": {
+          "price_change_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percent change from the first to the last displayed close"
+          },
+          "oi_usd": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Last observed open interest in USD; summed across venues for aggregate"
+          },
+          "oi_change_pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Percent change from the first to the last observed USD open interest; also moves with price"
+          },
+          "window_start_ms": {
+            "type": "integer",
+            "description": "First displayed bar open, Unix ms"
+          },
+          "window_end_ms": {
+            "type": "integer",
+            "description": "Last displayed bar close, Unix ms"
+          }
+        }
+      },
+      "Capabilities": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "boolean"
+          },
+          "observed_liquidations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "okx"
+              ]
+            ]
+          },
+          "watchlist_max_symbols": {
+            "type": "integer",
+            "examples": [
+              6
+            ]
+          },
+          "context_venues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "okx",
+                "binance",
+                "bybit"
+              ]
+            ]
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "schema_version": {
+            "const": "1.0"
+          },
+          "version": {
+            "type": "string",
+            "description": "Application version, e.g. 0.4.0"
+          },
+          "readiness": {
+            "type": "object"
+          },
+          "default": {
+            "type": "object"
+          },
+          "exchanges": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "enum": [
+                    "okx",
+                    "binance",
+                    "bybit",
+                    "demo"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "live": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "ranges": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "mmr": {
+            "type": "number"
+          },
+          "coins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "capabilities": {
+            "$ref": "#/components/schemas/Capabilities"
+          }
+        }
+      },
+      "ContextVenue": {
+        "type": "object",
+        "required": [
+          "exchange",
+          "ok"
+        ],
+        "properties": {
+          "exchange": {
+            "type": "string",
+            "description": "Venue id, e.g. okx, binance or bybit"
+          },
+          "name": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "funding_rate": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Fraction per funding interval; 0.0001 = 0.01%"
+          },
+          "next_funding_time": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Next funding settlement, Unix ms"
+          },
+          "funding_interval_hours": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Hours between funding settlements"
+          },
+          "open_interest_base": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Base-asset quantity"
+          },
+          "open_interest_usd": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "mark_price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "observed_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Snapshot time, Unix ms"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ContextResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "coin",
+          "symbol",
+          "exchange",
+          "mode",
+          "generated_at",
+          "synthetic",
+          "venues"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          },
+          "coin": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "okx",
+              "binance",
+              "bybit",
+              "demo",
+              "aggregate"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "pair",
+              "symbol"
+            ]
+          },
+          "generated_at": {
+            "type": "integer"
+          },
+          "synthetic": {
+            "type": "boolean"
+          },
+          "venues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ContextVenue"
+            }
+          },
+          "funding_rate_oi_weighted": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Open-interest-weighted funding after scaling each venue's rate to funding_basis_hours; venues with an unknown interval are left out"
+          },
+          "open_interest_usd_total": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "note": {
+            "type": "string"
+          },
+          "funding_basis_hours": {
+            "type": "integer",
+            "const": 8,
+            "description": "Interval, in hours, that funding_rate_oi_weighted is expressed in"
+          }
+        }
+      },
+      "LiquidationEvent": {
+        "type": "object",
+        "required": [
+          "ts",
+          "price",
+          "side",
+          "size_base",
+          "usd"
+        ],
+        "properties": {
+          "ts": {
+            "type": "integer",
+            "description": "Event time, Unix ms"
+          },
+          "price": {
+            "type": "number",
+            "description": "OKX bankruptcy price"
+          },
+          "side": {
+            "type": "string",
+            "description": "Side of the liquidated position (long or short)"
+          },
+          "size_base": {
+            "type": "number",
+            "description": "Contracts x contract value, in base asset"
+          },
+          "usd": {
+            "type": "number",
+            "description": "Contracts x contract value x price"
+          }
+        }
+      },
+      "LiquidationsResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "coin",
+          "source",
+          "available",
+          "synthetic",
+          "events",
+          "coverage"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          },
+          "coin": {
+            "type": "string"
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "okx, demo, or null when no observed source was read"
+          },
+          "available": {
+            "type": "boolean"
+          },
+          "synthetic": {
+            "type": "boolean"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LiquidationEvent"
+            }
+          },
+          "coverage": {
+            "type": "object",
+            "properties": {
+              "from_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Oldest returned event, Unix ms; events are limited to the requested range"
+              },
+              "to_ms": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "Newest returned event, Unix ms"
+              },
+              "count": {
+                "type": "integer"
+              },
+              "truncated": {
+                "type": "boolean",
+                "description": "True when the 10-page cap was reached inside the range, or a later page failed after earlier pages succeeded"
+              }
+            }
+          },
+          "generated_at": {
+            "type": "integer"
+          },
+          "note": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "okx",
+              "binance",
+              "bybit",
+              "demo",
+              "aggregate"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pair",
+              "symbol"
+            ]
+          },
+          "range": {
+            "type": "string"
+          }
+        }
+      },
+      "WatchlistItem": {
+        "type": "object",
+        "required": [
+          "coin",
+          "ok"
+        ],
+        "properties": {
+          "coin": {
+            "type": "string"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "price": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "price_change_pct": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "quality": {
+            "description": "Source quality status for this symbol"
+          },
+          "stale": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "above": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "price": {
+                "type": "number"
+              },
+              "distance_pct": {
+                "type": "number",
+                "description": "Signed percent distance from price"
+              },
+              "usd": {
+                "type": "number",
+                "description": "Estimated entry-notional USD"
+              }
+            },
+            "description": "Nearest short liquidation cluster above price (display bins)"
+          },
+          "below": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "price": {
+                "type": "number"
+              },
+              "distance_pct": {
+                "type": "number",
+                "description": "Signed percent distance from price"
+              },
+              "usd": {
+                "type": "number",
+                "description": "Estimated entry-notional USD"
+              }
+            },
+            "description": "Nearest long liquidation cluster below price (display bins)"
+          },
+          "short_to_long_5pct": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "Short exposure above price / long exposure below price, within 5% of price"
+          },
+          "as_of": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Final source bar open, Unix ms"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "WatchlistResponse": {
+        "type": "object",
+        "required": [
+          "schema_version",
+          "exchange",
+          "mode",
+          "range",
+          "model",
+          "generated_at",
+          "items"
+        ],
+        "properties": {
+          "schema_version": {
+            "const": "1.0"
+          },
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "okx",
+              "binance",
+              "bybit",
+              "demo",
+              "aggregate"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "pair",
+              "symbol"
+            ]
+          },
+          "range": {
+            "type": "string"
+          },
+          "model": {
+            "type": "integer"
+          },
+          "generated_at": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "maxItems": 6,
+            "items": {
+              "$ref": "#/components/schemas/WatchlistItem"
+            }
           }
         }
       }

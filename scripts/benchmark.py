@@ -265,13 +265,13 @@ def plot(report, path):
                         'xtick.color':'#bdcbb8','ytick.color':'#bdcbb8'})
     fig, axes = plt.subplots(1,2,figsize=(11,4.3),layout='constrained')
     colors=['#e4b653','#58b8aa','#b2a0da']
-    for model, color in zip((1,2,3),colors):
+    for model, color in zip((1,2,3),colors,strict=True):
         rows=[r for r in report['rows'] if r['model']==model]
         x=[i+(model-2)*.24 for i in range(3)]
         med=[r['median_ms'] for r in rows]
         axes[0].bar(x,med,width=.23,color=color,label=f'Model {model}',
-                    yerr=[[m-r['minimum_ms'] for m,r in zip(med,rows)],
-                          [r['maximum_ms']-m for m,r in zip(med,rows)]],capsize=2,
+                    yerr=[[m-r['minimum_ms'] for m,r in zip(med,rows,strict=True)],
+                          [r['maximum_ms']-m for m,r in zip(med,rows,strict=True)]],capsize=2,
                     error_kw={'ecolor':'#e8ede5','elinewidth':.8})
         axes[1].bar(x,[r['gzip_bytes']/1024 for r in rows],width=.23,color=color)
     for ax in axes:
