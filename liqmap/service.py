@@ -37,7 +37,7 @@ from liqmap.data import (
     range_spec,
     resolve_view,
 )
-from liqmap.model import MODELS, MMR, build_heatmap, suggest_view
+from liqmap.model import MODEL_VERSION, MODELS, MMR, build_heatmap, suggest_view
 
 # Short windows move quickly. Long windows are expensive to refetch.
 SERIES_TTL = {
@@ -110,8 +110,6 @@ def _evict(now: float) -> None:
         for key, (stamp, _value) in list(_cache.items()):
             if now - stamp >= SERIES_TTL.get(key[2], 120):
                 _cache.pop(key, None)
-        while len(_cache) >= MAX_SERIES_CACHE:
-            _cache.pop(min(_cache, key=lambda item: _cache[item][0]))
 
 
 class SourceUnavailable(DataError):
@@ -285,8 +283,6 @@ def _scrub(value):
     if isinstance(value, (np.floating, float)):
         number = float(value)
         return number if math.isfinite(number) else None
-    if isinstance(value, int):
-        return value
     return value
 
 
@@ -320,17 +316,15 @@ def data_fingerprint(loaded) -> str:
 
 def _quality(loaded, *, historical: bool = False) -> dict:
     series = loaded.series
-    provenance = getattr(series, "provenance", {})
+    provenance = series.provenance
     synthetic = loaded.source == "demo" or series.exchange == "demo" or provenance.get("history_kind") == "synthetic"
     live_source = loaded.source in {"okx", "binance-live", "binance-vision", "bybit", "aggregate"}
     stale = bool(loaded.stale) if historical or not live_source else (
         is_stale(loaded.as_of, series.bar_seconds, limit_s=2 * int(series.bar_seconds)) or live_component_stale(series)
     )
-    coverage = {}
-    for name in ("candle_observed", "oi_observed", "flow_observed"):
-        mask = getattr(series, name, None)
-        coverage[name] = None if mask is None else {"observed": int(np.count_nonzero(mask)), "total": len(mask)}
-    degraded = any(coverage[name] is not None and coverage[name]["observed"] < coverage[name]["total"] for name in ("candle_observed", "oi_observed"))
+    coverage = {name: {"observed": int(np.count_nonzero(getattr(series, name))), "total": len(series.times)}
+                for name in ("candle_observed", "oi_observed", "flow_observed")}
+    degraded = any(coverage[name]["observed"] < coverage[name]["total"] for name in ("candle_observed", "oi_observed"))
     warnings = list(series.warnings)
     if loaded.source == "aggregate":
         missing_venues = set(AGGREGATE_VENUES) - set(loaded.venues)
@@ -347,7 +341,7 @@ def _quality(loaded, *, historical: bool = False) -> dict:
     if stale and not historical and not synthetic:
         warnings.append("Live market data is stale; check source timestamps before use.")
     status = "synthetic" if synthetic else "stale" if stale else "unknown" if not provenance else "degraded" if degraded else "observed"
-    availability = getattr(series, "oi_available_at", None)
+    availability = series.oi_available_at
     known = availability is not None and len(availability) > 0 and bool(np.all(np.isfinite(availability) & (availability > 0)))
     trusted_availability = provenance.get("availability") in {"recorded_receipt", "known_publication"} and provenance.get("history_kind") != "reconstructed_archive"
     return {
@@ -359,26 +353,24 @@ def _quality(loaded, *, historical: bool = False) -> dict:
         "coverage": coverage,
         "coverage_basis": "source_masks" if provenance else "inferred_from_series",
         "historical_availability": "known" if known and trusted_availability and not synthetic else "unknown",
-        "provenance": _scrub(getattr(series, "provenance", {})),
+        "provenance": _scrub(provenance),
         "warnings": warnings,
     }
 
 
 def _metadata(loaded, heat, *, historical: bool = False) -> dict:
-    from liqmap import model as model_module
-
-    metadata = getattr(heat, "metadata", {})
+    metadata = heat.metadata
     return {
         "schema_version": SCHEMA_VERSION,
-        "model_version": getattr(model_module, "MODEL_VERSION", "legacy-0.2"),
+        "model_version": MODEL_VERSION,
         "data_fingerprint": data_fingerprint(loaded),
         "quality": _quality(loaded, historical=historical),
-        "assumptions": _scrub(metadata.get("assumptions", ["Estimated positions from assumed leverage; not observed account positions."])),
+        "assumptions": _scrub(metadata["assumptions"]),
         "time_semantics": {
             "times": "bar_open_unix_ms",
             "as_of": "last_source_bar_open_unix_ms",
             "generated_at": "response_generation_unix_ms_not_source_freshness",
-            "state": metadata.get("state_timestamp", "bar_close_post_update"),
+            "state": metadata["state_timestamp"],
             "feature_as_of": "last_grid_bar_close_unix_ms",
             "historical_availability": "unknown_unless_source_metadata_proves_it",
         },
@@ -388,7 +380,7 @@ def _metadata(loaded, heat, *, historical: bool = False) -> dict:
             "window_pct": "percent", "short_to_long": "ratio",
             "concentration": "fraction", "persistence": "seconds",
         },
-        "features": _scrub(getattr(heat, "features", None)),
+        "features": _scrub(heat.features),
         "feature_as_of": int(loaded.series.times[-1]) + int(loaded.series.bar_seconds) * 1000,
         "model_metadata": _scrub(metadata),
     }
