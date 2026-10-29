@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "open-liquidation-heatmap"
-version = "0.3.1"
+version = "0.4.0"
 description = "Inspectable public-data liquidation scenarios and reproducible research tools"
 readme = "README.md"
 requires-python = ">=3.11"
