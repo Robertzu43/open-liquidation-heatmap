@@ -177,17 +177,41 @@ Open Liq gives you inspectable modeling and control of your research inputs. It 
 
 [Migration](docs/MIGRATION.md) · [Operations](docs/OPERATIONS.md) · [Validation](docs/VALIDATION.md) · [Changelog](CHANGELOG.md)
 
-## Support continued development
+## Keep the heatmap glowing
 
-If Open Liq is useful and you would like to support its development, a voluntary donation of **1 USDT** is appreciated.
+![Open Liq: Keep the heatmap glowing. Your support fuels the next update. A gold whale captain floats above teal and gold heatmap bands.](docs/assets/support-open-liq.png)
 
-**Asset:** USDT · **Network:** Tron (TRC-20)
+If Open Liq helps your research, support its continued development with a **USDT donation of any amount**. Small tips or whale-sized splashes—every contribution is appreciated. 🐋
 
-<img src="docs/assets/usdt-trc20.png" width="220" alt="QR code for the USDT donation address on Tron TRC-20">
+Your support helps fund the development time behind more reliable data, clearer charts, better research tools, and the next round of improvements. **More heat. Fewer bugs.**
 
-**Address:** `TPj94QSBd141u2gNpCHPFP9DAUwewqWTTs`
+<p align="center">
+  <a href="docs/assets/usdt-trc20-card.svg"><img src="docs/assets/usdt-trc20-card.svg" width="260" alt="Donate USDT on Tron TRC-20. Scannable QR for TPj94QSBd141u2gNpCHPFP9DAUwewqWTTs."></a>
+</p>
 
-The QR code contains the address only; enter the amount in your wallet. Send **USDT using the Tron (TRC-20) network** and verify the address and network before sending.
+**USDT · Tron (TRC-20)** — scan the QR or copy the address:
+
+```text
+TPj94QSBd141u2gNpCHPFP9DAUwewqWTTs
+```
+
+The QR contains the address only. Choose **USDT on Tron (TRC-20)** and your donation amount in your wallet. [Open the plain QR](docs/assets/usdt-trc20.png).
+
+### Hall of Heat 🏆
+
+A little spotlight for the people keeping the charts glowing. Every **verified, opted-in supporter** gets a thank-you in the next release notes. The top three ranks also receive a README spotlight and these entirely honorary titles:
+
+| Rank | Your entirely unofficial title |
+| --- | --- |
+| 🥇 #1 | **Chief Heat Officer** — keeping the pixels toasty |
+| 🥈 #2 | **Liquidity Legend** — making a splash for open source |
+| 🥉 #3 | **Candle Keeper** — helping the next update shine |
+
+Every other opted-in supporter joins the **Heat Crew**. Anonymous support is just as welcome. No verified supporters are listed yet—the first confirmed splashes will set the pace.
+
+[Meet the supporters and see how ranking works](docs/SUPPORTERS.md) · [Request a shoutout](https://github.com/Robertzu43/open-liquidation-heatmap/issues/new?template=supporter.yml)
+
+Recognition is optional and updated manually after confirmation. Rankings use cumulative verified USDT received from participating supporters.
 
 ## License
 

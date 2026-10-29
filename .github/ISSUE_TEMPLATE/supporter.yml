@@ -1,0 +1,45 @@
+name: Join the Hall of Heat
+description: Request an optional shoutout for a USDT donation. Reviewed manually.
+title: "[Supporter] Shoutout request"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping keep Open Liq glowing! 🐋
+
+        This request is public. Recognition is optional; anonymous donations are welcome.
+        A maintainer confirms receipt and attribution before listing you. A public transaction
+        hash alone does not establish who donated. For a verified listing, the maintainer will
+        ask you to sign a unique plain message with the sending wallet. Exchange withdrawals
+        may not support this proof and can remain unlisted. Do not attach account screenshots or private credentials.
+  - type: input
+    id: credit
+    attributes:
+      label: Public name or nickname
+      description: How should we credit you in the Hall of Heat and release notes?
+    validations:
+      required: true
+  - type: input
+    id: profile
+    attributes:
+      label: Public profile link (optional)
+      description: A GitHub or other public profile you would like linked beside your name.
+  - type: input
+    id: transaction
+    attributes:
+      label: Tron transaction ID or explorer link
+      description: Posting it here may associate your public name with wallet activity. This is used for manual review, not automatic credit.
+    validations:
+      required: true
+  - type: input
+    id: amount
+    attributes:
+      label: USDT amount received (optional)
+      description: The amount sent to the project, excluding network fees. It will be checked before ranking.
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Optional public recognition
+      options:
+        - label: I made this donation and want to be publicly credited using the name above, with my cumulative verified USDT total included in the leaderboard and a shoutout in release notes.
+          required: true
