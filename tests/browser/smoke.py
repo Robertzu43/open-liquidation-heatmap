@@ -778,6 +778,9 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
                 for selector in ("#coin", "#exchange", "#range", "#refresh", "#zoom-in", "#zoom-out", "#reset"):
                     box = page.locator(selector).bounding_box()
                     assert box["height"] >= 44, (selector, box)
+                # The chart card clips overflow, so page width alone would not catch a cut-off zoom button.
+                assert page.evaluate("""() => { const row = document.querySelector('.chart-tools').getBoundingClientRect();
+                    return [...document.querySelectorAll('.zoom-btns > *')].every(e => e.getBoundingClientRect().right <= row.right + .5); }"""), f"Zoom row clipped at {width}"
                 assert page.locator("#chart").evaluate("e => getComputedStyle(e).touchAction") == "pan-y"
                 for selector in (".chip-main", ".chip-x", "#read-short", "#read-long"):
                     box = page.locator(selector).first.bounding_box()
@@ -822,6 +825,10 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
         replay_page.wait_for_function("state.data !== null")
         replay_page.locator("#replay-settings > summary").click()
         assert replay_page.locator("#history-controls").is_visible()
+        for field in ("#asof-field", "#to-field"):
+            assert replay_page.locator(field).evaluate("""e => { const w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT); const rects = [];
+                for (let n; (n = w.nextNode());) { const r = document.createRange(); r.selectNodeContents(n); rects.push(...[...r.getClientRects()].filter(x => x.width)); }
+                return Math.max(...rects.map(r => r.bottom)) - Math.min(...rects.map(r => r.top)) < 2 * parseFloat(getComputedStyle(e).fontSize); }"""), f"{field} label wraps"
         replay_page.locator("#rp-load").click()
         replay_page.wait_for_function("state.replay && state.data.replay")
         replay_page.locator("#rp-fwd").click()

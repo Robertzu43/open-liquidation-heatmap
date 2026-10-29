@@ -1854,3 +1854,19 @@ footer span:first-child {
     display:none;
   }
 }
+
+/* Under 360 px the zoom row is narrower than six 44 px controls: the buttons share it, still 44 px tall. */
+@media(max-width:360px) {
+  .zoom-btns {
+    gap:3px;
+  }
+  .zoom-btns button {
+    min-width:0;
+    padding:5px 2px;
+  }
+  .zoom-btns select {
+    min-width:0;
+    flex:0 0 60px;
+    padding:5px 2px 5px 6px;
+  }
+}
