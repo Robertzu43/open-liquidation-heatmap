@@ -905,6 +905,17 @@ def _bybit_result(path: str, params: dict) -> dict:
     return _bybit_payload(path, params)["result"]
 
 
+def _bybit_single_side(item: dict, single: str, both: str) -> float:
+    """Open interest counted once, as Binance and OKX count it.
+
+    Bybit v5 ``openInterest``/``openInterestValue`` sum both sides of every
+    position; ``singleOpenInterest``/``singleOpenInterestValue`` (added
+    2026-06-11) are one side. A row without the single-side field is halved.
+    """
+    value = _native_number(item.get(single))
+    return value if math.isfinite(value) else _native_number(item.get(both)) / 2.0
+
+
 def _bybit_klines(pair: str, interval: str, start_ms: int, end_ms: int) -> list:
     """Kline rows oldest first. Bybit returns newest first, up to 1,000 per call."""
     rows: dict[int, list] = {}
@@ -956,7 +967,7 @@ def _bybit_open_interest(pair: str, interval: str, start_ms: int, end_ms: int) -
 
 
 def fetch_bybit(coin: str, pair: str, spec: dict) -> LoadedSeries:
-    """Bybit USDT perpetual candles and native base-asset open interest.
+    """Bybit USDT perpetual candles and native base-asset open interest, counted once.
 
     Bybit publishes no historical taker buy/sell volume, so the flow prior is
     unavailable and Flow skew uses its neutral fallback for this venue. Account
@@ -993,7 +1004,7 @@ def fetch_bybit(coin: str, pair: str, spec: dict) -> LoadedSeries:
         # Only a snapshot inside a closed bar of this grid may describe that bar.
         if ts - ts % bar_ms not in closed_opens:
             continue
-        oi_records.append((ts, math.nan, math.nan, _native_number(item.get("openInterest"))))
+        oi_records.append((ts, math.nan, math.nan, _bybit_single_side(item, "singleOpenInterest", "openInterest")))
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi_base = _fold_native_oi(oi_records, grid, bar_ms)
     # Bybit history is native quantity only; value it at the bar close.

@@ -43,7 +43,9 @@ class FakeBybit:
                 chunk = chunk + self.extra_oi  # Rows a lenient API might add outside the request.
             more = (page + 1) * self.oi_page < len(rows)
             return 200, ok({'category': 'linear', 'symbol': params['symbol'],
-                            'list': [{'openInterest': str(base), 'timestamp': str(ts)} for ts, base in chunk],
+                            # Documented row: openInterest sums both sides, singleOpenInterest is one side.
+                            'list': [{'openInterest': str(2 * base), 'singleOpenInterest': str(base), 'timestamp': str(ts)}
+                                     for ts, base in chunk],
                             'nextPageCursor': str(page + 1) if more else ''})
         raise AssertionError(f'unexpected URL {url}')
 

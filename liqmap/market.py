@@ -276,8 +276,8 @@ def _bybit_context(coin: str) -> dict:
         funding_rate=rate,
         next_funding_time=_ms(item.get("nextFundingTime")),
         funding_interval_hours=_hours(item.get("fundingIntervalHour")),
-        open_interest_base=_num(item.get("openInterest")),
-        open_interest_usd=_num(item.get("openInterestValue")),
+        open_interest_base=_num(data._bybit_single_side(item, "singleOpenInterest", "openInterest")),
+        open_interest_usd=_num(data._bybit_single_side(item, "singleOpenInterestValue", "openInterestValue")),
         mark_price=_num(item.get("markPrice")),
         observed_at=_ms(payload.get("time")),
     )
