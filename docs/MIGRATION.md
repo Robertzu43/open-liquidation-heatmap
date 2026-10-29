@@ -4,7 +4,9 @@ Application, API schema and model have separate version numbers. They describe d
 
 ## 0.3 to 0.4
 
-Application **0.4.0**, API schema **1.0**, model **2.0.0**. Nothing was removed. Existing routes, fields and parameters keep their meaning.
+Application **0.4.0**, API schema **1.0**, model **2.0.0**. No API route, field or parameter was removed; existing ones keep their meaning.
+
+The legacy `heatmap.py` PNG command is removed; export PNG from the browser. matplotlib is no longer a runtime dependency, and `liqmap.model` no longer has `liq_price_long`, `liq_price_short`, `fade_swept`, `bin_intensity` or the `bybit_uta` venue; call `liq_price(entry, leverage, side, mmr, venue=...)` instead.
 
 ### Model numbers
 

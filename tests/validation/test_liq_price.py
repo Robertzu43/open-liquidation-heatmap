@@ -1,20 +1,18 @@
-"""Liquidation prices from exchange documents, then from the bound model.
+"""Liquidation prices from exchange documents, then from the model.
 
 Published numbers are literals. The oracle is checked against those literals
-and against the margin-balance identity, so a wrong closed form fails even
-when production code is still the legacy two-function API. Production is
-compared with the oracle where the adapter can bind that case, and skipped
-with an explicit repoint reason otherwise.
+and against the margin-balance identity, so a wrong closed form fails on its
+own. Production ``liqmap.model.liq_price`` is then compared with the oracle.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
 
 import pytest
 
-from tests.validation import adapter, oracle
+from liqmap import model
+from tests.validation import oracle
 
 ENTRY = 60_000.0
 # 0.4% is below 1/125, so the whole 2x–125x ladder is openable at this rate.
@@ -26,27 +24,13 @@ LEVERAGES = (2, 3, 5, 10, 20, 25, 50, 75, 100, 125)
 PriceFn = Callable[..., float]
 
 
-def _model_call(*args: Any, **kwargs: Any) -> float:
-    try:
-        return adapter.liq_price(*args, **kwargs)
-    except adapter.InterfaceGap as exc:
-        pytest.skip(str(exc))
-
-
-def test_binding_names_a_source() -> None:
-    status = adapter.binding_status()
-    assert status["liq_price"]
-    blob = " ".join(status.values()).lower()
-    assert ("coin" + "glass") not in blob
-
-
 @pytest.mark.parametrize("side", ["long", "short"])
 @pytest.mark.parametrize("leverage", LEVERAGES)
-@pytest.mark.parametrize("venue", ["binance", "okx", "bybit_uta"])
+@pytest.mark.parametrize("venue", ["binance", "okx"])
 def test_zero_tier_price_matches_oracle(side: str, leverage: int, venue: str) -> None:
     """Four-argument prices for the venues that share the margin-balance formula."""
     expected = oracle.liq_price(ENTRY, leverage, side, TIER1_MMR, qty=2.5, venue=venue)
-    got = _model_call(ENTRY, leverage, side, TIER1_MMR, qty=2.5, venue=venue)
+    got = model.liq_price(ENTRY, leverage, side, TIER1_MMR, qty=2.5, venue=venue)
     assert got == pytest.approx(expected, rel=1e-12, abs=1e-6)
 
 
@@ -63,13 +47,13 @@ def test_golden_half_percent_tier_entry_100_at_10x() -> None:
     assert short_price == pytest.approx(109.452736318408, abs=1e-9)
     assert round(long_price, 4) == 90.4523
     assert round(short_price, 4) == 109.4527
-    assert adapter.liq_price(100, 10, "long", mmr) == pytest.approx(long_price)
-    assert adapter.liq_price(100, 10, "short", mmr) == pytest.approx(short_price)
+    assert model.liq_price(100, 10, "long", mmr) == pytest.approx(long_price)
+    assert model.liq_price(100, 10, "short", mmr) == pytest.approx(short_price)
 
 
 def test_four_argument_call_is_the_binance_zero_tier_price() -> None:
     """The documented entry point: liq_price(entry, leverage, side, mmr)."""
-    got = adapter.liq_price(ENTRY, 10, "long", TIER1_MMR)
+    got = model.liq_price(ENTRY, 10, "long", TIER1_MMR)
     expected = oracle.liq_price(ENTRY, 10, "long", TIER1_MMR)
     assert got == pytest.approx(expected, rel=1e-12, abs=1e-6)
 
@@ -96,21 +80,6 @@ def test_bybit_help_center_funding_taken_from_position_margin(price_of: PriceFn)
     assert got == pytest.approx(19_900)
 
 
-def test_bybit_uta_help_center_long_with_fee(price_of: PriceFn) -> None:
-    # 1 BTC long at 40_000, 50x, MMR 0.5%, taker fee 0.055%, 3_000 extra → 36_380.25.
-    got = price_of(
-        40_000,
-        50,
-        "long",
-        0.005,
-        qty=1,
-        extra_margin=3_000,
-        fee=0.00055,
-        venue="bybit_uta",
-    )
-    assert got == pytest.approx(36_380.25, abs=0.01)
-
-
 def test_bybit_classic_is_not_the_binance_price() -> None:
     """The published 50x example is only a couple of dollars from Binance.
 
@@ -132,11 +101,8 @@ def test_bybit_classic_is_not_the_binance_price() -> None:
     assert abs(binance_wide - classic_wide) > 100
 
 
-def test_bybit_uta_without_fee_or_extra_matches_binance() -> None:
+def test_okx_without_fee_or_extra_matches_binance() -> None:
     args = (20_000.0, 50.0, "short", 0.005)
-    assert oracle.liq_price(*args, venue="bybit_uta") == pytest.approx(
-        oracle.liq_price(*args, venue="binance")
-    )
     assert oracle.liq_price(*args, venue="okx") == pytest.approx(
         oracle.liq_price(*args, venue="binance")
     )
@@ -259,39 +225,10 @@ def test_oracle_rejects_nonpositive_qty_and_unknown_venue() -> None:
         oracle.liq_price(100, 10, "long", 0.004, venue="coin" + "glass")
 
 
-def test_legacy_helpers_return_non_finite_values() -> None:
-    """Prove the current helpers do not raise on non-finite input."""
-    source = adapter.binding_status()["liq_price"]
-    if not source.startswith("legacy:"):
-        pytest.skip("liq_price is bound; non-finite input must raise ValueError")
-    import importlib
-    import math
-    from typing import Any, cast
-
-    heatmap = cast(Any, importlib.import_module("heatmap"))
-    assert math.isnan(heatmap.liq_price_long(float("nan"), 10, 0.005))
-    assert math.isinf(heatmap.liq_price_long(float("inf"), 10, 0.005))
-    assert math.isnan(heatmap.liq_price_short(float("nan"), 10, 0.005))
-    assert math.isinf(heatmap.liq_price_short(float("inf"), 10, 0.005))
-
-
-def test_model_rejects_bad_inputs_once_full_contract_is_bound() -> None:
-    """``liq_price`` must raise once it is exported.
-
-    The legacy helpers do not. ``liq_price_long(nan, ...)`` returns ``nan``
-    and ``liq_price_long(inf, ...)`` returns ``inf``. They do not raise.
-    """
-    source = adapter.binding_status()["liq_price"]
-    if source.startswith("legacy:"):
-        pytest.skip(
-            "legacy heatmap.liq_price_long/liq_price_short return nan or inf "
-            "for non-finite input and do not raise ValueError; "
-            f"current binding is {source}. Rejection starts once "
-            "LIQ_PRICE_CANDIDATES resolves to liq_price."
-        )
+def test_model_rejects_bad_inputs() -> None:
     with pytest.raises(ValueError):
-        adapter.liq_price(100, 0, "long", 0.004)
+        model.liq_price(100, 0, "long", 0.004)
     with pytest.raises(ValueError):
-        adapter.liq_price(float("nan"), 10, "long", 0.004)
+        model.liq_price(float("nan"), 10, "long", 0.004)
     with pytest.raises(ValueError):
-        adapter.liq_price(100, 10, "long", 0.004, venue="coin" + "glass")
+        model.liq_price(100, 10, "long", 0.004, venue="coin" + "glass")

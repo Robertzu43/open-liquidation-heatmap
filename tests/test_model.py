@@ -19,15 +19,12 @@ from liqmap.data import (
     ratio_to_share,
 )
 from liqmap.model import (
+    MMR,
     MODELS,
     MarketSeries,
     analyze,
-    bin_intensity,
     build_heatmap,
-    fade_swept,
     liq_price,
-    liq_price_long,
-    liq_price_short,
 )
 from liqmap.service import load_heatmap
 
@@ -64,20 +61,12 @@ class ModelTests(unittest.TestCase):
             self.assertGreater(len(spec["weights"]), 0)
 
     def test_zero_tier_golden_and_non_finite(self):
-        self.assertAlmostEqual(liq_price_long(100, 10, 0.005), 90.4522613065, places=4)
-        self.assertAlmostEqual(liq_price_short(100, 10, 0.005), 109.4527363184, places=4)
         self.assertAlmostEqual(liq_price(100, 10, "long", 0.005), 90.4522613065, places=4)
+        self.assertAlmostEqual(liq_price(100, 10, "short", 0.005), 109.4527363184, places=4)
         with self.assertRaisesRegex(ValueError, "inputs must be finite"):
             liq_price(float("nan"), 10, "long", 0.005)
         with self.assertRaisesRegex(ValueError, "inputs must be finite"):
             liq_price(100, float("inf"), "short", 0.005)
-
-    def test_fade_and_bins(self):
-        kept = fade_swept([(90.0, 5.0, "long"), (110.0, 4.0, "short")], [(100.0, 95.0)])
-        self.assertEqual(kept, [(90.0, 5.0, "long"), (110.0, 4.0, "short")])
-        swept = fade_swept([(90.0, 5.0, "long"), (110.0, 4.0, "short")], [(112.0, 89.0)])
-        self.assertEqual(swept, [])
-        self.assertEqual(bin_intensity([1.0, 2.0, 3.0], [10.0, 1.0, 4.0], [0.0, 2.0, 3.0]), [10.0, 5.0])
 
     def test_open_interest_joins_its_closed_bar_interval(self):
         grid = np.array([0, 3_600_000, 7_200_000], dtype=np.int64)
@@ -90,13 +79,13 @@ class ModelTests(unittest.TestCase):
 
     def test_liq_price_direction(self):
         entry = 100.0
-        self.assertLess(liq_price_long(entry, 10), entry)
-        self.assertGreater(liq_price_short(entry, 10), entry)
+        self.assertLess(liq_price(entry, 10, "long", MMR), entry)
+        self.assertGreater(liq_price(entry, 10, "short", MMR), entry)
         # Higher leverage sits closer to the entry.
-        self.assertGreater(liq_price_long(entry, 50), liq_price_long(entry, 10))
-        self.assertLess(liq_price_short(entry, 50), liq_price_short(entry, 10))
-        self.assertLess(liq_price_long(entry, 100), entry)
-        self.assertGreater(liq_price_short(entry, 5), liq_price_short(entry, 100))
+        self.assertGreater(liq_price(entry, 50, "long", MMR), liq_price(entry, 10, "long", MMR))
+        self.assertLess(liq_price(entry, 50, "short", MMR), liq_price(entry, 10, "short", MMR))
+        self.assertLess(liq_price(entry, 100, "long", MMR), entry)
+        self.assertGreater(liq_price(entry, 5, "short", MMR), liq_price(entry, 100, "short", MMR))
 
     def test_usd_conservation_when_price_cannot_sweep(self):
         oi = np.array([1_000_000.0, 2_000_000.0, 2_000_000.0, 2_000_000.0])
