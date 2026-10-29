@@ -401,7 +401,7 @@ def _deposit(book: np.ndarray, index: int, amount: float, kernel: tuple[float, .
     if not indexes:
         return
     scale = float(sum(weights))
-    for j, weight in zip(indexes, weights):
+    for j, weight in zip(indexes, weights, strict=True):
         book[j] += amount * (weight / scale)
 
 

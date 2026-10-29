@@ -169,16 +169,21 @@ print(payload['quality']['status'], payload['features'])
 Since 0.4.0 it also returns `capabilities`:
 
 ```json
-"capabilities": {"context": true, "observed_liquidations": ["okx"], "watchlist_max_symbols": 6}
+"capabilities": {"context": true, "context_venues": ["okx", "binance", "bybit"], "observed_liquidations": ["okx"], "watchlist_max_symbols": 6}
 ```
 
 | Field | Meaning |
 | --- | --- |
 | `context` | `/api/v1/context` is available |
+| `context_venues` | Live venues `/api/v1/context` can query |
 | `observed_liquidations` | Venues whose filled liquidation orders `/api/v1/liquidations` can return |
 | `watchlist_max_symbols` | Most symbols one `/api/v1/watchlist` request accepts |
 
-Detect 0.4 features from `capabilities` rather than from the version string. A 0.3 server has no `capabilities` field.
+Detect 0.4 features from `capabilities` rather than from the version string. A 0.3 server has no `capabilities` field. `/api/v1/symbols` also gains a short plain-text `features` object.
+
+## Live-only routes
+
+`/api/v1/context`, `/api/v1/liquidations` and `/api/v1/watchlist` describe the market now. Passing `asof`, `bar` or `replay=1` returns 400 `invalid_request`. Unknown parameters are ignored, as on the other routes. `exchange=demo` in pair mode never contacts an exchange. `mode=symbol` always means the live aggregate, also when `exchange=demo`, matching the heatmap.
 
 ## Funding and open interest: `/api/v1/context`
 
@@ -190,7 +195,7 @@ A live snapshot of funding and open interest for each venue. This is market cont
 | `symbol` | `BTC` | 2–12 letter/digit base ticker, optionally followed by USDT |
 | `mode` | `pair` | `pair` (the selected venue) or `symbol` (OKX, Binance and Bybit for that base asset) |
 
-`exchange=aggregate` or `mode=symbol` returns all three live venues. `exchange=demo` returns synthetic values with `synthetic: true` and never contacts an exchange. `range`, `model`, `asof` and `bar` do not apply.
+`exchange=aggregate` or `mode=symbol` returns all three live venues. `exchange=demo` returns synthetic values with `synthetic: true` and never contacts an exchange. `range` and `model` are ignored; `asof`, `bar` and `replay=1` are rejected.
 
 Response:
 
@@ -202,7 +207,8 @@ Response:
 | `generated_at` | Response generation time, Unix ms |
 | `synthetic` | `true` for demo |
 | `venues` | One object per venue, described below |
-| `funding_rate_oi_weighted` | Funding rate weighted by each venue's USD open interest, over venues that reported both; null when none did |
+| `funding_rate_oi_weighted` | Each venue's rate is first scaled to `funding_basis_hours` (rate × 8 / interval), then weighted by its USD open interest. Venues without a known interval, rate or open interest are left out; null when none qualify |
+| `funding_basis_hours` | `8`: the interval `funding_rate_oi_weighted` is expressed in |
 | `open_interest_usd_total` | Sum of `open_interest_usd` over venues that reported it; null when none did |
 | `note` | Plain-text explanation |
 
@@ -218,10 +224,10 @@ Each entry in `venues`:
 | `open_interest_base` | Open interest in the base asset |
 | `open_interest_usd` | Open interest in USD |
 | `mark_price` | The venue's mark price |
-| `observed_at` | When this venue's snapshot was taken, Unix ms |
+| `observed_at` | Oldest timestamp among this venue's snapshot responses, Unix ms |
 | `error` | Null, or the reason this venue failed |
 
-A numeric field can be null when the venue did not report it. Venues and contracts can settle funding on different intervals. Check `funding_interval_hours` before comparing rates across venues.
+A numeric field can be null when the venue did not report it. Venues and contracts can settle funding on different intervals. Check `funding_interval_hours` before comparing per-venue rates. When some venues fail, `note` says how many venues the totals cover.
 
 Sources: OKX public funding-rate and open-interest endpoints; Binance `premiumIndex`, `openInterest` and `fundingInfo`; Bybit linear `tickers`.
 
@@ -262,8 +268,9 @@ Response:
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | `1.0` |
-| `coin` | Base asset |
-| `source` | Where the events came from, such as `okx` |
+| `coin`, `symbol` | Base asset and pair |
+| `exchange`, `mode`, `range` | The requested view |
+| `source` | `okx`, `demo`, or null when no observed source was read |
 | `available` | `false` when the requested venue has no observed-liquidation source |
 | `synthetic` | `true` for demo |
 | `events` | Liquidation events, described below |
@@ -284,8 +291,8 @@ Each event:
 Coverage:
 
 - The server reads up to **10 pages of the 100 most recent** filled orders, so at most 1,000 orders per request.
-- `coverage.from_ms` and `coverage.to_ms` give the time span the returned events actually cover. `count` is the number of events.
-- `coverage.truncated` is `true` when older orders were not fetched. On a busy market or a long `range`, the start of the window may then have no data. No dots in an uncovered period does not mean no liquidations happened.
+- Events are limited to the requested `range`, newest last. `coverage.from_ms` and `coverage.to_ms` are the oldest and newest returned events. `count` is the number of events.
+- `coverage.truncated` is `true` when older orders were not fetched: the 10-page cap was reached inside the range, or a later page failed after earlier pages succeeded. If the first page fails, the route returns 503 `source_unavailable`. On a busy market or a long `range`, the start of the window may then have no data. No dots in an uncovered period does not mean no liquidations happened.
 
 Reading the price: an exchange triggers liquidation from the mark price and maintenance margin, before the bankruptcy price is reached. The bankruptcy price therefore lies beyond the trigger: below it for a long, above it for a short. The modeled bands use a maintenance-margin trigger, so dots and bands are not expected to line up exactly.
 
@@ -308,18 +315,18 @@ The nearest modeled liquidation clusters for several coins in one request. Live 
 | `range` | `24h` | Same values as heatmap |
 | `model` | `1` | `1`, `2`, `3` |
 | `mode` | `pair` | `pair`, `symbol` |
-| `symbols` | — | Comma-separated base tickers, 1–6, each listed once. Example: `BTC,ETH,SOL` |
+| `symbols` | — | Required. Comma-separated base tickers, 1–6. Duplicates are dropped. Example: `BTC,ETH,SOL` |
 
-`asof` and `bar` are not accepted. Use `/api/v1/features` for a historical or custom-bar view of one symbol.
+`asof`, `bar` and `replay=1` are rejected. Use `/api/v1/features` for a historical or custom-bar view of one symbol. Missing, empty or more than six symbols return 400.
 
 Response:
 
 | Field | Meaning |
 | --- | --- |
 | `schema_version` | `1.0` |
-| `exchange`, `mode`, `range`, `model` | The requested view |
+| `exchange`, `mode`, `range`, `model` | The canonical view: `mode=symbol` reports `aggregate` / `symbol` |
 | `generated_at` | Response generation time, Unix ms |
-| `items` | One item per requested symbol |
+| `items` | One item per requested symbol, in request order |
 
 Each item:
 

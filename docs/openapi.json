@@ -643,7 +643,8 @@
           "503": {
             "description": "source_unavailable when every live venue failed; also server_busy or deadline_exceeded"
           }
-        }
+        },
+        "description": "Live only: asof, bar or replay=1 returns 400 invalid_request."
       }
     },
     "/api/v1/liquidations": {
@@ -732,7 +733,8 @@
           "503": {
             "description": "Source unavailable, server_busy or deadline_exceeded"
           }
-        }
+        },
+        "description": "Live only: asof, bar or replay=1 returns 400 invalid_request."
       }
     },
     "/api/v1/watchlist": {
@@ -813,7 +815,7 @@
                 "BTC,ETH,SOL"
               ]
             },
-            "description": "Comma-separated base tickers: 1-6, each listed once. asof and bar are not accepted."
+            "description": "Comma-separated base tickers, 1-6. Duplicates are dropped; items keep request order. Missing or empty returns 400."
           }
         ],
         "responses": {
@@ -836,7 +838,8 @@
           "503": {
             "description": "server_busy or deadline_exceeded"
           }
-        }
+        },
+        "description": "Live only: asof, bar or replay=1 returns 400 invalid_request."
       }
     },
     "/healthz": {
@@ -1014,6 +1017,19 @@
             "type": "integer",
             "examples": [
               6
+            ]
+          },
+          "context_venues": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "examples": [
+              [
+                "okx",
+                "binance",
+                "bybit"
+              ]
             ]
           }
         }
@@ -1211,7 +1227,8 @@
             "type": [
               "number",
               "null"
-            ]
+            ],
+            "description": "Open-interest-weighted funding after scaling each venue's rate to funding_basis_hours; venues with an unknown interval are left out"
           },
           "open_interest_usd_total": {
             "type": [
@@ -1221,6 +1238,11 @@
           },
           "note": {
             "type": "string"
+          },
+          "funding_basis_hours": {
+            "type": "integer",
+            "const": 8,
+            "description": "Interval, in hours, that funding_rate_oi_weighted is expressed in"
           }
         }
       },
@@ -1275,7 +1297,11 @@
             "type": "string"
           },
           "source": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "okx, demo, or null when no observed source was read"
           },
           "available": {
             "type": "boolean"
@@ -1297,21 +1323,21 @@
                   "integer",
                   "null"
                 ],
-                "description": "Earliest event time covered, Unix ms"
+                "description": "Oldest returned event, Unix ms; events are limited to the requested range"
               },
               "to_ms": {
                 "type": [
                   "integer",
                   "null"
                 ],
-                "description": "Latest event time covered, Unix ms"
+                "description": "Newest returned event, Unix ms"
               },
               "count": {
                 "type": "integer"
               },
               "truncated": {
                 "type": "boolean",
-                "description": "True when older orders in the window were not fetched"
+                "description": "True when the 10-page cap was reached inside the range, or a later page failed after earlier pages succeeded"
               }
             }
           },
@@ -1319,6 +1345,29 @@
             "type": "integer"
           },
           "note": {
+            "type": "string"
+          },
+          "symbol": {
+            "type": "string"
+          },
+          "exchange": {
+            "type": "string",
+            "enum": [
+              "okx",
+              "binance",
+              "bybit",
+              "demo",
+              "aggregate"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pair",
+              "symbol"
+            ]
+          },
+          "range": {
             "type": "string"
           }
         }
