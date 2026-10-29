@@ -888,7 +888,8 @@ def _bybit_payload(path: str, params: dict, *, timeout: tuple[float, float] = (4
     status, payload = _get_json(f"{BYBIT_BASE}{path}", params, timeout=timeout, retries=retries)
     if not isinstance(payload, dict):
         if status in (401, 403, 451):
-            raise DataError(f"Bybit is not reachable from this network (HTTP {status}). Its public API blocks some regions.")
+            # Bybit documents 403 for US addresses and for a breached IP rate limit.
+            raise DataError(f"Bybit is not reachable from this network (HTTP {status}). Its public API blocks some regions and rate-limited IPs.")
         raise DataError(f"Bybit returned an unexpected response (HTTP {status}).")
     if payload.get("retCode") != 0:
         message = str(payload.get("retMsg") or f"HTTP {status}")

@@ -414,7 +414,7 @@ def test_bybit_captured_error_bodies_map_to_clear_errors(monkeypatch):
         data._bybit_result("/v5/market/kline", {"symbol": "BTCUSDT"})
 
 
-def test_bybit_captured_region_block_is_explained(monkeypatch):
+def test_bybit_captured_region_block_and_documented_rate_limit_403_are_explained(monkeypatch):
     class Blocked:
         status_code = 403
         headers = {"content-type": "application/json"}
@@ -428,8 +428,9 @@ def test_bybit_captured_region_block_is_explained(monkeypatch):
     monkeypatch.setattr(data._SESSION, "get", lambda *args, **kwargs: Blocked())
     with pytest.raises(DataError, match="not reachable") as caught:
         data._bybit_payload("/v5/market/tickers", {"category": "linear", "symbol": "BTCUSDT"})
+    # Bybit documents HTTP 403 for a breached IP rate limit as well as for blocked regions.
     message = str(caught.value)
-    assert "HTTP 403" in message and "blocks some regions" in message
+    assert "HTTP 403" in message and "blocks some regions" in message and "rate-limited" in message
 
 
 # ---------------------------------------------------------------------------
@@ -512,3 +513,7 @@ def test_binance_documented_and_captured_errors_are_named(monkeypatch):
     with pytest.raises(DataError, match=r"not reachable from this network \(HTTP 451\)"):
         market._binance_get("/fapi/v1/premiumIndex", {"symbol": "BTCUSDT"}, "BTCUSDT")
     assert data._fold_binance_live("BTCUSDT", "5m", np.array([300_000, 600_000])) is None
+    # Binance documents HTTP 403 for a violated firewall (WAF) limit, not only for regions.
+    monkeypatch.setattr(data, "_get_json", lambda *args, **kwargs: (403, None))
+    with pytest.raises(DataError, match="rate-limited"):
+        market._binance_get("/fapi/v1/premiumIndex", {"symbol": "BTCUSDT"}, "BTCUSDT")
