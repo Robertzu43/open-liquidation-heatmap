@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
-  <meta name="description" content="Explore estimated liquidation exposure from public market data. Open source, local first, transparent assumptions.">
+  <meta name="description" content="Explore estimated liquidation clusters from public market data. Open source, local first, transparent assumptions.">
   <title>Open Liq · Liquidation research</title>
   <link rel="icon" href="/assets/logo.png" type="image/png">
   <link rel="stylesheet" href="/styles.css">
@@ -14,7 +14,7 @@
   <main class="app">
     <header class="top">
       <a class="brand" href="/" aria-label="Open Liq home"><img src="/assets/logo.png" alt="" width="40" height="40"><div><strong>Open Liq<span class="brand-dot">.</span></strong><em>LIQUIDATION RESEARCH</em></div></a>
-      <div class="heading"><h1 id="title">Estimated liquidation exposure</h1><p id="asof" class="asof">Waiting for market data…</p></div>
+      <div class="heading"><h1 id="title">Estimated liquidation clusters</h1><p id="asof" class="asof">Waiting for market data…</p></div>
       <span class="status" id="data-status" role="status" aria-live="polite">Connecting</span>
     </header>
     <section class="toolbar" aria-label="Market controls">
@@ -33,8 +33,9 @@
         <select id="exchange">
           <option value="okx" selected>OKX</option>
           <option value="binance">Binance</option>
+          <option value="bybit">Bybit</option>
+          <option value="aggregate">All venues</option>
           <option value="demo">Demo</option>
-          <option value="aggregate" disabled hidden>All venues</option>
         </select>
       </label>
       <label class="field">Range
@@ -54,8 +55,8 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
         </button>
     </section>
-    <div class="advanced" aria-label="Research settings">
-      <details id="model-settings"><summary>Model <span id="model-name">Wide clusters</span></summary><div class="settings-body"><p class="settings-intro">Choose an assumption, then compare the resulting exposure. These scenarios estimate positions; they do not observe exchange accounts.</p>
+    <div class="advanced" aria-label="Chart settings">
+      <details id="model-settings"><summary>Model <span id="model-name">Wide clusters</span></summary><div class="settings-body"><p class="settings-intro">Choose an assumption, then compare the resulting liq clusters. These scenarios estimate positions; they do not observe exchange accounts.</p>
       <div class="models" role="group" aria-label="Liquidation model">
         <button type="button" class="tab on" data-model="1" aria-pressed="true"><b>Wide clusters</b><small>5×–60× · weighted to 60×</small></button>
         <button type="button" class="tab" data-model="2" aria-pressed="false"><b>Tight magnets</b><small>20× / 60× · turnover and slow fade</small></button>
@@ -67,8 +68,9 @@
       <label class="threshold">Band contrast <b id="th-val">0.85</b>
         <input id="threshold" type="range" min="0" max="1" step="0.01" value="0.85">
       </label>
-      <label class="check"><input id="liqmap" type="checkbox"> Exposure profile</label>
+      <label class="check"><input id="liqmap" type="checkbox"> Liquidation profile</label>
       <label class="check"><input id="candles" type="checkbox" checked> Candles</label>
+      <label class="check"><input id="liqs" type="checkbox" checked> Observed liquidations (OKX)</label>
       <label class="field slim">Auto-refresh
         <select id="auto">
           <option value="0">Off</option>
@@ -78,14 +80,21 @@
         </select>
       </label>
     </div>
+        <div class="alert-row"><label class="check"><input id="alert-on" type="checkbox"> Alert when price is within</label><input id="alert-pct" type="number" inputmode="decimal" min="0.05" max="10" step="0.05" value="0.5" aria-label="Alert distance in percent"><span>% of the nearest liq cluster</span><span id="alert-note" class="muted"></span></div>
         <div class="display-row"><label class="field">Time zone<select id="timezone"><option value="utc">UTC</option><option value="local">Local time</option></select></label><span id="timezone-note" class="muted">UTC · event times</span><div class="swatches" id="themes" role="group" aria-label="Color theme"></div></div>
       </div></details>
-      <details id="research-settings"><summary>Research</summary><div class="settings-body"><div class="research-top">
-      <div class="seg" id="mode-toggle" role="group" aria-label="Venue coverage">
-        <button type="button" class="on" data-mode="pair">Single venue</button>
-        <button type="button" data-mode="symbol">Aggregate</button>
-      </div>
-        <button type="button" id="share">Copy settings link</button><button type="button" id="export">Export research JSON</button></div><p id="history-note" class="muted">Historical as-of and replay are available for Binance single-venue data. Choose Binance to explore reconstructed history.</p><div id="history-controls" hidden><div class="history-fields">
+      <details id="research-settings"><summary>Research</summary><div class="settings-body"><p class="settings-intro">Share the exact view or export the payload behind it, with source, model version and data revision.</p><div class="research-top">
+        <button type="button" id="share">Copy settings link</button><button type="button" id="export">Export research JSON</button></div>
+      </div></details>
+      <details id="replay-settings"><summary>Replay</summary><div class="settings-body">
+        <p class="settings-intro">Rewind the map bar by bar. Replay rebuilds history from Binance's public archive, so it runs on Binance single venue.</p>
+        <div class="presets" role="group" aria-label="Replay presets">
+          <button type="button" class="preset" data-span="86400">Last 24h</button>
+          <button type="button" class="preset" data-span="259200">Last 3 days</button>
+          <button type="button" class="preset" data-span="604800">Last 7 days</button>
+        </div>
+        <p id="history-note" class="muted">Custom As of and replay need Binance single venue. The presets above switch to it for you.</p>
+        <div id="history-controls" hidden><div class="history-fields">
       <label class="field" id="bar-field">Bar
         <select id="bar">
           <option value="" selected>Auto</option>
@@ -121,47 +130,66 @@
       <input id="rp-scrub" type="range" min="0" max="0" value="0" aria-label="Replay position">
       <span id="rp-time" class="rp-time">Set As of, then Load replay</span>
     </div>
-
-        </div></div></details>
+        </div>
+      </div></details>
     </div>
     <div class="stage">
-      <section class="chart-card" id="chart-card" aria-label="Liquidation exposure chart">
-        <div class="chart-head"><div><p class="eyebrow">PUBLIC DATA · MODELED EXPOSURE</p><h2>Liquidation heatmap <span id="chart-price"></span></h2></div>      <div class="icon-btns">
-        <button type="button" id="shot" title="Save PNG snapshot" aria-label="Save PNG snapshot">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
-        </button>
-        <button type="button" id="full" title="Fullscreen" aria-label="Fullscreen">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
-        </button>
-      </div>
-</div>
-        <div class="chart-meta"><div class="legend"><span><i class="grad" id="legend-grad"></i> Low → high exposure</span><span><i class="candle up"></i><i class="candle down"></i> Price</span></div><span id="chart-context">24 hours · UTC</span></div>
+      <section class="watch" id="watch" aria-label="Watchlist">
+        <h2 class="watch-label">Watchlist</h2>
+        <div class="watch-scroll">
+          <ul class="watch-list" id="watch-list"></ul>
+          <button type="button" id="watch-add" class="chip-add" hidden>+ Add</button>
+        </div>
+      </section>
+      <section class="chart-card" id="chart-card" aria-label="Liquidation heatmap">
+        <div class="chart-title"><p class="eyebrow">PUBLIC DATA · MODELED LIQ CLUSTERS</p><h2>Liquidation heatmap <span id="chart-price"></span></h2></div>
+        <div class="market" id="market" aria-label="Market context" hidden>
+          <span class="mk" id="mk-chg" hidden><small id="mk-chg-k">24h</small><b id="mk-chg-v">—</b></span>
+          <span class="mk" id="mk-oi" hidden><small>OI</small><b id="mk-oi-v">—</b><em id="mk-oi-d"></em></span>
+          <span class="mk" id="mk-fund" hidden><small id="mk-fund-k">Funding</small><b id="mk-fund-v">—</b><em id="mk-fund-t"></em><span class="sr-only" id="mk-fund-sr"></span></span>
+        </div>
+        <div class="icon-btns">
+          <button type="button" id="shot" title="Save PNG snapshot" aria-label="Save PNG snapshot">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-2h6l2 2h3v11H4z"/><circle cx="12" cy="13" r="3.2"/></svg>
+          </button>
+          <button type="button" id="full" title="Fullscreen" aria-label="Fullscreen">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>
+          </button>
+        </div>
+        <div class="chart-meta"><div class="legend"><span><i class="grad" id="legend-grad"></i> Low → high modeled exposure</span><span><i class="candle up"></i><i class="candle down"></i> Price</span><span id="legend-liq" hidden><i class="dot short"></i><i class="dot long"></i> <span id="legend-liq-text">Observed liqs (OKX)</span></span></div><span id="chart-context">24 hours · UTC</span></div>
+        <div class="replay-bar" id="replay-bar" hidden><span class="rb-badge" id="rb-badge">Replay</span><span id="rb-time" class="rb-time"></span><button type="button" id="rb-play" class="live-btn">Play</button><button type="button" id="rb-live" class="live-btn">Back to live</button></div>
+        <div class="reading" id="reading" aria-label="Nearest liquidation clusters">
+          <button type="button" class="read-btn short" id="read-short" disabled><span class="rl-k"><span class="rl-full">Nearest short liq cluster</span><span class="rl-abbr">Short liqs</span></span> <b class="rl-px">—</b> <span class="rl-d"></span> <span class="rl-u"></span></button>
+          <button type="button" class="read-btn long" id="read-long" disabled><span class="rl-k"><span class="rl-full">Nearest long liq cluster</span><span class="rl-abbr">Long liqs</span></span> <b class="rl-px">—</b> <span class="rl-d"></span> <span class="rl-u"></span></button>
+          <span class="read-ratio" id="read-ratio" title="Modeled short liquidation exposure within ±5% of price divided by long liquidation exposure"><span class="rl-full">±5% shorts/longs</span><span class="rl-abbr">±5% S/L</span> <b>—</b></span>
+        </div>
         <div class="chart-wrap" id="wrap"><canvas id="chart" tabindex="0" role="img" aria-label="Estimated liquidation heatmap" aria-describedby="chart-help"></canvas><div id="tip" class="tip" hidden></div><div id="loading" class="loading" hidden>Loading…</div></div>
         <div class="chart-tools"><p id="chart-help"><span class="pointer-hint">Drag to pan · + / − zoom · 0 reset</span><span class="touch-hint">Swipe sideways to pan · scroll vertically · tap + / − to zoom</span><span class="desktop-hint"> · shift-wheel zooms time</span></p><div class="zoom-btns"><select id="zoom-axis" aria-label="Zoom axis"><option value="price">Price</option><option value="time">Time</option></select><button type="button" id="zoom-out" aria-label="Zoom out">−</button><button type="button" id="zoom-in" aria-label="Zoom in">+</button><button type="button" id="reset">Reset</button><button type="button" id="fit">Fit</button><button type="button" id="wide">Wide</button></div></div>
-        <div class="tags" id="tags" aria-label="Focus an estimated level"></div>
-        <p class="caption">Bright bands indicate higher <strong>estimated liquidation exposure</strong>, relative to this window. Above price: vulnerable shorts. Below price: vulnerable longs. These are scenarios, not measured positions.</p>
+        <p class="liq-note" id="liq-note" hidden></p>
+        <div class="tags" id="tags" aria-label="Focus a modeled liq cluster"></div>
+        <p class="caption">Above price: short liquidation clusters. Below: long clusters. Brighter = more modeled exposure. <button type="button" class="info-btn" id="caption-info" aria-label="How this model works" title="How this model works"><span aria-hidden="true">i</span></button></p>
       </section>
       <aside class="panel" id="panel">
         <h2>Around the current price</h2>
         <p id="summary" class="summary">The estimate appears here after the first book is built.</p>
         <div class="cards">
           <article>
-            <h3>Short exposure above</h3>
+            <h3>Short liqs above</h3>
             <p id="above" class="stat">—</p>
           </article>
           <article>
-            <h3>Long exposure below</h3>
+            <h3>Long liqs below</h3>
             <p id="below" class="stat">—</p>
           </article>
         </div>
-        <details class="table-details"><summary>Exposure by distance</summary>
-        <table class="grid" id="imbalance" aria-label="Estimated exposure by distance">
+        <details class="table-details"><summary>Liq exposure by distance</summary>
+        <table class="grid" id="imbalance" aria-label="Modeled liquidation exposure by distance">
           <thead><tr><th scope="col">Window</th><th scope="col">Long</th><th scope="col">Short</th><th scope="col">S/L</th></tr></thead>
           <tbody></tbody>
         </table>
-        </details><details class="table-details"><summary>Estimated levels · table</summary>
+        </details><details class="table-details"><summary>Liq clusters · table</summary>
         <div class="table-scroll">
-          <table class="grid" id="levels" aria-label="Estimated liquidation levels">
+          <table class="grid" id="levels" aria-label="Modeled liquidation clusters">
             <thead><tr><th scope="col">Side</th><th scope="col">Price</th><th scope="col">Dist</th><th scope="col">Est. USD</th></tr></thead>
             <tbody></tbody>
           </table>
@@ -175,8 +203,9 @@
     </div>
 
     <div id="banner" class="banner" role="alert" hidden></div>
-    <section class="source-note" aria-label="Data provenance"><span class="eyebrow">SOURCE &amp; QUALITY</span><p id="provenance">Source and observation details appear after the first map loads.</p><p id="quality-detail"></p></section>
-    <footer><span>Open data. Visible assumptions.</span><span>Research estimates · not financial advice or exchange position records.</span></footer>
+    <details class="source-note" id="source-note"><summary><span class="eyebrow">SOURCE &amp; QUALITY</span><span id="source-brief" class="source-brief"></span></summary><p id="provenance">Source and observation details appear after the first map loads.</p><p id="quality-detail"></p></details>
+    <footer><span>Model estimates from public data, not exchange position records or financial advice.</span><button type="button" id="how-link" class="link-btn">How this model works</button></footer>
+    <div id="toast" class="toast" hidden><p id="toast-text" role="alert"></p><button type="button" id="toast-close" aria-label="Dismiss alert">×</button></div>
     <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
   </main>
   <script src="/app.js"></script>
