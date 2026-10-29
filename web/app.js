@@ -241,8 +241,7 @@ function fmtPx(value) {
   if (!Number.isFinite(v)) return "—";
   if (v >= 1000) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (v >= 1) return v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  if (v >= 0.01) return v.toFixed(4);
-  return v.toFixed(6);
+  return v.toLocaleString("en-US", { maximumSignificantDigits: 4 });
 }
 
 function fmtStamp(ms, withTime) {
@@ -481,9 +480,11 @@ function showBanner(kind, lines) {
     banner.textContent = "";
     return;
   }
+  const html = lines.map(escapeHtml).join("<br>");
+  if (!banner.hidden && banner.className === "banner " + kind && banner.innerHTML === html) return;
   banner.hidden = false;
   banner.className = "banner " + kind;
-  banner.innerHTML = lines.map(escapeHtml).join("<br>");
+  banner.innerHTML = html;
 }
 
 function rangeLabel(id) {
@@ -537,6 +538,7 @@ async function load(reason) {
     else fail(message);
   } finally {
     if (seq === state.seq) setLoading(false);
+    if (state.controller === controller) state.controller = null;
   }
 }
 
@@ -545,6 +547,9 @@ function fail(message) {
   state.hover = null;
   state.data = null;
   state.heatCanvas = null;
+  // Never leave the previous market's name above a failed load.
+  $("title").textContent = "Estimated liquidation clusters";
+  document.title = "Open Liq · Liquidation research";
   showBanner("error", [message]);
   $("summary").textContent = message;
   $("imbalance").querySelector("tbody").innerHTML = "";
@@ -1848,7 +1853,7 @@ function rememberMain(data) {
 function watchItem(coin) {
   const data = state.data;
   if (isLive(data) && data.coin === coin && watchKeyOf(data) === state.watch.key) return mainItem(data);
-  if (data && watchKeyOf(data) !== state.watch.key) return null;
+  if (!data || watchKeyOf(data) !== state.watch.key) return null;
   return state.watch.items[coin] || null;
 }
 
@@ -2107,7 +2112,7 @@ async function replayPreset(span, label) {
 function autoRefresh() {
   // Live views only: never while a replay span loads, plays or is paused.
   // Hidden tabs keep refreshing only so price alerts can fire.
-  if ((document.hidden && !state.alertOn) || pastView() || state.replay || state.replayController) return;
+  if ((document.hidden && !state.alertOn) || pastView() || state.replay || state.replayController || state.controller) return;
   load("auto");
 }
 
@@ -2316,11 +2321,15 @@ function togglePlay() {
   }
 }
 
-function stepReplay(delta) {
+function stepReplay(delta, to) {
   const r = state.replay;
   if (!r) return;
   r.playing = false;
-  showFrame(r.idx + delta);
+  r.idx = clamp(to == null ? r.idx + delta : to, 0, r.frames - 1);
+  syncReplay();
+  clearTimeout(r.stepTimer);
+  // Fetch only where the user settles: dragging or holding an arrow key sends one request.
+  r.stepTimer = setTimeout(() => { if (state.replay === r && !r.playing) showFrame(r.idx); }, 150);
 }
 
 function wireReplay() {
@@ -2332,15 +2341,12 @@ function wireReplay() {
     if (state.replay) state.replay.speed = Number($("rp-speed").value) || 2;
   });
   $("rp-scrub").addEventListener("input", () => {
-    const r = state.replay;
-    if (!r) return;
-    r.playing = false;
-    showFrame(Number($("rp-scrub").value));
+    stepReplay(0, Number($("rp-scrub").value));
   });
   document.addEventListener("keydown", (event) => {
     if (!state.replay) return;
     const target = event.target;
-    if (target && (target.closest("input, select, textarea, button") || target.isContentEditable)) return;
+    if (target && (target.closest("input, select, textarea, button, summary, a") || target.isContentEditable)) return;
     if (event.key === " ") {
       event.preventDefault();
       togglePlay();
@@ -2610,6 +2616,7 @@ function wire() {
 
   canvas.addEventListener("pointerdown", (event) => {
     if (!state.data || !state.layout) return;
+    if (event.pointerType === "touch") updateHover(event.clientX, event.clientY);
     canvas.setPointerCapture(event.pointerId);
     state.drag = {
       touch: event.pointerType === "touch",
@@ -2641,8 +2648,8 @@ function wire() {
   const endDrag = () => { state.drag = null; };
   canvas.addEventListener("pointerup", endDrag);
   canvas.addEventListener("pointercancel", endDrag);
-  canvas.addEventListener("pointerleave", () => {
-    if (state.drag) return;
+  canvas.addEventListener("pointerleave", (event) => {
+    if (state.drag || event.pointerType === "touch") return;
     state.hover = null;
     tip.hidden = true;
     requestDraw();

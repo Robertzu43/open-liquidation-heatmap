@@ -518,6 +518,9 @@ def background_refresh_checks(browser, url: str) -> None:
         page.wait_for_function(f"state.seq > {seq}", timeout=3000)
         seq = page.evaluate("() => { state.alertOn = false; return state.seq; }")
         page.wait_for_timeout(400)
+        # A load still in flight is not doubled; once idle, returning to a stale view refreshes at once.
+        page.wait_for_function("state.controller === null", timeout=15000)
+        seq = page.evaluate("state.seq")
         assert page.evaluate(show) == seq + 1, "Returning to a view older than the auto interval refreshes at once"
         page.evaluate("setAuto(60)")
         page.wait_for_function("document.getElementById('loading').hidden")
