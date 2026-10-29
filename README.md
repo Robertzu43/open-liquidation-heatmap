@@ -92,7 +92,7 @@ The three models are different leverage assumptions, not better and worse versio
 
 Traders use a liquidation map as context: where forced orders could add to a move, where to set an alert, and how venues compare. It does not tell you direction or timing.
 
-The **Model**, **Display** and **Research** panels hold advanced controls. Hover or tap to inspect, use the Price/Time zoom selector and +/− buttons, and reset with `0`. Zoomed heatmaps show crisp bin boundaries; finer display bins do not prove greater model accuracy. Keyboard and touch affordances are described alongside the chart. Mobile vertical gestures scroll the page; horizontal gestures pan the chart.
+The **Model**, **Display**, **Research** and **Replay** panels hold advanced controls: scenarios, display and alert options, exports, and historical as-of views with replay. Hover or tap to inspect, use the Price/Time zoom selector and +/− buttons, and reset with `0`. Zoomed heatmaps show crisp bin boundaries; finer display bins do not prove greater model accuracy. Keyboard and touch affordances are described alongside the chart. Mobile vertical gestures scroll the page; horizontal gestures pan the chart.
 
 <p align="center"><img src="docs/assets/mobile.png" width="320" alt="Open Liq mobile chart and analysis with live OKX BTC/USDT market data"></p>
 

@@ -18,6 +18,11 @@ Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchange
 - The model summary says "short/long liquidation cluster" instead of "shelf". The numbers are the same.
 - Live views refresh every 60 seconds by default.
 - Disclaimers are one footer line plus collapsible Source & quality details.
+- Side colors are consistent everywhere: short liquidation clusters and liquidated shorts are green, long clusters and liquidated longs are red. The 0.3 sidebar cards and level tags used the opposite colors.
+- All venues moved from the Research panel into the venue picker. As-of views and replay moved from the Research panel into the new Replay panel.
+- Replay keeps candles in view: each frame can widen the price axis, and it never narrows during playback.
+- The main map retries a busy server twice before showing an error, and side requests (context, liquidations, watchlist) are sequenced after the map so one browser stays within the 4 expensive-request slots.
+- The CI Python job runs `ruff check` (pyflakes, syntax and bugbear rules) before the tests.
 - The three new routes have `/api/` aliases, use the 4 expensive-request slots, the 60-second cooperative budget, 400 `invalid_request` validation and strict finite JSON.
 - The README leads with how to read the chart; methodology and evidence stay in the linked docs.
 
