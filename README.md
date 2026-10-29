@@ -186,7 +186,7 @@ liqmap-research export /tmp/open-liq-captures/*.json > /tmp/features.csv
 python examples/research.py
 ```
 
-The [research guide](docs/VALIDATION.md) explains tamper-evident hashes, normalized reference input, chronological held-out diagnostics and why reconstructed archives cannot establish historical publication times. It includes a strategy input contract for costs/slippage; the toolkit does not place trades.
+The [research guide](docs/VALIDATION.md) explains tamper-evident hashes, normalized reference input, chronological held-out diagnostics and why reconstructed archives cannot establish historical publication times. The toolkit does not place trades.
 
 ## Measured performance
 

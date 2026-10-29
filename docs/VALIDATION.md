@@ -22,7 +22,7 @@ python examples/research.py --output /tmp/open-liq-research-example
 python -m liqmap.research --help
 ```
 
-The example writes a capture, `features.csv`, a normalized reference, an evaluation input and a strategy input-contract example. Every input is labeled synthetic. Repeating it in the same directory refuses to overwrite the existing identical capture. Choose another output directory for another run. Without `--output`, files live only in a temporary directory.
+The example writes a capture, `features.csv`, a normalized reference, and an evaluation input. Every input is labeled synthetic. Repeating it in the same directory refuses to overwrite the existing identical capture. Choose another output directory for another run. Without `--output`, files live only in a temporary directory.
 
 ## Capture, inspect and replay
 
@@ -108,9 +108,3 @@ Requirements and reported behavior:
 - The scaffold verifies timing and arithmetic on supplied data; it cannot establish that timestamps or predictions were honestly constructed. Overlapping test horizons and serial correlation require a suitable block/cluster uncertainty analysis. The scaffold intentionally returns no unsupported confidence interval.
 
 Treat event detection, cluster visitation, timing and strategy PnL as different targets. A touched predicted price does not establish accurate liquidation size or an executable profitable trade. Exchange liquidation event feeds can be incomplete or sampled; absence in an incomplete feed is not a verified negative label. Evaluate missingness and coverage before scoring. Open Liq's `/api/v1/liquidations` is such a feed: OKX only, at most the 1,000 most recent filled orders per request, priced at the bankruptcy price, with `coverage.truncated` set when older orders were not fetched. Keep its `coverage` object with any label derived from it, and do not score OKX events against an aggregate or another venue's estimate as if they covered that venue.
-
-## Strategy evaluation contract (user-owned simulator required)
-
-The example's `strategy-input-contract.example.json` describes a future/user-owned simulator interface; the MAE diagnostic does not consume it and does not simulate executions. Require market/venue, timestamped decisions, known signal availability, executable fill prices/quantities, position-sizing/leverage policy, order delay and partial-fill policy. Declare **fees and slippage in basis points per fill**, funding charges, and missing-data treatment before evaluating a strategy. Do not treat them as zero by omission.
-
-Compare the same frozen strategy using price/OI-only predictions and using additional liquidation features on identical held-out windows. Report gross and net PnL, fees, slippage, funding, turnover, trade count, drawdown, sample/regime coverage, and uncertainty appropriate for dependent returns. Keep trial counts and parameter searches in the audit trail. The included synthetic costs are interface placeholders, not a recommendation for any exchange or account. No real strategy outcomes, operational uptime or provider replacement claims have been established by these tools.

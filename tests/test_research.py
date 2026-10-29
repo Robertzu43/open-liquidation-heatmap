@@ -3,6 +3,7 @@ import copy
 import csv
 import io
 import json
+from pathlib import Path
 import subprocess
 import sys
 
@@ -319,3 +320,11 @@ def test_finite_inputs_cannot_produce_nonfinite_agreement_or_evaluation():
     with pytest.raises(ValueError, match='finite'):
         research.evaluate(rows, train_end=180, test_start=200,
                           feature='signal', units='normalized-score')
+
+
+def test_research_example_writes_only_inputs_the_toolkit_reads(tmp_path):
+    example = Path(__file__).resolve().parents[1] / 'examples' / 'research.py'
+    result = subprocess.run([sys.executable, str(example), '--output', str(tmp_path)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)['evidence'] == 'synthetic interface test only'
+    assert sorted(path.name for path in tmp_path.iterdir()) == ['captures', 'evaluation.json', 'features.csv', 'normalized-reference.json']
