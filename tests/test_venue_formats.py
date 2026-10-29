@@ -1,13 +1,17 @@
 """Binance and Bybit parsers fed the exchanges' own documented and captured responses.
 
 Every fixture below is copied verbatim from the cited source (retrieved
-2026-10-29). Tests monkeypatch ``data._get_json`` (and ``data._window`` where a
-fetcher builds its own grid); nothing here contacts an exchange.
+2026-10-29). Offline tests monkeypatch ``data._get_json`` (and ``data._window``
+where a fetcher builds its own grid); nothing here contacts an exchange unless
+RUN_NETWORK=1 selects the live tests at the end of the file.
 """
 from __future__ import annotations
 
 import json
 import math
+import os
+import time
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -517,3 +521,102 @@ def test_binance_documented_and_captured_errors_are_named(monkeypatch):
     monkeypatch.setattr(data, "_get_json", lambda *args, **kwargs: (403, None))
     with pytest.raises(DataError, match="rate-limited"):
         market._binance_get("/fapi/v1/premiumIndex", {"symbol": "BTCUSDT"}, "BTCUSDT")
+
+
+# ---------------------------------------------------------------------------
+# Live checks: opt-in with RUN_NETWORK=1. A regional block skips; a working venue must parse.
+# ---------------------------------------------------------------------------
+
+live = pytest.mark.skipif(os.environ.get("RUN_NETWORK") != "1", reason="network test; set RUN_NETWORK=1")
+
+
+@contextmanager
+def venue_reachable():
+    """Skip when the venue refuses this network (HTTP 451/403 surface as "not reachable")."""
+    try:
+        yield
+    except DataError as exc:
+        if "not reachable" in str(exc):
+            pytest.skip(str(exc))
+        raise
+
+
+def assert_recent_closed_bars(series, now_ms):
+    bar_ms = int(series.bar_seconds) * 1000
+    assert (np.diff(series.times) == bar_ms).all()
+    last_close = int(series.times[-1]) + bar_ms
+    assert last_close <= now_ms + 60_000
+    assert now_ms - last_close < 2 * bar_ms + 15 * 60_000
+
+
+@pytest.mark.network
+@live
+@pytest.mark.parametrize("range_key", ["12h", "180d"])
+def test_live_bybit_fetch_btc(range_key):
+    spec = range_spec(range_key)
+    with venue_reachable():
+        loaded = data.fetch_bybit("BTC", "BTCUSDT", spec)
+    series, now_ms = loaded.series, time.time() * 1000
+    assert loaded.source == "bybit" and series.exchange == "bybit"
+    assert len(series.times) >= 0.9 * spec["seconds"] // spec["bar_seconds"]
+    assert_recent_closed_bars(series, now_ms)
+    assert (series.close > 0).all() and (series.high >= series.low).all() and series.volume_usd.sum() > 0
+    native = series.oi_base[series.oi_observed]
+    # 180d uses 4-hour open interest over about six cursor pages; coverage proves the cursor works.
+    assert series.oi_observed.mean() > 0.9
+    assert (native > 0).all() and 1_000 < np.median(native) < 1_000_000  # BTC, one side
+    assert (series.oi_usd[series.oi_observed] > 0).all()
+
+
+@pytest.mark.network
+@live
+def test_live_bybit_open_interest_rows_carry_single_side():
+    now_ms = int(time.time() * 1000)
+    with venue_reachable():
+        rows = data._bybit_open_interest("BTCUSDT", "1h", now_ms - 6 * HOUR_MS, now_ms)
+    assert rows
+    for row in rows:
+        assert abs(int(row["timestamp"]) - now_ms) < 7 * HOUR_MS
+        both, single = float(row["openInterest"]), float(row["singleOpenInterest"])
+        assert both > 0 and single == pytest.approx(both / 2, rel=0.01)
+
+
+@pytest.mark.network
+@live
+@pytest.mark.parametrize("bars", [144, 600])
+def test_live_binance_fold(bars):
+    with venue_reachable():
+        server = market._binance_get("/fapi/v1/time", None, "BTCUSDT")
+    now_ms = time.time() * 1000
+    assert abs(int(server["serverTime"]) - now_ms) < 5 * 60_000
+    grid = data.make_grid(data.history_end_open(int(now_ms // 1000), 300), bars, 300)
+    raw = data._fold_binance_live("BTCUSDT", "5m", grid)
+    assert raw is not None, "Binance answered /fapi/v1/time but the live fold failed"
+    closes = np.isfinite(raw.close)
+    assert closes.mean() > 0.98 and (raw.close[closes] > 0).all() and raw.volume[closes].sum() > 0
+    # 600 bars need two openInterestHist and takerlongshortRatio pages; coverage shows paging works.
+    oi = np.isfinite(raw.oi)
+    assert oi.mean() > 0.95 and (raw.oi[oi] > 0).all() and (raw.oi_base[oi] > 0).all()
+    assert 1_000 < np.median(raw.oi_base[oi]) < 1_000_000
+    shares = raw.share[np.isfinite(raw.share)]
+    assert shares.size > 0.9 * bars and ((shares > 0) & (shares < 1)).all()
+    assert now_ms - (raw.last_candle_ms + 300_000) < 15 * 60_000
+
+
+@pytest.mark.network
+@live
+@pytest.mark.parametrize("exchange", ["binance", "bybit"])
+def test_live_context_payload(exchange):
+    market._context_cache.clear()
+    with venue_reachable():
+        payload = market.context_payload(exchange, "BTC")
+    [venue] = payload["venues"]
+    now_ms = time.time() * 1000
+    assert venue["ok"] is True and venue["error"] is None
+    assert venue["mark_price"] > 0 and math.isfinite(venue["funding_rate"]) and abs(venue["funding_rate"]) < 0.05
+    assert 1_000 < venue["open_interest_base"] < 1_000_000
+    assert venue["open_interest_usd"] == pytest.approx(venue["open_interest_base"] * venue["mark_price"], rel=0.05)
+    assert venue["funding_interval_hours"] in (1, 2, 4, 8)
+    assert now_ms - 60_000 < venue["next_funding_time"] <= now_ms + venue["funding_interval_hours"] * HOUR_MS + 60_000
+    assert abs(venue["observed_at"] - now_ms) < 10 * 60_000
+    assert payload["open_interest_usd_total"] == pytest.approx(venue["open_interest_usd"])
