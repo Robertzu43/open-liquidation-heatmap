@@ -37,8 +37,12 @@ const state = {
   threshold: 0.85,
   showMap: false,
   showCandles: true,
-  auto: 0,
+  showLiqs: true,
+  alertOn: false,
+  alertPct: 0.5,
+  auto: 60,
   timezone: "utc",
+  watchlist: ["BTC", "ETH", "SOL"],
   data: null,
   view: { i0: -0.5, i1: 10, lo: 0, hi: 1 },
   timeFull: true,
@@ -61,6 +65,16 @@ const state = {
   replay: null,
   replaySeq: 0,
   replayController: null,
+  // Side requests (context, liquidations, watchlist) never replace the chart.
+  sideSeq: 0,
+  sideController: null,
+  context: null,
+  liqs: null,
+  watchSeq: 0,
+  watchController: null,
+  watch: { key: "", items: {}, at: 0, sig: "" },
+  alerts: {},
+  fundingNext: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -72,6 +86,13 @@ const banner = $("banner");
 // Past views and bar choice are Binance pair-only; bars must give 2 to 3,000 per range.
 const BAR_S = { "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400 };
 const RANGE_S = { "12h": 43200, "24h": 86400, "3d": 259200, "7d": 604800, "30d": 2592000, "90d": 7776000, "180d": 15552000, "1y": 31536000, "2y": 63072000 };
+const DEFAULT_BAR = { "12h": "5m", "24h": "5m", "3d": "15m", "7d": "1h", "30d": "4h", "90d": "4h", "180d": "12h", "1y": "1d", "2y": "1d" };
+const VENUES = ["okx", "binance", "bybit", "demo", "aggregate"];
+const VENUE_NAMES = { okx: "OKX", binance: "Binance", bybit: "Bybit", demo: "Demo", aggregate: "All venues" };
+const AUTO_CHOICES = [0, 30, 60, 300];
+const WATCH_MAX = 6;
+const WATCH_MIN_MS = 20000;
+const COIN_RE = /^[A-Z0-9]{1,16}$/;
 
 
 function barFits(range, bar) {
@@ -82,6 +103,29 @@ function barFits(range, bar) {
 
 function historyOn() {
   return state.exchange === "binance" && state.mode === "pair";
+}
+
+function pastView() {
+  return historyOn() && state.asof != null;
+}
+
+// "All venues" is the aggregate: exchange "aggregate" always travels with mode "symbol".
+function normalizeVenue() {
+  if (state.mode === "symbol" || state.exchange === "aggregate") {
+    state.exchange = "aggregate";
+    state.mode = "symbol";
+  } else {
+    state.mode = "pair";
+  }
+}
+
+function setVenue(value) {
+  state.exchange = VENUES.includes(value) ? value : "okx";
+  state.mode = state.exchange === "aggregate" ? "symbol" : "pair";
+}
+
+function reducedMotion() {
+  return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 }
 
 function cotInputValue(seconds) {
@@ -141,6 +185,45 @@ function fmtUsd(value) {
   if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
   if (abs >= 1e3) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
   return sign + "$" + abs.toFixed(0);
+}
+
+function num(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+// Signed percent with a true minus sign, e.g. +1.56% / −0.24%.
+function fmtPct(value, digits) {
+  if (!num(value)) return "—";
+  const d = digits == null ? 2 : digits;
+  const text = Math.abs(value).toFixed(d);
+  if (Number(text) === 0) return (0).toFixed(d) + "%";
+  return (value < 0 ? "−" : "+") + text + "%";
+}
+
+// Funding is a fraction per interval: 0.0001 is +0.0100%.
+function fmtRate(rate) {
+  if (!num(rate)) return "—";
+  const text = Math.abs(rate * 100).toFixed(4);
+  if (Number(text) === 0) return "0.0000%";
+  return (rate < 0 ? "−" : "+") + text + "%";
+}
+
+function fmtCountdown(ms) {
+  if (!(ms > 0)) return "now";
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return String(h).padStart(2, "0") + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+}
+
+// Clock time, with the date when it is not today in the chosen zone.
+function fmtClock(ms) {
+  const zone = timeZone();
+  const day = (value) => new Intl.DateTimeFormat("en-GB", { timeZone: zone, day: "2-digit", month: "short" }).format(new Date(value));
+  const clock = new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(ms));
+  const prefix = day(ms) === day(Date.now()) ? "" : day(ms) + " ";
+  return prefix + clock + " " + (state.timezone === "local" ? "local" : "UTC");
 }
 
 function fmtPx(value) {
@@ -224,8 +307,12 @@ function persist() {
       threshold: state.threshold,
       showMap: state.showMap,
       showCandles: state.showCandles,
-      auto: state.auto,
+      showLiqs: state.showLiqs,
+      alertOn: state.alertOn,
+      alertPct: state.alertPct,
+      autoRefresh: state.auto,
       timezone: state.timezone,
+      watchlist: state.watchlist,
     }));
   } catch (_err) {
     /* private mode */
@@ -238,9 +325,8 @@ function restore() {
     const raw = localStorage.getItem(STORE);
     if (!raw) return;
     const saved = JSON.parse(raw);
-    const exchanges = ["okx", "binance", "demo"];
     const ranges = ["12h", "24h", "3d", "7d", "30d", "90d", "180d", "1y", "2y"];
-    if (exchanges.includes(saved.exchange)) state.exchange = saved.exchange;
+    if (VENUES.includes(saved.exchange)) state.exchange = saved.exchange;
     if (saved.coin) state.coin = String(saved.coin).toUpperCase();
     if (ranges.includes(saved.range)) state.range = saved.range;
     if ([1, 2, 3].includes(Number(saved.model))) state.model = Number(saved.model);
@@ -250,20 +336,37 @@ function restore() {
     if (Number.isFinite(saved.threshold)) state.threshold = clamp(saved.threshold, 0, 1);
     if (typeof saved.showMap === "boolean") state.showMap = saved.showMap;
     if (typeof saved.showCandles === "boolean") state.showCandles = saved.showCandles;
+    if (typeof saved.showLiqs === "boolean") state.showLiqs = saved.showLiqs;
+    if (typeof saved.alertOn === "boolean") state.alertOn = saved.alertOn;
+    if (Number.isFinite(saved.alertPct)) state.alertPct = clamp(saved.alertPct, 0.05, 10);
     if (["utc", "local"].includes(saved.timezone)) state.timezone = saved.timezone;
-    if (saved.auto != null) state.auto = Number(saved.auto) || 0;
+    // A stored choice wins, Off included. Older builds always stored auto: 0,
+    // so only a positive legacy value counts as a choice.
+    if (AUTO_CHOICES.includes(Number(saved.autoRefresh))) state.auto = Number(saved.autoRefresh);
+    else if (AUTO_CHOICES.includes(Number(saved.auto)) && Number(saved.auto) > 0) state.auto = Number(saved.auto);
+    if (Array.isArray(saved.watchlist)) {
+      const list = [];
+      saved.watchlist.forEach((coin) => {
+        const id = String(coin || "").toUpperCase();
+        if (COIN_RE.test(id) && !list.includes(id) && list.length < WATCH_MAX) list.push(id);
+      });
+      state.watchlist = list;
+    }
   } catch (_err) {
     /* ignore broken storage */
   }
+  normalizeVenue();
 }
 
 function restoreUrl() {
   const params = new URLSearchParams(location.search);
-  if (["okx", "binance", "demo"].includes(params.get("exchange"))) state.exchange = params.get("exchange");
+  if (VENUES.includes(params.get("exchange"))) setVenue(params.get("exchange"));
   if (/^[A-Za-z0-9]{1,16}$/.test(params.get("coin") || "")) state.coin = params.get("coin").toUpperCase();
   if (params.get("range") in RANGE_S) state.range = params.get("range");
   if ([1, 2, 3].includes(Number(params.get("model")))) state.model = Number(params.get("model"));
-  if (["pair", "symbol"].includes(params.get("mode"))) state.mode = params.get("mode");
+  // Older links used ?mode=symbol for the aggregate; it still means All venues.
+  if (params.get("mode") === "symbol") setVenue("aggregate");
+  normalizeVenue();
   if (THEMES[params.get("theme")]) state.theme = params.get("theme");
   if (["utc", "local"].includes(params.get("tz"))) state.timezone = params.get("tz");
   if (params.has("threshold") && Number.isFinite(Number(params.get("threshold")))) state.threshold = clamp(Number(params.get("threshold")), 0, 1);
@@ -291,13 +394,16 @@ function updateUrl() {
 function announce(message) { $("announcement").textContent = message; }
 
 function syncControls() {
-  $("exchange").value = state.exchange;
+  $("exchange").value = state.mode === "symbol" ? "aggregate" : state.exchange;
   $("coin").value = state.coin;
   $("range").value = state.range;
   $("threshold").value = String(state.threshold);
   $("th-val").textContent = state.threshold.toFixed(2);
   $("liqmap").checked = state.showMap;
   $("candles").checked = state.showCandles;
+  $("liqs").checked = state.showLiqs;
+  $("alert-on").checked = state.alertOn;
+  if (document.activeElement !== $("alert-pct")) $("alert-pct").value = String(state.alertPct);
   $("auto").value = String(state.auto);
   $("timezone").value = state.timezone;
   $("timezone-note").textContent = zoneLabel() + " · event times";
@@ -308,17 +414,9 @@ function syncControls() {
     button.classList.toggle("on", on);
     button.setAttribute("aria-pressed", on ? "true" : "false");
   });
-  document.querySelectorAll("#mode-toggle button").forEach((button) => {
-    button.classList.toggle("on", button.dataset.mode === state.mode);
-    button.setAttribute("aria-pressed", String(button.dataset.mode === state.mode));
-  });
-  const symbolMode = state.mode === "symbol";
-  $("exchange").value = symbolMode ? "aggregate" : state.exchange;
-  $("exchange").disabled = symbolMode;
-  $("exchange-field").classList.toggle("disabled", symbolMode);
   const canTravel = historyOn();
   $("history-controls").hidden = !canTravel;
-  $("history-note").textContent = canTravel ? "Replay uses reconstructed Binance archives. Set an As of and an optional end time. Archive availability is not proof of point-in-time collection." : "Historical as-of and replay are available for Binance single-venue data. Choose Binance to explore reconstructed history.";
+  $("history-note").textContent = canTravel ? "Custom span: set As of and an optional To, then Load replay. Archive availability is not proof of point-in-time collection." : "Custom As of and replay need Binance single venue. The presets above switch to it for you.";
   $("bar").value = state.bar;
   $("bar").disabled = !canTravel;
   $("bar-field").classList.toggle("disabled", !canTravel);
@@ -403,10 +501,12 @@ async function load(reason) {
   stopReplay();
   const seq = ++state.seq;
   if (state.controller) state.controller.abort();
+  // The map goes first: side requests in flight give their server slots back.
+  cancelSide();
   const controller = new AbortController();
   state.controller = controller;
   const quiet = reason === "auto" && state.data;
-  const label = `Loading ${state.mode === "symbol" ? "aggregate" : state.exchange.toUpperCase()} · ${state.coin} · ${rangeLabel(state.range)}`;
+  const label = `Loading ${VENUE_NAMES[state.exchange] || state.exchange.toUpperCase()} · ${state.coin} · ${rangeLabel(state.range)}`;
   setLoading(true, quiet ? "Refreshing…" : label);
   const params = mapParams();
   try {
@@ -415,6 +515,7 @@ async function load(reason) {
     if (seq !== state.seq) return;
     if (!response.ok) throw new Error(body.error || "Request failed");
     applyPayload(body);
+    afterLoad(body, reason);
   } catch (err) {
     if (err.name === "AbortError" || seq !== state.seq) return;
     fail(err.message || "Could not load this map.");
@@ -441,7 +542,14 @@ function fail(message) {
   $("data-status").className = "status error";
   $("provenance").textContent = "No current dataset. Refresh to retry the selected source.";
   $("quality-detail").textContent = "";
+  $("source-brief").textContent = "No current dataset";
   $("chart-price").textContent = "";
+  cancelSide();
+  renderReading(null);
+  renderMarket();
+  renderLiqNote();
+  renderWatch();
+  syncReplayBar();
   announce("Data unavailable. " + message);
   drawMessage(message);
 }
@@ -511,6 +619,10 @@ function applyPayload(data) {
   const serious = data.stale || (!data.asof && lines.some((line) => /lag|left out|archive|synthetic|only go back/i.test(line)));
   showBanner(serious ? "warn" : "info", lines);
   renderAnalysis(data);
+  renderReading(data);
+  renderMarket();
+  renderLiqNote();
+  syncReplayBar();
   renderHow(data.model);
   canvas.setAttribute("aria-label", (data.analysis || {}).summary || data.title);
   announce("Loaded " + data.title + ". " + $("data-status").textContent);
@@ -553,14 +665,19 @@ function renderProvenance(data) {
     return item && item.total > 0 ? `${Math.round(item.observed / item.total * 100)}% ${label} observed` : null;
   }).filter(Boolean);
   const history = metadata.insufficient_history ? ` Inventory starts at ${fmtStamp(metadata.warmup_anchor_ms || data.times[0], true)}; earlier positions are unknown.` : "";
+  $("source-brief").textContent = `${demo ? "Synthetic demo" : sources} · quality ${status}`;
   $("quality-detail").textContent = `Quality: ${status}. ${demo ? "Use the demo to explore controls; its levels are not market evidence." : "Generation time is not observation freshness. " + covered.join(" · ") + ". Historical availability: " + (quality.historical_availability || "unknown") + "."}${history}`;
 }
 
 function renderAnalysis(data) {
   const analysis = data.analysis || {};
-  $("summary").textContent = (analysis.summary || "").replace(/liquidity/gi, "exposure");
+  $("summary").textContent = (analysis.summary || "")
+    .replace(/liquidity/gi, "exposure")
+    .replace(/\bshelves\b/g, "liq clusters")
+    .replace(/\bshelf\b/g, "liq cluster");
   $("chart-price").textContent = analysis.price == null ? "" : "$" + fmtPx(analysis.price);
-  $("chart-context").textContent = rangeLabel(state.range) + " · " + (data.bar || "") + " · " + (state.timezone === "local" ? "Local" : "UTC");
+  const modelName = (data.model || {}).name || MODEL_NAMES[(data.model || {}).id] || "";
+  $("chart-context").textContent = [rangeLabel(data.range || state.range), data.bar || "", modelName, state.timezone === "local" ? "Local" : "UTC"].filter(Boolean).join(" · ");
   $("above").innerHTML = levelHtml(analysis.above);
   $("below").innerHTML = levelHtml(analysis.below);
   const imb = $("imbalance").querySelector("tbody");
@@ -580,7 +697,7 @@ function renderAnalysis(data) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = level.side === "short" ? "short" : "long";
-    button.textContent = `${level.side === "short" ? "Short" : "Long"} ${fmtPx(level.price)} · ${fmtUsd(level.usd)}`;
+    button.textContent = `${level.side === "short" ? "Short liqs" : "Long liqs"} ${fmtPx(level.price)} · ${fmtUsd(level.usd)}`;
     button.addEventListener("click", () => focusPrice(level.price));
     tags.appendChild(button);
   });
@@ -791,6 +908,7 @@ function draw() {
     ctx.drawImage(state.heatCanvas, x0, yTop, x1 - x0, yBot - yTop);
   }
   if (state.showCandles) drawCandles(ctx, L, data);
+  drawLiqDots(ctx, L, data);
   ctx.restore();
 
   drawScale(ctx, L);
@@ -958,8 +1076,8 @@ function drawLiqBars(ctx, L, data, half) {
     };
     let spotBin = 0;
     while (spotBin < bins && data.centersA[spotBin] < spot) spotBin++;
-    line("rgba(125, 206, 160, 0.95)", spotBin - 1, -1, -1, data.longA);
-    line("rgba(224, 122, 114, 0.95)", spotBin, bins, 1, data.shortA);
+    line("rgba(224, 122, 114, 0.95)", spotBin - 1, -1, -1, data.longA);
+    line("rgba(125, 206, 160, 0.95)", spotBin, bins, 1, data.shortA);
   }
   ctx.restore();
   if (L.liqW >= 80) {
@@ -1043,13 +1161,17 @@ function updateHover(clientX, clientY) {
   const usd = data.heatA[bin * data.times.length + index];
   state.hover = { x, y, index, price, bin };
   const withTime = data.bar_seconds < 86400;
+  const liq = nearestLiq(x, y, L, data);
+  const liqLine = liq
+    ? `<div class="tip-liq ${liq.side === "long" ? "long" : "short"}">${liqWord()} ${liq.side === "long" ? "long" : "short"} liq ${fmtPx(liq.price)} · ${fmtUsd(liq.usd)} · ${fmtClock(liq.ts)}</div>`
+    : "";
   tip.hidden = false;
   tip.innerHTML = `
     <div>${fmtStamp(data.times[index], withTime)}</div>
     <div>Price ${fmtPx(price)}</div>
     <div>Est. entry exposure ${fmtUsd(usd || 0)}</div>
     <div>O ${fmtPx(data.openA[index])} H ${fmtPx(data.highA[index])}</div>
-    <div>L ${fmtPx(data.lowA[index])} C ${fmtPx(data.closeA[index])}</div>`;
+    <div>L ${fmtPx(data.lowA[index])} C ${fmtPx(data.closeA[index])}</div>${liqLine}`;
   const left = x + 14;
   const top = y + 14;
   tip.style.left = (left + 220 > rect.width ? x - 200 : left) + "px";
@@ -1157,12 +1279,15 @@ function resize() {
 
 function provenanceLines() {
   const data = state.data;
-  return [
+  const lines = [
     data.title,
     `Open Liq · ${data.model.name || MODEL_NAMES[data.model.id] || "Unknown"} scenario · estimated USD exposure, not exchange position records`,
     `Source ${data.source} · event/bar ${fmtStamp(data.as_of, true)} · generated ${fmtStamp(data.generated_at, true)}`,
     `Model ${data.model_version || (data.model || {}).version || "unversioned"} · revision ${data.data_revision || data.data_fingerprint || "not provided"}`,
   ];
+  const events = liqEvents(data);
+  if (events && events.length) lines.push(`Dots: ${liqWord() === "Synthetic" ? "synthetic demo liquidation events" : "observed OKX liquidation orders"} (${events.length}), not modeled.`);
+  return lines;
 }
 
 function displayedExportStem() {
@@ -1187,7 +1312,8 @@ function snapshot() {
   if (!state.data) return;
   const out = document.createElement("canvas");
   const width = Math.max(state.cssW, 900);
-  const pad = 116;
+  const lines = provenanceLines();
+  const pad = 24 + 23 * lines.length;
   out.width = Math.round(width * state.dpr);
   out.height = canvas.height + Math.round(pad * state.dpr);
   const ctx = out.getContext("2d");
@@ -1195,7 +1321,7 @@ function snapshot() {
   ctx.fillStyle = "#0c100f";
   ctx.fillRect(0, 0, width, out.height / state.dpr);
   ctx.drawImage(canvas, 0, pad, state.cssW, state.cssH);
-  provenanceLines().forEach((line, index) => {
+  lines.forEach((line, index) => {
     ctx.fillStyle = index === 0 ? "#e9eee8" : "#b5c2b3";
     ctx.font = index === 0 ? "16px sans-serif" : "11px sans-serif";
     ctx.fillText(line, 16, 25 + index * 23, width - 32);
@@ -1223,13 +1349,677 @@ function exportResearch() {
   announce("Research JSON exported with source payload and provenance.");
 }
 
+/* Trader context: reading line, market strip, observed liquidations, watchlist
+   and alerts. These read side endpoints that may be missing on an older server;
+   every one of them degrades to "—" or a hidden strip and never touches the map. */
+
+function isLive(data) {
+  return Boolean(data) && data.asof == null && !data.replay;
+}
+
+function dataKey(data) {
+  return data ? `${data.exchange}|${data.mode}|${data.coin}|${data.range}` : "";
+}
+
+function watchKeyOf(data) {
+  return data ? `${data.exchange}|${data.mode}|${data.range}|${(data.model || {}).id}` : "";
+}
+
+function displayedMatchesState() {
+  const data = state.data;
+  return Boolean(data) && (data.model || {}).id === state.model && data.exchange === state.exchange &&
+    data.coin === state.coin && data.range === state.range && data.mode === state.mode;
+}
+
+async function getJson(url, signal) {
+  const response = await fetch(url, { signal });
+  let body = null;
+  try {
+    body = await response.json();
+  } catch (_err) {
+    body = null;
+  }
+  if (!response.ok || !body || typeof body !== "object") {
+    const error = new Error((body && body.error) || `HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return body;
+}
+
+function cancelSide() {
+  state.sideSeq += 1;
+  if (state.sideController) state.sideController.abort();
+  state.sideController = null;
+  state.watchSeq += 1;
+  if (state.watchController) state.watchController.abort();
+  state.watchController = null;
+}
+
+function afterLoad(data, reason) {
+  if (isLive(data)) {
+    rememberMain(data);
+    checkAlerts(data);
+  }
+  renderWatch();
+  loadSide(data, reason === "auto" || reason === "refresh");
+}
+
+// The server runs few expensive requests at once: context and liquidations go
+// after the map has applied, the watchlist after both settle.
+function loadSide(data, forceWatch) {
+  const key = dataKey(data);
+  if (!isLive(data)) {
+    state.context = null;
+    state.liqs = null;
+    renderMarket();
+    renderLiqNote();
+    requestDraw();
+    return;
+  }
+  if (state.context && state.context.key !== key) state.context = null;
+  if (state.liqs && state.liqs.key !== key) state.liqs = null;
+  renderMarket();
+  renderLiqNote();
+  const token = ++state.sideSeq;
+  if (state.sideController) state.sideController.abort();
+  const controller = new AbortController();
+  state.sideController = controller;
+  const current = () => token === state.sideSeq && isLive(state.data) && dataKey(state.data) === key;
+  const params = new URLSearchParams({ exchange: data.exchange, symbol: data.coin, mode: data.mode });
+  const context = getJson("/api/v1/context?" + params.toString(), controller.signal).then((body) => {
+    if (!current()) return;
+    state.context = { key, body };
+    renderMarket();
+  }, (err) => {
+    if (err.name === "AbortError" || !current()) return;
+    // Keep this market's last good value through a busy or failed refresh.
+    if (!state.context || state.context.key !== key || !state.context.body) state.context = { key, body: null, status: err.status || 0 };
+    renderMarket();
+  });
+  let liqs = Promise.resolve();
+  if (state.showLiqs) {
+    params.set("range", data.range);
+    liqs = getJson("/api/v1/liquidations?" + params.toString(), controller.signal).then((body) => {
+      if (!current()) return;
+      state.liqs = { key, body };
+      renderLiqNote();
+      requestDraw();
+    }, (err) => {
+      if (err.name === "AbortError" || !current()) return;
+      if (!state.liqs || state.liqs.key !== key || !state.liqs.body) state.liqs = { key, body: null, status: err.status || 0 };
+      renderLiqNote();
+      requestDraw();
+    });
+  }
+  Promise.allSettled([context, liqs]).then(() => {
+    if (token !== state.sideSeq) return;
+    if (state.sideController === controller) state.sideController = null;
+    loadWatchlist(forceWatch);
+  });
+}
+
+function loadWatchlist(force) {
+  const data = state.data;
+  if (!isLive(data) || state.replay || state.replayController) return;
+  const list = state.watchlist.slice();
+  if (!list.length) return;
+  const key = watchKeyOf(data);
+  const sig = key + "|" + list.join(",");
+  if (!force && state.watch.sig === sig && Date.now() - state.watch.at < WATCH_MIN_MS) return;
+  const token = ++state.watchSeq;
+  if (state.watchController) state.watchController.abort();
+  const controller = new AbortController();
+  state.watchController = controller;
+  const params = new URLSearchParams({
+    exchange: data.exchange, range: data.range, model: String(data.model.id), mode: data.mode, symbols: list.join(","),
+  });
+  getJson("/api/v1/watchlist?" + params.toString(), controller.signal).then((body) => {
+    if (token !== state.watchSeq || watchKeyOf(state.data) !== key) return;
+    if (state.watch.key !== key) state.watch = { key, items: {}, at: 0, sig: "" };
+    (Array.isArray(body.items) ? body.items : []).forEach((item) => {
+      const coin = item ? String(item.coin || "").toUpperCase() : "";
+      if (COIN_RE.test(coin)) state.watch.items[coin] = item;
+    });
+    state.watch.at = Date.now();
+    state.watch.sig = sig;
+    renderWatch();
+  }, (err) => {
+    if (err.name === "AbortError" || token !== state.watchSeq) return;
+    // Back off; chips keep what the main map already told us.
+    state.watch.at = Date.now();
+    state.watch.sig = sig;
+    renderWatch();
+  }).finally(() => {
+    if (state.watchController === controller) state.watchController = null;
+  });
+}
+
+function ratio5(analysis) {
+  const rows = analysis && Array.isArray(analysis.imbalance) ? analysis.imbalance : [];
+  return rows.find((row) => Number(row.window_pct) === 5) || null;
+}
+
+function fillRead(button, cluster, side) {
+  const word = side === "short" ? "short" : "long";
+  const px = button.querySelector(".rl-px");
+  const dist = button.querySelector(".rl-d");
+  const usd = button.querySelector(".rl-u");
+  if (!cluster || !num(cluster.price)) {
+    button.disabled = true;
+    button.dataset.price = "";
+    px.textContent = state.data ? "none in window" : "—";
+    dist.textContent = "";
+    usd.textContent = "";
+    button.setAttribute("aria-label", `No ${word} liquidation cluster ${side === "short" ? "above" : "below"} price in this window`);
+    return;
+  }
+  button.disabled = false;
+  button.dataset.price = String(cluster.price);
+  px.textContent = fmtPx(cluster.price);
+  dist.textContent = fmtPct(cluster.distance_pct, 2);
+  usd.textContent = fmtUsd(cluster.usd);
+  button.setAttribute("aria-label", `Nearest ${word} liquidation cluster ${fmtPx(cluster.price)}, ${fmtPct(cluster.distance_pct, 2)} from price, about ${fmtUsd(cluster.usd)} modeled. Focus the chart on this price.`);
+}
+
+function renderReading(data) {
+  const analysis = data ? data.analysis : null;
+  fillRead($("read-short"), analysis ? analysis.above : null, "short");
+  fillRead($("read-long"), analysis ? analysis.below : null, "long");
+  const row = ratio5(analysis);
+  let text = "—";
+  if (row) {
+    if (num(row.short_to_long)) text = row.short_to_long.toFixed(2) + "×";
+    else if (row.short_usd > 0 && !(row.long_usd > 0)) text = "shorts only";
+    else if (row.long_usd > 0 && !(row.short_usd > 0)) text = "longs only";
+  }
+  $("read-ratio").querySelector("b").textContent = text;
+  $("read-ratio").title = row
+    ? `Within ±5% of price: modeled short liqs ${fmtUsd(row.short_usd)}, long liqs ${fmtUsd(row.long_usd)}. Above 1× means more modeled short liquidations overhead than long liquidations underneath.`
+    : "Modeled short liquidation exposure within ±5% of price divided by long exposure";
+}
+
+function showMk(id, on) {
+  $(id).hidden = !on;
+}
+
+function fmtHours(hours) {
+  return hours >= 1 ? `${Number(hours.toFixed(2))}h` : `${Math.round(hours * 60)}m`;
+}
+
+function fundingOf(body, data) {
+  const venues = Array.isArray(body.venues) ? body.venues.filter(Boolean) : [];
+  const ok = venues.filter((venue) => venue.ok && num(venue.funding_rate));
+  const aggregate = data.mode === "symbol";
+  let rate = null;
+  let next = null;
+  let hours = null;
+  if (aggregate) {
+    rate = num(body.funding_rate_oi_weighted) ? body.funding_rate_oi_weighted : null;
+    const times = ok.map((venue) => venue.next_funding_time).filter((t) => num(t) && t > Date.now());
+    next = times.length ? Math.min(...times) : null;
+    const spans = [...new Set(ok.map((venue) => venue.funding_interval_hours).filter(num))];
+    hours = spans.length === 1 ? spans[0] : null;
+  } else {
+    const venue = ok.find((item) => item.exchange === data.exchange) || (ok.length === 1 ? ok[0] : null);
+    if (venue) {
+      rate = venue.funding_rate;
+      next = num(venue.next_funding_time) ? venue.next_funding_time : null;
+      hours = num(venue.funding_interval_hours) ? venue.funding_interval_hours : null;
+    }
+  }
+  if (rate == null) return null;
+  const lines = venues.map((venue) => {
+    const name = venue.name || VENUE_NAMES[venue.exchange] || venue.exchange;
+    if (!venue.ok || !num(venue.funding_rate)) return `${name}: unavailable${venue.error ? " (" + venue.error + ")" : ""}`;
+    return `${name}: ${fmtRate(venue.funding_rate)}${num(venue.funding_interval_hours) ? " per " + fmtHours(venue.funding_interval_hours) : ""}` +
+      `${num(venue.next_funding_time) ? " · next " + fmtClock(venue.next_funding_time) : ""}` +
+      `${num(venue.open_interest_usd) ? " · OI " + fmtUsd(venue.open_interest_usd) : ""}`;
+  });
+  if (aggregate) lines.unshift(`Open-interest-weighted funding ${fmtRate(rate)}`);
+  if (body.synthetic) lines.push("Synthetic demo values.");
+  if (body.note) lines.push(String(body.note));
+  lines.push("Positive funding: longs pay shorts.");
+  return { rate, next, hours, label: aggregate ? "Funding · OI-wtd" : "Funding", detail: lines.join("\n") };
+}
+
+function tickFunding() {
+  const el = $("mk-fund-t");
+  if (!state.fundingNext || $("mk-fund").hidden) {
+    el.textContent = "";
+    return;
+  }
+  el.textContent = fmtCountdown(state.fundingNext - Date.now());
+}
+
+function renderMarket() {
+  const data = state.data;
+  const host = $("market");
+  state.fundingNext = null;
+  if (!data) {
+    host.hidden = true;
+    return;
+  }
+  const mc = data.market_context && typeof data.market_context === "object" ? data.market_context : {};
+  const win = data.range || state.range;
+  const change = mc.price_change_pct;
+  showMk("mk-chg", num(change));
+  if (num(change)) {
+    $("mk-chg-k").textContent = win;
+    $("mk-chg-v").textContent = fmtPct(change, 2);
+    $("mk-chg-v").className = change >= 0 ? "up" : "down";
+    $("mk-chg").title = `Price change over the ${rangeLabel(win)} window`;
+  }
+  const live = isLive(data);
+  const body = live && state.context && state.context.key === dataKey(data) ? state.context.body : null;
+  const oi = num(mc.oi_usd) ? mc.oi_usd : body && num(body.open_interest_usd_total) ? body.open_interest_usd_total : null;
+  showMk("mk-oi", oi != null);
+  if (oi != null) {
+    const delta = mc.oi_change_pct;
+    $("mk-oi-v").textContent = fmtUsd(oi);
+    $("mk-oi-d").textContent = num(delta) ? fmtPct(delta, 1) : "";
+    $("mk-oi-d").className = num(delta) ? (delta >= 0 ? "up" : "down") : "";
+    $("mk-oi").title = `Open interest${data.mode === "symbol" ? " across venues" : ""} ${fmtUsd(oi)}` +
+      (num(delta) ? `; ${fmtPct(delta, 1)} over the ${rangeLabel(win)} window` : "");
+  }
+  const funding = live && body ? fundingOf(body, data) : null;
+  showMk("mk-fund", Boolean(funding));
+  if (funding) {
+    $("mk-fund-k").textContent = funding.label;
+    $("mk-fund-v").textContent = fmtRate(funding.rate) + (funding.hours ? " /" + fmtHours(funding.hours) : "");
+    $("mk-fund").title = funding.detail + (funding.next ? `\nNext funding ${fmtClock(funding.next)}` : "");
+    $("mk-fund-sr").textContent = ". " + funding.detail.replace(/\n/g, ". ");
+    state.fundingNext = funding.next;
+  }
+  tickFunding();
+  host.hidden = ["mk-chg", "mk-oi", "mk-fund"].every((id) => $(id).hidden);
+}
+
+function liqBody() {
+  return state.liqs && state.liqs.body ? state.liqs.body : null;
+}
+
+function liqWord() {
+  const body = liqBody();
+  return body && (body.synthetic || body.source === "demo") ? "Synthetic" : "Observed";
+}
+
+function liqEvents(data) {
+  const l = state.liqs;
+  if (!state.showLiqs || !isLive(data) || !l || l.key !== dataKey(data) || !l.body || !l.body.available) return null;
+  return Array.isArray(l.body.events) ? l.body.events : null;
+}
+
+function liqRadius(usd) {
+  return clamp(Math.sqrt(Math.max(0, Number(usd) || 0)) / 55, 2, 10);
+}
+
+// Bar i spans [times[i], times[i] + bar) and is drawn over index i - 0.5 .. i + 0.5.
+function liqIndex(ts, data) {
+  return (ts - data.times[0]) / (data.bar_seconds * 1000) - 0.5;
+}
+
+function drawLiqDots(ctx, L, data) {
+  const events = liqEvents(data);
+  if (!events || !events.length) return;
+  const n = data.times.length;
+  const scale = L.width < 520 ? 0.8 : 1;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = "rgba(12, 16, 15, 0.85)";
+  for (const event of events) {
+    if (!event || !num(event.ts) || !num(event.price)) continue;
+    const index = liqIndex(event.ts, data);
+    if (index < -0.5 || index > n - 0.5 || index < state.view.i0 - 1 || index > state.view.i1 + 1) continue;
+    const x = xOf(index, L);
+    const y = yOf(event.price, L);
+    if (y < L.plotY - 12 || y > L.plotY + L.plotH + 12) continue;
+    ctx.beginPath();
+    ctx.arc(x, y, liqRadius(event.usd) * scale, 0, Math.PI * 2);
+    ctx.fillStyle = event.side === "long" ? "rgba(224, 122, 114, 0.82)" : "rgba(125, 206, 160, 0.82)";
+    ctx.fill();
+    ctx.stroke();
+  }
+}
+
+function nearestLiq(x, y, L, data) {
+  const events = liqEvents(data);
+  if (!events || !events.length) return null;
+  const n = data.times.length;
+  let best = null;
+  let bestD = Infinity;
+  for (const event of events) {
+    if (!event || !num(event.ts) || !num(event.price)) continue;
+    const index = liqIndex(event.ts, data);
+    if (index < -0.5 || index > n - 0.5) continue;
+    const d = Math.hypot(xOf(index, L) - x, yOf(event.price, L) - y);
+    if (d <= Math.max(10, liqRadius(event.usd) + 3) && d < bestD) {
+      best = event;
+      bestD = d;
+    }
+  }
+  return best;
+}
+
+function renderLiqNote() {
+  const note = $("liq-note");
+  const data = state.data;
+  const l = state.liqs;
+  let text = "";
+  let drawn = false;
+  if (state.showLiqs && isLive(data) && l && l.key === dataKey(data)) {
+    const body = l.body;
+    if (body && body.available === false) {
+      text = "Observed liquidation orders come from OKX. Choose OKX or All venues to plot them.";
+    } else if (body && body.available) {
+      const coverage = body.coverage || {};
+      const events = Array.isArray(body.events) ? body.events : [];
+      const count = num(coverage.count) ? coverage.count : events.length;
+      const demo = body.synthetic || body.source === "demo";
+      const since = num(coverage.from_ms) ? " since " + fmtClock(coverage.from_ms) : "";
+      const unit = demo ? (count === 1 ? "event" : "events") : (count === 1 ? "order" : "orders");
+      const orders = `${count.toLocaleString("en-US")} ${unit}${coverage.truncated ? ", most recent only" : ""}`;
+      text = demo
+        ? `Synthetic demo liquidations${since} (${orders}); not exchange data.`
+        : `Observed OKX liquidations${since} (${orders})${data.mode === "symbol" ? "; OKX only, other venues not included" : ""}. Dots sit at bankruptcy price, sized by USD.`;
+      drawn = events.length > 0;
+    } else if (!body && l.status && l.status !== 404) {
+      text = "Observed liquidations are unavailable right now.";
+    }
+  }
+  note.textContent = text;
+  note.hidden = !text;
+  $("legend-liq").hidden = !drawn;
+  $("legend-liq-text").textContent = liqWord() === "Synthetic" ? "Synthetic liqs (demo)" : "Observed liqs (OKX)";
+}
+
+function mainItem(data) {
+  const analysis = data.analysis || {};
+  const mc = data.market_context || {};
+  const pick = (cluster) => (cluster && num(cluster.price) ? { price: cluster.price, distance_pct: cluster.distance_pct, usd: cluster.usd } : null);
+  const row = ratio5(analysis);
+  return {
+    coin: data.coin,
+    ok: num(analysis.price),
+    price: analysis.price,
+    price_change_pct: num(mc.price_change_pct) ? mc.price_change_pct : null,
+    above: pick(analysis.above),
+    below: pick(analysis.below),
+    short_to_long_5pct: row && num(row.short_to_long) ? row.short_to_long : null,
+    quality: (data.quality || {}).status,
+    stale: Boolean(data.stale),
+    as_of: data.as_of,
+  };
+}
+
+function rememberMain(data) {
+  const key = watchKeyOf(data);
+  if (state.watch.key !== key) state.watch = { key, items: {}, at: 0, sig: "" };
+  state.watch.items[data.coin] = mainItem(data);
+}
+
+// The chart's own coin always reads from the displayed map.
+function watchItem(coin) {
+  const data = state.data;
+  if (isLive(data) && data.coin === coin && watchKeyOf(data) === state.watch.key) return mainItem(data);
+  if (data && watchKeyOf(data) !== state.watch.key) return null;
+  return state.watch.items[coin] || null;
+}
+
+function chipHtml(coin, item) {
+  const parts = [`<b class="c-coin">${escapeHtml(coin)}</b>`];
+  if (!item || item.ok === false || !num(item.price)) {
+    parts.push('<span class="c-px">—</span>');
+    return parts.join(" ");
+  }
+  parts.push(`<span class="c-px">${fmtPx(item.price)}</span>`);
+  if (num(item.price_change_pct)) parts.push(`<span class="c-chg ${item.price_change_pct >= 0 ? "up" : "down"}">${fmtPct(item.price_change_pct, 1)}</span>`);
+  if (item.above && num(item.above.price)) parts.push(`<span class="c-up">↑${fmtPx(item.above.price)} ${fmtPct(item.above.distance_pct, 1)}</span>`);
+  if (item.below && num(item.below.price)) parts.push(`<span class="c-dn">↓${fmtPx(item.below.price)} ${fmtPct(item.below.distance_pct, 1)}</span>`);
+  return parts.join(" ");
+}
+
+function chipLabel(coin, item) {
+  const tail = coin === state.coin ? "Shown on the chart." : "Show on the chart.";
+  if (!item || item.ok === false || !num(item.price)) return `${coin}, no data yet. ${tail}`;
+  const parts = [`${coin} ${fmtPx(item.price)}`];
+  if (num(item.price_change_pct)) parts.push(`${fmtPct(item.price_change_pct, 1)} over ${rangeLabel(state.range)}`);
+  if (item.above && num(item.above.price)) parts.push(`nearest short liq cluster ${fmtPx(item.above.price)}, ${fmtPct(item.above.distance_pct, 1)}`);
+  if (item.below && num(item.below.price)) parts.push(`nearest long liq cluster ${fmtPx(item.below.price)}, ${fmtPct(item.below.distance_pct, 1)}`);
+  return parts.join(", ") + ". " + tail;
+}
+
+function renderWatch() {
+  const host = $("watch-list");
+  const active = document.activeElement;
+  const inside = Boolean(active && host.contains(active));
+  const focusCoin = inside ? active.dataset.coin : null;
+  const focusX = inside && active.classList.contains("chip-x");
+  host.innerHTML = "";
+  state.watchlist.forEach((coin) => {
+    const item = watchItem(coin);
+    const li = document.createElement("li");
+    li.className = "chip" + (coin === state.coin ? " on" : "") + (item && item.stale ? " stale" : "");
+    const main = document.createElement("button");
+    main.type = "button";
+    main.className = "chip-main";
+    main.dataset.coin = coin;
+    if (coin === state.coin) main.setAttribute("aria-current", "true");
+    main.innerHTML = chipHtml(coin, item);
+    main.setAttribute("aria-label", chipLabel(coin, item));
+    if (item && item.ok === false && item.error) main.title = String(item.error);
+    else if (item && item.stale) main.title = "Source data is stale";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "chip-x";
+    remove.dataset.coin = coin;
+    remove.setAttribute("aria-label", `Remove ${coin} from watchlist`);
+    remove.title = `Remove ${coin}`;
+    remove.textContent = "×";
+    li.append(main, remove);
+    host.appendChild(li);
+  });
+  const add = $("watch-add");
+  add.hidden = !COIN_RE.test(state.coin) || state.watchlist.includes(state.coin) || state.watchlist.length >= WATCH_MAX;
+  add.textContent = "+ Add " + state.coin;
+  add.setAttribute("aria-label", `Add ${state.coin} to watchlist`);
+  if (focusCoin) {
+    const again = host.querySelector(`${focusX ? ".chip-x" : ".chip-main"}[data-coin="${focusCoin}"]`);
+    if (again) again.focus();
+  }
+}
+
+function switchCoin(next) {
+  if (!COIN_RE.test(next || "")) return;
+  if (next === state.coin && state.data && !state.replay) return;
+  stopReplay();
+  state.coin = next;
+  $("coin").value = next;
+  state.timeFull = true;
+  state.priceDirty = false;
+  persist();
+  renderWatch();
+  load("coin");
+}
+
+function addWatch() {
+  const coin = state.coin;
+  if (!COIN_RE.test(coin) || state.watchlist.includes(coin) || state.watchlist.length >= WATCH_MAX) return;
+  state.watchlist.push(coin);
+  persist();
+  renderWatch();
+  announce(`${coin} added to watchlist.`);
+  const chip = $("watch-list").querySelector(`.chip-main[data-coin="${coin}"]`);
+  if (chip) chip.focus();
+}
+
+function removeWatch(coin) {
+  const index = state.watchlist.indexOf(coin);
+  if (index < 0) return;
+  state.watchlist.splice(index, 1);
+  persist();
+  renderWatch();
+  announce(`${coin} removed from watchlist.`);
+  const chips = $("watch-list").querySelectorAll(".chip-main");
+  const next = chips[Math.min(index, chips.length - 1)];
+  (next || ($("watch-add").hidden ? $("coin") : $("watch-add"))).focus();
+}
+
+let toastTimer = 0;
+
+function showToast(text, side) {
+  const toast = $("toast");
+  toast.className = "toast " + (side || "");
+  toast.hidden = false;
+  $("toast-text").textContent = text;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hideToast, 12000);
+}
+
+function hideToast() {
+  clearTimeout(toastTimer);
+  $("toast").hidden = true;
+}
+
+function notifySupported() {
+  return typeof window.Notification === "function";
+}
+
+function syncAlertNote() {
+  let text = "";
+  if (state.alertOn) {
+    if (!notifySupported()) text = "Live views only · in-page alerts.";
+    else if (Notification.permission === "granted") text = "Live views only · browser notifications on.";
+    else if (Notification.permission === "denied") text = "Live views only · notifications blocked, in-page alerts only.";
+    else text = "Live views only · in-page alerts.";
+  }
+  $("alert-note").textContent = text;
+}
+
+function requestNotify() {
+  try {
+    if (!notifySupported() || Notification.permission !== "default") return;
+    const result = Notification.requestPermission(syncAlertNote);
+    if (result && typeof result.then === "function") result.then(syncAlertNote, () => {});
+  } catch (_err) {
+    /* in-page alerts still work */
+  }
+}
+
+function fireAlert(data, cluster, side) {
+  const demo = data.source === "demo";
+  const title = `${demo ? "Demo · " : ""}${data.coin} near ${side} liq cluster`;
+  const body = `Price ${fmtPx((data.analysis || {}).price)} is ${fmtPct(cluster.distance_pct, 2)} from the modeled ${side} liq cluster at ${fmtPx(cluster.price)} (about ${fmtUsd(cluster.usd)}). Model estimate, not a trade signal.`;
+  showToast(`${title}. ${body}`, side);
+  try {
+    if (notifySupported() && Notification.permission === "granted") {
+      new Notification("Open Liq · " + title, { body, tag: `open-liq-${data.coin}-${side}`, icon: "/assets/logo.png" });
+    }
+  } catch (_err) {
+    /* some mobile browsers only notify from a service worker */
+  }
+}
+
+// One alert per side and cluster: it re-arms once price moves away (twice the
+// threshold) or a different cluster becomes the nearest.
+function checkAlerts(data) {
+  if (!state.alertOn || !isLive(data)) return;
+  const analysis = data.analysis || {};
+  const limit = state.alertPct;
+  [["above", "short"], ["below", "long"]].forEach(([which, side]) => {
+    const cluster = analysis[which];
+    const id = `${data.exchange}|${data.mode}|${data.coin}|${which}`;
+    const dist = cluster && num(cluster.distance_pct) && num(cluster.price) ? Math.abs(cluster.distance_pct) : null;
+    if (dist != null && dist <= limit) {
+      const last = state.alerts[id];
+      if (last != null && Math.abs(cluster.price - last) / last <= 0.0025) return;
+      state.alerts[id] = cluster.price;
+      fireAlert(data, cluster, side);
+    } else if (dist == null || dist > limit * 2) {
+      delete state.alerts[id];
+    }
+  });
+}
+
+function openHow() {
+  const how = $("how");
+  how.open = true;
+  how.scrollIntoView({ behavior: reducedMotion() ? "auto" : "smooth", block: "start" });
+  how.querySelector("summary").focus({ preventScroll: true });
+}
+
+function goLive() {
+  stopReplay();
+  state.asof = null;
+  syncControls();
+  persist();
+  load("live");
+}
+
+function syncReplayBar() {
+  const bar = $("replay-bar");
+  const r = state.replay;
+  const past = Boolean(state.data && state.data.asof != null && pastView());
+  bar.hidden = !(r || past);
+  if (bar.hidden) return;
+  $("rb-play").hidden = !r;
+  if (r) {
+    const idx = Math.max(0, r.idx);
+    $("rb-badge").textContent = "Replay";
+    $("rb-time").textContent = `${fmtStamp(frameAsof(r, idx) * 1000, r.step < 86400000)} · ${idx + 1}/${r.frames}`;
+    $("rb-play").textContent = r.playing ? "Pause" : "Play";
+    $("rb-play").setAttribute("aria-label", r.playing ? "Pause replay" : "Play replay");
+  } else {
+    $("rb-badge").textContent = "Past view";
+    $("rb-time").textContent = "As of " + fmtStamp(state.data.asof, true) + " · Binance archive";
+  }
+}
+
+// Presets keep a replay watchable: about 300 frames at most, never finer than
+// the range's own bar, and always a bar the range allows.
+function presetBar(span, range) {
+  const base = DEFAULT_BAR[range] || "5m";
+  for (const bar of ["5m", "15m", "1h", "4h", "12h", "1d"]) {
+    if (BAR_S[bar] < BAR_S[base] || span / BAR_S[bar] > 300 || !barFits(range, bar)) continue;
+    return bar === base ? "" : bar;
+  }
+  return "";
+}
+
+async function replayPreset(span, label) {
+  stopReplay();
+  const switched = !historyOn();
+  setVenue("binance");
+  if (RANGE_S[state.range] > RANGE_S["7d"]) state.range = "24h";
+  state.bar = presetBar(span, state.range);
+  const end = Math.floor(Date.now() / 300000) * 300;
+  state.asof = end - span;
+  state.timeFull = true;
+  state.priceDirty = false;
+  syncControls();
+  $("to-input").value = cotInputValue(end);
+  persist();
+  const panel = $("replay-settings");
+  const summary = panel.querySelector("summary");
+  const hadFocus = panel.contains(document.activeElement);
+  panel.open = false;
+  if (hadFocus) summary.focus();
+  announce(`Loading ${label} replay from the Binance archive${switched ? "; switched to Binance single venue" : ""}.`);
+  const pending = startReplay(false);
+  const seq = state.replaySeq;
+  await pending;
+  if (seq !== state.replaySeq || !state.replay) return;
+  if (document.activeElement === summary || document.activeElement === document.body) $("rb-play").focus();
+  if (!state.replay.playing && !reducedMotion()) togglePlay();
+}
+
 function setAuto(seconds) {
   if (state.timer) clearInterval(state.timer);
   state.timer = 0;
   state.auto = seconds;
   if (seconds > 0) {
     state.timer = setInterval(() => {
-      if (document.hidden || state.asof != null || state.replay) return;
+      // Live views only: never while a replay span loads, plays or is paused.
+      if (document.hidden || pastView() || state.replay || state.replayController) return;
       load("auto");
     }, seconds * 1000);
   }
@@ -1257,10 +2047,11 @@ function syncReplay() {
     $("rp-scrub").value = String(r.idx);
     $("rp-time").textContent = `${fmtStamp(frameAsof(r, r.idx) * 1000, r.step < 86400000)} · ${r.idx + 1}/${r.frames}`;
   } else if (!canTravel) {
-    $("rp-time").textContent = "Replay is Binance pair only";
+    $("rp-time").textContent = "Replay is Binance single venue only";
   } else {
     $("rp-time").textContent = state.asof == null ? "Set As of, then Load replay" : "Ready to load";
   }
+  syncReplayBar();
 }
 
 function stopReplay() {
@@ -1288,6 +2079,7 @@ async function startReplay(keepIdx) {
   state.replayController = controller;
   state.seq += 1;
   if (state.controller) state.controller.abort();
+  cancelSide();
   const toText = $("to-input").value;
   const params = new URLSearchParams({ symbol: state.coin, range: state.range, from: String(state.asof) });
   if (state.bar) params.set("bar", state.bar);
@@ -1319,8 +2111,13 @@ async function startReplay(keepIdx) {
   } catch (err) {
     if (err.name === "AbortError" || seq !== state.replaySeq) return;
     const message = err.message || "Could not load the replay.";
-    showBanner("error", [message]);
-    announce("Replay unavailable. " + message);
+    // A preset may have switched venue; never leave another venue's map labelled as this one.
+    if (!displayedMatchesState()) {
+      fail(message);
+    } else {
+      showBanner("error", [message]);
+      announce("Replay unavailable. " + message);
+    }
   } finally {
     if (seq === state.replaySeq) {
       state.replayController = null;
@@ -1375,9 +2172,7 @@ async function showFrame(idx) {
     r.playing = false;
     syncReplay();
     const message = err.message || "Could not load this frame.";
-    const data = state.data;
-    if (!data || data.model.id !== state.model || data.exchange !== state.exchange ||
-        data.coin !== state.coin || data.range !== state.range || data.mode !== state.mode) {
+    if (!displayedMatchesState()) {
       fail(message);
     } else {
       showBanner("error", [message]);
@@ -1474,18 +2269,9 @@ function wire() {
       }
     });
   });
-  document.querySelectorAll("#mode-toggle button").forEach((button) => {
-    button.addEventListener("click", () => {
-      stopReplay();
-      state.mode = button.dataset.mode;
-      syncControls();
-      persist();
-      load("mode");
-    });
-  });
   $("exchange").addEventListener("change", () => {
     stopReplay();
-    state.exchange = $("exchange").value;
+    setVenue($("exchange").value);
     state.timeFull = true;
     state.priceDirty = false;
     syncControls();
@@ -1517,12 +2303,11 @@ function wire() {
     persist();
     load("asof");
   });
-  $("live").addEventListener("click", () => {
-    stopReplay();
-    state.asof = null;
-    syncControls();
-    persist();
-    load("live");
+  $("live").addEventListener("click", goLive);
+  $("rb-live").addEventListener("click", goLive);
+  $("rb-play").addEventListener("click", togglePlay);
+  document.querySelectorAll(".preset").forEach((button) => {
+    button.addEventListener("click", () => replayPreset(Number(button.dataset.span), button.textContent.trim()));
   });
   const coin = $("coin");
   const commitCoin = () => {
@@ -1534,6 +2319,7 @@ function wire() {
     state.timeFull = true;
     state.priceDirty = false;
     persist();
+    renderWatch();
     load("coin");
   };
   coin.addEventListener("change", commitCoin);
@@ -1566,7 +2352,9 @@ function wire() {
     if (state.data) applyPayload(state.data);
   });
   document.addEventListener("keydown", event => {
-    if (event.key === "Escape") document.querySelectorAll(".advanced > details[open]").forEach(panel => { panel.open = false; panel.querySelector("summary").focus(); });
+    if (event.key !== "Escape") return;
+    if (!$("toast").hidden) hideToast();
+    document.querySelectorAll(".advanced > details[open]").forEach(panel => { panel.open = false; panel.querySelector("summary").focus(); });
   });
   document.querySelectorAll(".advanced > details").forEach(panel => panel.addEventListener("toggle", () => {
     if (panel.open) document.querySelectorAll(".advanced > details").forEach(other => { if (other !== panel) other.open = false; });
@@ -1621,6 +2409,57 @@ function wire() {
     persist();
     requestDraw();
   });
+  $("liqs").addEventListener("change", () => {
+    state.showLiqs = $("liqs").checked;
+    persist();
+    renderLiqNote();
+    requestDraw();
+    // Fetch on demand: the overlay is not requested while it is off.
+    if (state.showLiqs && isLive(state.data) && !state.replay && !state.replayController &&
+        (!state.liqs || state.liqs.key !== dataKey(state.data))) loadSide(state.data, false);
+  });
+  $("alert-on").addEventListener("change", () => {
+    state.alertOn = $("alert-on").checked;
+    state.alerts = {};
+    persist();
+    if (state.alertOn) {
+      requestNotify();
+      if (state.data) checkAlerts(state.data);
+    }
+    syncAlertNote();
+  });
+  $("alert-pct").addEventListener("change", () => {
+    const value = Number($("alert-pct").value);
+    if (Number.isFinite(value) && value > 0) state.alertPct = Math.round(clamp(value, 0.05, 10) * 100) / 100;
+    $("alert-pct").value = String(state.alertPct);
+    state.alerts = {};
+    persist();
+    if (state.alertOn && state.data) checkAlerts(state.data);
+  });
+  $("toast-close").addEventListener("click", hideToast);
+  $("how-link").addEventListener("click", openHow);
+  $("caption-info").addEventListener("click", openHow);
+  ["read-short", "read-long"].forEach((id) => $(id).addEventListener("click", () => {
+    const price = Number($(id).dataset.price);
+    if (price > 0) focusPrice(price);
+  }));
+  $("watch-list").addEventListener("click", (event) => {
+    const remove = event.target.closest(".chip-x");
+    if (remove) {
+      removeWatch(remove.dataset.coin);
+      return;
+    }
+    const chip = event.target.closest(".chip-main");
+    if (chip) switchCoin(chip.dataset.coin);
+  });
+  $("watch-list").addEventListener("keydown", (event) => {
+    const chip = event.target.closest(".chip-main");
+    if (chip && (event.key === "Delete" || event.key === "Backspace")) {
+      event.preventDefault();
+      removeWatch(chip.dataset.coin);
+    }
+  });
+  $("watch-add").addEventListener("click", addWatch);
   $("auto").addEventListener("change", () => setAuto(Number($("auto").value) || 0));
   wireReplay();
   $("fit").addEventListener("click", () => {
@@ -1727,6 +2566,10 @@ buildSwatches();
 syncControls();
 setAuto(state.auto);
 wire();
+renderWatch();
+renderReading(null);
+syncAlertNote();
+setInterval(tickFunding, 1000);
 resize();
 bootStatus();
 load("boot");
