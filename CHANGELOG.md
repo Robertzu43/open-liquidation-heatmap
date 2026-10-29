@@ -24,11 +24,12 @@ Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchange
 - OKX keeps only about the last day of liquidation orders; ranges older than that report `coverage.truncated` and the chart marks where the dots begin.
 - An invalid watchlist symbol fails as its own item; the other symbols still load.
 - Replay spans stop at the newest bar Binance actually has, so custom spans past a lagging archive no longer offer frames that fail.
-- Server warnings and the PNG command use UTC instead of a fixed UTC−5 offset. The startup line prints the host the server is bound to.
+- Server warnings use UTC instead of a fixed UTC−5 offset. The startup line prints the host the server is bound to.
 - Replay presets ask the server for the newest span Binance can serve (`/api/v1/replay?span=`). Where the live Binance API is blocked, they replay the archive's newest data and say so, instead of stale frames.
 - The main map retries a busy server twice before showing an error, and side requests (context, liquidations, watchlist) are sequenced after the map so one browser stays within the 4 expensive-request slots.
 - `ruff check` (pyflakes, syntax and bugbear rules) is part of local verification.
 - The GitHub Actions workflow is removed. Verification runs locally with the commands in the README.
+- The legacy `heatmap.py` PNG command and the matplotlib runtime dependency are removed; the browser exports PNG. matplotlib is only in the `dev` extra now, for `scripts/benchmark.py`. Unused `liqmap.model` helpers went with it: `liq_price_long`, `liq_price_short`, `fade_swept`, `bin_intensity` and the `bybit_uta` venue.
 - The three new routes have `/api/` aliases, use the 4 expensive-request slots, the 60-second cooperative budget, 400 `invalid_request` validation and strict finite JSON.
 - The README leads with how to read the chart; methodology and evidence stay in the linked docs.
 
