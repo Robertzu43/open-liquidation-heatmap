@@ -17,6 +17,7 @@ import logging
 import math
 import os
 import re
+import socket
 import threading
 import time
 import zipfile
@@ -345,7 +346,43 @@ def _get_json(url: str, params: dict | None = None, timeout: tuple[float, float]
             payload = None
         check_deadline()
         return status, payload
-    raise DataError(f"Could not reach {_host(url)} after {retries} tries ({last}).")
+    raise DataError(f"Could not reach {_host(url)} after {retries} tries: {_why(last)}")
+
+
+def _why(exc: Exception | None) -> str:
+    """Why a request failed, in English rather than the operating system's language."""
+    if isinstance(exc, DataError):
+        return f"{exc}."
+    if isinstance(exc, requests.exceptions.ProxyError):
+        reason = "the proxy did not connect"
+    elif isinstance(exc, requests.exceptions.SSLError):
+        reason = "the secure connection could not be verified"
+    elif isinstance(exc, requests.exceptions.Timeout):
+        reason = "it did not answer in time"
+    else:
+        causes = _causes(exc)
+        if any(isinstance(c, ConnectionResetError) for c in causes):
+            reason = "the connection was cut before it answered"
+        elif any(isinstance(c, socket.gaierror) for c in causes):
+            reason = "its address could not be looked up (DNS)"
+        elif any(isinstance(c, ConnectionRefusedError) for c in causes):
+            reason = "the connection was refused"
+        else:
+            reason = "the connection failed"
+    return f"{reason}. A firewall, antivirus, VPN or network filter may be blocking it; see Troubleshooting in the README."
+
+
+def _causes(exc: BaseException | None) -> list[BaseException]:
+    """``exc`` and every exception wrapped in it by requests and urllib3."""
+    found: list[BaseException] = []
+    stack: list[object] = [exc]
+    while stack:
+        item = stack.pop()
+        if not isinstance(item, BaseException) or any(item is seen for seen in found):
+            continue
+        found.append(item)
+        stack.extend([item.__cause__, item.__context__, getattr(item, "reason", None), *item.args])
+    return found
 
 
 def _head_ok(url: str) -> bool:

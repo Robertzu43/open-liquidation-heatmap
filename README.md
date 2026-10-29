@@ -68,6 +68,15 @@ For offline exploration, open `http://127.0.0.1:8765/?exchange=demo&coin=BTC&ran
 
 On Windows, create the environment with `py -3 -m venv .venv`, then activate it with `.venv\Scripts\activate` and install with `python -m pip install .`. Running directly from the checkout remains supported with `pip install -r requirements.txt` followed by `python -m liqmap.server`.
 
+## Troubleshooting
+
+**"Could not reach www.okx.com"** (or `api.bybit.com`, `fapi.binance.com`). Open Liq connects to each exchange straight from your computer, so anything that blocks your computer from an exchange blocks Open Liq too.
+
+1. Open the exchange's time check in your browser: [OKX](https://www.okx.com/api/v5/public/time), [Bybit](https://api.bybit.com/v5/market/time), [Binance](https://fapi.binance.com/fapi/v1/time). A working one shows one short line of JSON with a timestamp.
+2. **The browser fails too:** your network, internet provider or country blocks that exchange. Pick another venue, use a VPN that covers the whole computer (a browser extension covers only the browser), or explore the demo. Binance history for Replay and As of comes from `data.binance.vision`, which often works where the live APIs don't.
+3. **The browser works but Open Liq doesn't:** a firewall or antivirus is probably blocking Python. Allow Python (`python.exe` on Windows) through it, then refresh.
+4. **You need a proxy:** Open Liq uses the `HTTPS_PROXY` environment variable and, on Windows, a manually set system proxy. Set the variable in the terminal that starts `liqmap`: `set HTTPS_PROXY=http://host:port` in Command Prompt, `$env:HTTPS_PROXY = "http://host:port"` in PowerShell, `export HTTPS_PROXY=http://host:port` on macOS and Linux.
+
 ## Read the chart in 30 seconds
 
 ![Open Liq desktop interface with live OKX BTC/USDT market data](docs/assets/desktop.png)

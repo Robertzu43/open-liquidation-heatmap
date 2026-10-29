@@ -554,6 +554,61 @@ def test_failing_call_pauses_only_before_another_attempt(monkeypatch, failure):
     assert pauses == [0.35, 0.7]
 
 
+
+def _network_failure(kind):
+    """The exception shapes requests raises, captured from real sockets."""
+    import socket
+
+    import requests
+    from urllib3.exceptions import MaxRetryError, NewConnectionError, ProtocolError
+    if kind == 'reset':  # As reported from a Spanish Windows machine.
+        return requests.ConnectionError(ProtocolError('Connection aborted.', ConnectionResetError(
+            10054, 'Se ha forzado la interrupción de una conexión existente por el host remoto')))
+    if kind == 'dns':
+        return requests.ConnectionError(MaxRetryError(None, '/', socket.gaierror(-2, 'Name or service not known')))
+    if kind == 'refused':
+        refused = NewConnectionError(None, 'Failed to establish a new connection')
+        refused.__cause__ = ConnectionRefusedError(111, 'Connection refused')
+        return requests.ConnectionError(MaxRetryError(None, '/', refused))
+    if kind == 'timeout':
+        return requests.ReadTimeout('read timed out')
+    if kind == 'tls':
+        return requests.exceptions.SSLError('certificate verify failed')
+    return requests.exceptions.ProxyError('Unable to connect to proxy')
+
+
+@pytest.mark.parametrize('kind, reason', [
+    ('reset', 'the connection was cut before it answered'),
+    ('dns', 'its address could not be looked up (DNS)'),
+    ('refused', 'the connection was refused'),
+    ('timeout', 'it did not answer in time'),
+    ('tls', 'the secure connection could not be verified'),
+    ('proxy', 'the proxy did not connect'),
+])
+def test_network_failures_say_why_in_plain_english(monkeypatch, kind, reason):
+    monkeypatch.setattr(data, '_retry_pause', lambda seconds: None)
+
+    def get(*args, **kwargs):
+        raise _network_failure(kind)
+
+    monkeypatch.setattr(data._SESSION, 'get', get)
+    with pytest.raises(data.DataError) as caught:
+        data._get_json('https://www.okx.com/api/v5/market/candles', retries=3)
+    message = str(caught.value)
+    assert message.startswith(f'Could not reach www.okx.com after 3 tries: {reason}.')
+    assert 'firewall, antivirus, VPN' in message and 'Troubleshooting in the README' in message
+    # No raw exception text, which arrives in the operating system's language.
+    assert 'Se ha forzado' not in message and 'Error(' not in message
+
+
+def test_an_exchange_error_status_is_not_blamed_on_the_network(monkeypatch):
+    monkeypatch.setattr(data, '_retry_pause', lambda seconds: None)
+    monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: _Body(503, b'{}'))
+    with pytest.raises(data.DataError) as caught:
+        data._get_json('https://www.okx.com/api/v5/market/candles', retries=2)
+    assert str(caught.value) == 'Could not reach www.okx.com after 2 tries: www.okx.com returned HTTP 503.'
+
+
 def test_cold_archive_downloads_run_32_at_once_on_pooled_connections(monkeypatch):
     workers = []
     real = data.ThreadPoolExecutor
