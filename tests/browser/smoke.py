@@ -762,6 +762,7 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
             page.wait_for_timeout(150)
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Horizontal overflow at {width}"
             if width < 400:
+                assert page.get_by_role("heading", level=1).count() == 1, "Phones keep the h1 for screen readers"
                 assert page.locator("#chart").bounding_box()["y"] <= 300
                 # Both cluster chips show in full; the ±5% ratio is either whole or hidden.
                 clipped = page.evaluate("""() => { const host = document.getElementById('reading').getBoundingClientRect();
