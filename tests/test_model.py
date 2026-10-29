@@ -16,7 +16,6 @@ from liqmap.data import (
     make_grid,
     normalize_symbol,
     range_spec,
-    ratio_to_share,
 )
 from liqmap.model import (
     MMR,
@@ -193,16 +192,12 @@ class ParserTests(unittest.TestCase):
         self.assertEqual(int(grid[-1]), 1_000_000 * 1000)
         self.assertEqual(int(grid[1] - grid[0]), 300_000)
 
-    def test_stale_and_ratio(self):
+    def test_stale(self):
         now = 1_800_000_000
         self.assertFalse(is_stale(int((now - 60) * 1000), 300, now_s=now))
         self.assertTrue(is_stale(int((now - 2 * 86400) * 1000), 300, now_s=now))
         # A daily bar that opened 20h ago still covers the present.
         self.assertFalse(is_stale(int((now - 20 * 3600) * 1000), 86400, now_s=now))
-        self.assertAlmostEqual(ratio_to_share(1), 0.5)
-        self.assertAlmostEqual(ratio_to_share(3), 0.75)
-        self.assertTrue(np.isnan(ratio_to_share(0)))
-        self.assertTrue(np.isnan(ratio_to_share("nope")))
 
     def test_fold_candles(self):
         grid = np.array([0, 3_600_000], dtype=np.int64)

@@ -2,7 +2,7 @@
 
 ## 0.4.0 — 2026-10-29
 
-Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchanged for OKX and Binance.
+Application 0.4.0, API schema 1.0, model 2.0.0. The model itself is unchanged. Binance Flow skew inputs changed (see Fixed), and a newest bar still waiting for its open interest is left out instead of counted as a gap.
 
 ### Added
 - **Bybit** USDT perpetuals as a third live venue (`exchange=bybit`). Candles and native base-asset open interest come from the public v5 API, valued at bar close, closed bars only. Bybit's `openInterest` counts both sides of every position, so Open Liq reads its single-side figure to match OKX and Binance. Bybit has no 12-hour OI period, so 12-hour bars use the last 4-hour OI snapshot inside each closed bar. Bybit publishes no historical taker flow, so Flow skew uses its neutral fallback for Bybit; account long/short ratios are not substituted. There is no archive fallback: a geo-blocked Bybit API is reported unavailable.
@@ -28,16 +28,40 @@ Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchange
 - Replay presets ask the server for the newest span Binance can serve (`/api/v1/replay?span=`). Where the live Binance API is blocked, they replay the archive's newest data and say so, instead of stale frames.
 - The main map retries a busy server twice before showing an error, and side requests (context, liquidations, watchlist) are sequenced after the map so one browser stays within the 4 expensive-request slots.
 - `ruff check` (pyflakes, syntax and bugbear rules) is part of local verification.
-- The GitHub Actions workflow is removed. Verification runs locally with the commands in the README.
-- The legacy `heatmap.py` PNG command and the matplotlib runtime dependency are removed; the browser exports PNG. matplotlib is only in the `dev` extra now, for `scripts/benchmark.py`. Unused `liqmap.model` helpers went with it: `liq_price_long`, `liq_price_short`, `fade_swept`, `bin_intensity` and the `bybit_uta` venue.
 - The three new routes have `/api/` aliases, use the 4 expensive-request slots, the 60-second cooperative budget, 400 `invalid_request` validation and strict finite JSON.
 - The README leads with how to read the chart; methodology and evidence stay in the linked docs.
+- Tickers may be 1–16 letters or digits; OKX lists one-letter and 13-letter perpetuals. TON is no longer suggested because OKX lists no TON perpetual.
+- Open-interest coverage warnings give exact bar counts ("covers N of M bars") instead of a rounded percentage.
+- Watchlist market data loads in parallel and the models build one at a time; six demo symbols take 0.85 s instead of 3.1 s on the test machine.
+- Cold Binance archive loads download 32 files at once over pooled connections (a cold 2-year load: 53 s → 30 s on the test machine).
+- Bybit candles are one request; a window over 1,000 bars is refused instead of truncated. OKX uses `/market/candles` only, which serves the newest 1,440 bars; the longest built-in window needs 731.
+- The hover tier breakdown is skipped on views over 1,000 bars, where each hover rebuilt the model.
+- `scripts/benchmark.py` measures model build time and payload sizes only.
+
+### Fixed
+- Binance Flow skew uses each bar's whole taker buy share, the sum of taker buy quote volume over the sum of quote volume of its klines, for archive and live data alike. The archive used to read only the 5-minute row at the bar open (BTC 2025-09-10 09:00 1h: 0.29 instead of the hour's 0.49), and live data no longer needs the taker long/short ratio requests.
+- OKX sometimes publishes the newest bar's open interest seconds after its candle. Up to two trailing bars still waiting for it are left out until it arrives instead of degrading quality and being treated as missing; interior gaps are still reported.
+- All venues: each venue runs on a budget a little shorter than the request's, and a venue that runs out is left out and reported instead of failing the whole response.
+- A truncated cached or downloaded archive zip is downloaded again instead of failing every view; partial files are named per process so servers sharing a cache never write the same one. Retries no longer pause after the final attempt.
+- An installed copy serves its packaged web files. It used to serve any top-level `web` folder in site-packages instead.
+- Web: dragging the replay slider or holding an arrow key fetches one frame after 150 ms instead of one per event (most got 429); an auto-refresh no longer overrides a coin switch in progress; a tap on a phone opens the tooltip; Space on a panel header opens the panel; prices under 0.01 keep four significant digits; after a failed load the heading and watchlist no longer show the previous market; screen readers no longer hear an unchanged alert banner or every frame of a playing replay.
+
+### Security
+- The local server refuses `/api/` requests that a browser marks `Sec-Fetch-Site: cross-site` (403 `forbidden`), so another website cannot make it download exchange data from your IP. On a loopback bind the `Host` header must be `127.0.0.1`, `localhost` or `[::1]`, which blocks DNS rebinding. Same-origin pages, links from other sites to the page, curl and `--host` binds keep working.
+
+### Removed
+- `/readyz`, the readiness block in `/api/v1/status` and `/api/v1/symbols`; no client used them. `/healthz` stays.
+- `python -m liqmap`. Start the server with `liqmap` or `python -m liqmap.server`.
+- The legacy `heatmap.py` PNG command and the matplotlib runtime dependency; the browser exports PNG. matplotlib is only in the `dev` extra now, for `scripts/benchmark.py`. Unused `liqmap.model` helpers went with it: `liq_price_long`, `liq_price_short`, `fade_swept`, `bin_intensity` and the `bybit_uta` venue.
+- The GitHub Actions workflow. Verification runs locally with the commands in the README.
+- `examples/research.py` no longer writes `strategy-input-contract.example.json`, which no tool read.
+- `requirements-dev.txt`; install the `dev` extra instead. The 0.2 migration notes, the 0.3 release review and the 0.3.0 benchmark files.
 
 ### Notes
 - Historical as-of views and replay remain Binance-only.
 - Observed liquidations come from OKX only. Binance and Bybit publish liquidations only over websocket streams. Observed liquidations and funding are context; they are not model inputs.
 - Not supported: Hyperliquid and other venues without public historical open interest (the model needs OI history); contracts other than USDT-margined linear perpetuals; order placement or account access.
-- New outbound host: `api.bybit.com`. See [migration notes](docs/MIGRATION.md) and [operations](docs/OPERATIONS.md).
+- New outbound host: `api.bybit.com`. See [operations](docs/OPERATIONS.md).
 
 ## 0.3.1 — 2026-10-28
 
@@ -61,4 +85,4 @@ Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchange
 - Original Open Liq logo, reproducible benchmark and release evidence.
 
 ### Migration
-Numerical estimates differ from 0.2.0 by design. Recalibrate and re-evaluate strategy thresholds; see [migration notes](docs/MIGRATION.md). No predictive-accuracy, uptime or CoinGlass-replacement guarantee accompanies this release.
+Numerical estimates differ from 0.2.0 by design. Recalibrate and re-evaluate strategy thresholds. No predictive-accuracy, uptime or CoinGlass-replacement guarantee accompanies this release.

@@ -275,17 +275,6 @@ def live_component_stale(series: MarketSeries, now_s: float | None = None) -> bo
     return not len(indices) or is_stale(int(series.times[indices[-1]]), series.bar_seconds, now_s, 2 * int(series.bar_seconds))
 
 
-def ratio_to_share(ratio: float | str | None) -> float:
-    """Convert a long/short ratio into the long fraction. Non-positive is missing."""
-    try:
-        value = float(ratio)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return math.nan
-    if not math.isfinite(value) or value <= 0:
-        return math.nan
-    return value / (1.0 + value)
-
-
 def _host(url: str) -> str:
     return url.split("/")[2] if "://" in url else url
 

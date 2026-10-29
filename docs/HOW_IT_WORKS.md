@@ -27,7 +27,7 @@ Bybit candles and open interest come from the public v5 market API for USDT line
 
 ## Causal chronology
 
-OKX candle, OI and taker requests use UTC-aligned periods, including explicit `12Hutc` and `1Dutc` for long bars. Candles must be confirmed and match a complete requested interval ending by the captured request cutoff. Misaligned, unfinished or missing rows remain unobserved; adjacent taker intervals are not substituted. Bybit keeps only bars closed by the request time and assigns each OI snapshot to the bar that contains it (see [Bybit](#bybit-data-contract-and-oi-timing)).
+OKX candle, OI and taker requests use UTC-aligned periods, including explicit `12Hutc` and `1Dutc` for long bars. Candles must be confirmed and match a complete requested interval ending by the captured request cutoff. Misaligned, unfinished or missing rows remain unobserved; adjacent taker intervals are not substituted. Bybit keeps only bars closed by the request time and assigns each OI snapshot to the bar that contains it (see [Bybit](#bybit-data-contract-and-oi-timing)). For Binance archive history, each bar uses the 5-minute metrics row stamped at its open, which holds the open-interest snapshot taken 5 minutes after the open: never after the bar closes.
 
 For each closed bar, the engine:
 
@@ -82,7 +82,7 @@ Real venues trigger liquidation using mark price and account maintenance require
 |---|---|---|
 | 1 · Wide clusters | 5× 12%, 20× 10%, 50× 25%, 60× 53% | Neutral side allocation; no decay or volume turnover |
 | 2 · Tight magnets | 20× 30%, 60× 70% | Neutral allocation; explicit volume turnover scenario; elapsed-time decay |
-| 3 · Flow skew | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% | Taker share when observed; otherwise neutral allocation (always neutral for Bybit) |
+| 3 · Flow skew | 10× 15%, 20× 20%, 25× 20%, 50× 25%, 100× 20% | Taker share when observed; otherwise neutral allocation (always neutral for Bybit). OKX uses its taker-volume statistics; Binance uses taker-buy quote volume over quote volume across the whole bar, from the same klines live and in the archive |
 
 The weights are assumptions. Models 1 and 2 were originally selected by visual comparison with rendered CoinGlass charts, not estimated from account-level leverage or validated for trading returns. Model 3's taker direction is a prior about vulnerable exposure, not a measurement of opening-position direction. Account long/short ratios are not silently substituted for taker flow.
 
