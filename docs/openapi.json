@@ -550,10 +550,11 @@
           {
             "name": "from",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
               "type": "string"
-            }
+            },
+            "description": "Required unless span is given"
           },
           {
             "name": "to",
@@ -562,6 +563,17 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "span",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 63072000
+            },
+            "description": "Seconds to replay, ending at the newest bar Binance can serve (current when its live API answers, else the archive's newest bar). Not combined with from or to."
           }
         ],
         "responses": {

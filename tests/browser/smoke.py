@@ -9,7 +9,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import time
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -429,21 +428,22 @@ def replay_preset_regression(context, url: str, demo: dict) -> None:
         route.fulfill(json=payload)
     def replay(route):
         replay_requests.append({key: values[0] for key, values in parse_qs(urlparse(route.request.url).query).items()})
-        route.fulfill(json={"first_asof": first * 1000, "bar_seconds": 300, "frames": 3, "days": 1, "note": "Offline preset fixture"})
+        route.fulfill(json={"first_asof": first * 1000, "last_asof": (first + 600) * 1000, "bar_seconds": 300, "frames": 3, "days": 1, "note": "Offline preset fixture"})
     page.route("**/api/heatmap?*", heatmap)
     page.route("**/api/replay?*", replay)
     try:
         page.goto(url + "/?exchange=demo&coin=BTC&range=24h&model=1")
         page.wait_for_function("state.data !== null && document.getElementById('mk-fund') && !document.getElementById('legend-liq').hidden")
         page.locator("#replay-settings > summary").click()
-        now = time.time()
         page.locator("#replay-settings .preset", has_text="Last 3 days").click()
         page.wait_for_function("state.replay && state.data.replay && state.replay.idx === 2 && !state.replay.playing")
         assert page.evaluate("state.exchange === 'binance' && state.mode === 'pair' && document.getElementById('exchange').value === 'binance'")
         assert len(replay_requests) == 1, replay_requests
         request = replay_requests[0]
-        assert abs(int(request["from"]) - (now - 259200)) < 600 and abs(int(request["to"]) - now) < 600, request
+        # Presets ask the server for the newest replayable span instead of assuming the archive reaches now.
+        assert request.get("span") == "259200" and "from" not in request and "to" not in request, request
         assert request.get("bar") == "15m", request
+        assert page.evaluate(f"state.asof === {first}"), "As of shows the span the server chose"
         assert not page.locator("#replay-settings").evaluate("e => e.open"), "The panel closes so the chart is visible"
         assert page.locator("#replay-bar").is_visible() and "Replay" in page.locator("#replay-bar").text_content()
         assert page.locator("#legend-liq").is_hidden() and page.locator("#mk-fund").is_hidden(), "Live-only overlays hide during replay"

@@ -36,9 +36,10 @@ from liqmap.model import MarketSeries
 log = logging.getLogger("liqmap.data")
 
 USER_AGENT = "open-liqmap/0.4"
+# Suggestions are USDT perpetuals listed on OKX, the default venue.
 COINS = (
     "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "AVAX", "LINK", "LTC",
-    "DOT", "TON", "SUI", "APT", "ARB", "OP", "NEAR", "FIL", "PEPE", "WIF",
+    "DOT", "SUI", "APT", "ARB", "OP", "NEAR", "FIL", "PEPE", "WIF",
 )
 EXCHANGE_NAMES = {
     "okx": "OKX",
@@ -575,14 +576,14 @@ def finalize_series(
     if np.nanmax(high_s) <= np.nanmin(low_s):
         high_s = np.maximum(high_s, close_s * 1.0001)
         low_s = np.minimum(low_s, close_s * 0.9999)
-    coverage = float(oi_mask.mean()) if len(oi_s) else 0.0
+    observed_oi = int(np.count_nonzero(oi_mask))
     if oi_base is not None and not np.any(oi_mask & candle_mask):
         raise DataError(f"{exchange_name(exchange)} returned candles for {symbol} but no usable native open interest.")
     if not np.any(np.isfinite(oi_s) & (oi_s > 0)):
         raise DataError(f"{exchange_name(exchange)} returned candles for {symbol} but no open interest.")
     notes = list(warnings)
-    if coverage < 1:
-        notes.append(f"Observed valid open interest covers about {coverage:.0%} of this window; gaps rebaseline the model.")
+    if observed_oi < len(oi_mask):
+        notes.append(f"Observed valid open interest covers {observed_oi} of {len(oi_mask)} bars; gaps rebaseline the model.")
     as_of = int(times_s[-1])
     stale = is_stale(as_of, bar_seconds, now_s=now_s)
     series = MarketSeries(
@@ -1184,6 +1185,23 @@ def _latest_archive_day(symbol: str, interval: str) -> datetime | None:
         if _head_ok(kline_url) and _head_ok(metrics_url):
             return stamp
     return None
+
+
+def latest_replay_end(pair: str, spec: dict) -> tuple[int, bool]:
+    """Open of the newest bar Binance can replay, and whether it is the current bar.
+
+    The live API serves recent bars. Where it does not answer (some regions
+    block it), the newest replayable bar is the public archive's last day.
+    """
+    bar_s = int(spec["bar_seconds"])
+    now_end = history_end_open(int(time.time()), bar_s)
+    probe = _fold_binance_live(pair, spec["bar"], make_grid(now_end, 12, bar_s))
+    if probe is not None and probe.last_candle_ms is not None:
+        return probe.last_candle_ms // 1000, probe.last_candle_ms // 1000 >= now_end - bar_s
+    latest = _latest_archive_day(pair, spec["bar"])
+    if latest is None:
+        raise DataError(f"Binance has no public futures archive for {pair}. Check the coin.")
+    return min(now_end, int(latest.timestamp()) + 86400 - bar_s), False
 
 
 @dataclass

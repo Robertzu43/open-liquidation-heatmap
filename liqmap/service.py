@@ -10,6 +10,7 @@ from contextlib import contextmanager
 import math
 import threading
 import time
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -27,6 +28,7 @@ from liqmap.data import (
     check_deadline,
     exchange_name,
     is_stale,
+    latest_replay_end,
     live_component_stale,
     load_market,
     load_span,
@@ -133,9 +135,31 @@ def _span_for(coin: str, spec: dict, end_open: int):
         return hit[1]
 
 
-def replay_payload(symbol: str, range_key: str, bar: str, start: str, end: str = "") -> dict:
-    """Load a replay span once; frames are then /api/heatmap with asof and replay=1."""
+def replay_payload(symbol: str, range_key: str, bar: str, start: str, end: str = "", span: str = "") -> dict:
+    """Load a replay span once; frames are then /api/heatmap with asof and replay=1.
+
+    ``span`` (seconds) replays the newest data Binance can serve instead of
+    ``start``/``end``: up to now when its live API answers, else up to the
+    public archive's last bar.
+    """
     coin, pair = normalize_symbol(symbol)
+    note = ""
+    if span:
+        if start or end:
+            raise DataError("Use span or from/to, not both.")
+        try:
+            span_s = int(span)
+        except ValueError:
+            raise DataError("span must be a whole number of seconds.") from None
+        if not 0 < span_s <= MAX_REPLAY_DAYS * 86400:
+            raise DataError("span must be between 1 second and 730 days.")
+        spec = range_spec(range_key, bar)
+        end_open, current = latest_replay_end(pair, spec)
+        end = str(end_open + int(spec["bar_seconds"]))
+        start = str(int(end) - span_s)
+        if not current:
+            closes = datetime.fromtimestamp(int(end), tz=timezone.utc).strftime("%d %b %Y, %H:%M UTC")
+            note = f"Binance's live API did not answer from this network, so this replay ends at the archive's newest bar, {closes}."
     spec, first = resolve_view("binance", "pair", range_key, start, bar)
     if first is None:
         raise DataError("Replay needs a start time in the past.")
@@ -175,7 +199,7 @@ def replay_payload(symbol: str, range_key: str, bar: str, start: str, end: str =
         "last_asof": span.last_end_open * 1000 + bar_ms,
         "frames": span.frames,
         "days": span.days,
-        "note": span.note,
+        "note": " ".join(part for part in (note, span.note) if part),
     }
 
 

@@ -2069,12 +2069,11 @@ async function replayPreset(span, label) {
   setVenue("binance");
   if (RANGE_S[state.range] > RANGE_S["7d"]) state.range = "24h";
   state.bar = presetBar(span, state.range);
-  const end = Math.floor(Date.now() / 300000) * 300;
-  state.asof = end - span;
+  state.asof = null;
   state.timeFull = true;
   state.priceDirty = false;
   syncControls();
-  $("to-input").value = cotInputValue(end);
+  $("to-input").value = "";
   persist();
   const panel = $("replay-settings");
   const summary = panel.querySelector("summary");
@@ -2082,7 +2081,7 @@ async function replayPreset(span, label) {
   panel.open = false;
   if (hadFocus) summary.focus();
   announce(`Loading ${label} replay from the Binance archive${switched ? "; switched to Binance single venue" : ""}.`);
-  const pending = startReplay(false);
+  const pending = startReplay(false, span);
   const seq = state.replaySeq;
   await pending;
   if (seq !== state.replaySeq || !state.replay) return;
@@ -2148,7 +2147,8 @@ function stopReplay() {
   syncReplay();
 }
 
-async function startReplay(keepIdx) {
+// span (seconds) asks the server for the newest data Binance can replay; otherwise As of / To are used.
+async function startReplay(keepIdx, span) {
   const prev = state.replay;
   const idx = keepIdx && prev ? prev.idx : 0;
   stopReplay();
@@ -2159,15 +2159,24 @@ async function startReplay(keepIdx) {
   if (state.controller) state.controller.abort();
   cancelSide();
   const toText = $("to-input").value;
-  const params = new URLSearchParams({ symbol: state.coin, range: state.range, from: String(state.asof) });
+  const params = new URLSearchParams({ symbol: state.coin, range: state.range });
+  if (span) params.set("span", String(span));
+  else params.set("from", String(state.asof));
   if (state.bar) params.set("bar", state.bar);
-  if (toText) params.set("to", String(parseCotInput(toText)));
+  if (toText && !span) params.set("to", String(parseCotInput(toText)));
   setLoading(true, "Loading replay… uncached history can take a while. If the request times out, choose a shorter interval and retry.");
   try {
     const response = await fetch("/api/replay?" + params.toString(), {signal: controller.signal});
     const body = await response.json();
     if (seq !== state.replaySeq) return;
     if (!response.ok) throw new Error(body.error || "Could not load the replay.");
+    if (span) {
+      // Show the span the server chose, so a reload replays the same bars.
+      state.asof = Math.floor(body.first_asof / 1000);
+      syncControls();
+      $("to-input").value = cotInputValue(Math.floor(body.last_asof / 1000));
+      persist();
+    }
     state.replay = {
       gen: 1,
       first: body.first_asof,

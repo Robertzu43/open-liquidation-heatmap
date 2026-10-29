@@ -214,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _replay(self, query: str) -> None:
         one = self._params(query)
-        self._send_json(replay_payload(one("symbol", "BTC"), one("range", "24h"), one("bar"), one("from"), one("to")))
+        self._send_json(replay_payload(one("symbol", "BTC"), one("range", "24h"), one("bar"), one("from"), one("to"), one("span")))
 
     @staticmethod
     def _live_args(one) -> dict:

@@ -21,6 +21,7 @@ Application 0.4.0, API schema 1.0, model 2.0.0. The model's numbers are unchange
 - Side colors are consistent everywhere: short liquidation clusters and liquidated shorts are green, long clusters and liquidated longs are red. The 0.3 sidebar cards and level tags used the opposite colors.
 - All venues moved from the Research panel into the venue picker. As-of views and replay moved from the Research panel into the new Replay panel.
 - Replay keeps candles in view: each frame can widen the price axis, and it never narrows during playback.
+- Replay presets ask the server for the newest span Binance can serve (`/api/v1/replay?span=`). Where the live Binance API is blocked, they replay the archive's newest data and say so, instead of stale frames.
 - The main map retries a busy server twice before showing an error, and side requests (context, liquidations, watchlist) are sequenced after the map so one browser stays within the 4 expensive-request slots.
 - `ruff check` (pyflakes, syntax and bugbear rules) is part of local verification.
 - The GitHub Actions workflow is removed. Verification runs locally with the commands in the README.

@@ -485,3 +485,47 @@ def test_daily_live_aggregate_does_not_expire_before_two_daily_bars():
             loaded = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('1y'))
         assert loaded.venues == ['okx', 'binance']
         assert service._quality(first)['stale'] is False
+
+
+def test_replay_end_falls_back_to_archive_when_live_api_is_blocked():
+    from datetime import datetime, timezone
+    from liqmap import data
+    spec = range_spec('24h')
+    archive_day = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    now = int(archive_day.timestamp()) + 2 * 86400
+    with mock.patch.object(data.time, 'time', return_value=now), \
+         mock.patch.object(data, '_fold_binance_live', return_value=None), \
+         mock.patch.object(data, '_latest_archive_day', return_value=archive_day):
+        end_open, current = data.latest_replay_end('BTCUSDT', spec)
+    assert (end_open, current) == (int(archive_day.timestamp()) + 86400 - 300, False)
+
+
+def test_replay_end_is_current_when_live_api_answers():
+    from liqmap import data
+    spec = range_spec('24h')
+    now = 1_800_000_000
+    now_end = data.history_end_open(now, 300)
+    live = mock.Mock(last_candle_ms=now_end * 1000)
+    with mock.patch.object(data.time, 'time', return_value=now), mock.patch.object(data, '_fold_binance_live', return_value=live):
+        assert data.latest_replay_end('BTCUSDT', spec) == (now_end, True)
+
+
+def test_replay_span_replays_newest_data_and_says_when_archive_limits_it():
+    end_open = 1_793_145_300
+    loaded = mock.Mock(first_end_open=end_open - 86400, last_end_open=end_open, frames=289, days=2, note='')
+    with mock.patch.object(service, 'latest_replay_end', return_value=(end_open, False)), \
+         mock.patch.object(service, 'load_span', return_value=loaded) as load:
+        payload = service.replay_payload('BTC', '24h', '', '', '', '86400')
+    _coin, _pair, _spec, from_s, to_s = load.call_args.args
+    assert (from_s, to_s) == (end_open + 300 - 86400, end_open + 300)
+    assert payload['frames'] == 289 and payload['last_asof'] == (end_open + 300) * 1000
+    assert "did not answer" in payload['note'] and 'UTC' in payload['note']
+
+
+@pytest.mark.parametrize('start,span', [('1609459200', '86400'), ('', 'abc'), ('', '0'), ('', str(731 * 86400))])
+def test_replay_span_rejects_mixed_or_invalid_input_before_network(start, span):
+    with mock.patch.object(service, 'latest_replay_end') as probe, mock.patch.object(service, 'load_span') as load:
+        with pytest.raises(DataError):
+            service.replay_payload('BTC', '24h', '', start, '', span)
+    probe.assert_not_called()
+    load.assert_not_called()
