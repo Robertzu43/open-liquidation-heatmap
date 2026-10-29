@@ -420,6 +420,49 @@ def test_aggregate_excludes_old_venue_and_reports_degraded_quality():
     assert any('Binance' in warning for warning in quality['warnings'])
 
 
+def test_aggregate_reports_a_venue_out_of_its_budget_and_returns_the_rest(monkeypatch):
+    from liqmap import data
+    clock = [1000.0]
+    monkeypatch.setattr(data.time, 'monotonic', lambda: clock[0])
+    okx = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    okx.series.exchange, okx.source = 'okx', 'okx'
+
+    def slow_binance(*args, **kwargs):
+        while True:  # Each step of a slow download moves the clock on.
+            clock[0] += 1.0
+            data.check_deadline()
+
+    token = data.request_deadline.set(1060.0)
+    try:
+        with mock.patch.object(data, 'fetch_okx', return_value=okx), mock.patch.object(data, 'fetch_binance', side_effect=slow_binance):
+            loaded = data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('24h'))
+        assert data.check_deadline() > 0  # The request itself still had time to answer.
+    finally:
+        data.request_deadline.reset(token)
+    assert loaded.venues == ['okx']
+    assert any(warning.startswith('Binance:') and 'time budget' in warning for warning in loaded.series.warnings)
+
+
+def test_aggregate_still_fails_when_the_request_itself_is_out_of_time(monkeypatch):
+    from liqmap import data
+    clock = [1000.0]
+    monkeypatch.setattr(data.time, 'monotonic', lambda: clock[0])
+    okx = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))
+    okx.series.exchange, okx.source = 'okx', 'okx'
+
+    def out_of_time(*args, **kwargs):
+        clock[0] = 1061.0
+        data.check_deadline()
+
+    token = data.request_deadline.set(1060.0)
+    try:
+        with mock.patch.object(data, 'fetch_okx', return_value=okx), mock.patch.object(data, 'fetch_binance', side_effect=out_of_time):
+            with pytest.raises(data.RequestDeadlineExceeded):
+                data.fetch_aggregate('BTC', 'BTCUSDT', range_spec('24h'))
+    finally:
+        data.request_deadline.reset(token)
+
+
 def test_aggregate_partial_component_coverage_is_degraded():
     from liqmap import data
     first = fetch_demo('BTC', 'BTCUSDT', range_spec('24h'))

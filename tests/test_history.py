@@ -25,7 +25,8 @@ T_2021 = 1_621_468_799  # 2021-05-19 23:59:59 UTC
 
 
 def _klines(start_ms, end_ms, bar_ms):
-    return [(t, 100.0, 101.0, 99.0, 100.0, 1.0) for t in range(start_ms, end_ms, bar_ms)]
+    # Takers bought 0.6 of each bar's quote volume.
+    return [(t, 100.0, 101.0, 99.0, 100.0, 1.0, 0.6) for t in range(start_ms, end_ms, bar_ms)]
 
 
 def _metrics(start_ms, end_ms):
@@ -105,6 +106,8 @@ class ArchiveHistoryTests(unittest.TestCase):
         self.assertTrue((series.times + 900_000 <= T_2021 * 1000).all())
         # Open-only filter: each bar keeps the print stamped at its own open.
         self.assertEqual(float(series.oi_usd[-1]), float(end_open_ms))
+        # Flow is the klines' taker share, not the metrics row's 0.5.
+        self.assertEqual(float(series.long_share[-1]), 0.6)
         self.assertEqual(loaded.source, "binance-vision")
         self.assertFalse(loaded.stale)
         self.assertIn("Historical view", series.note)
@@ -163,7 +166,7 @@ class ReplaySpanTests(unittest.TestCase):
         def klines(symbol, interval, start_ms, end_ms):
             bar_ms = data.BAR_SECONDS[interval] * 1000
             rows = _klines(start_ms, end_ms, bar_ms)
-            return [(t, o + (t // bar_ms) % 7, h + (t // bar_ms) % 7, lo, c + (t // bar_ms) % 5, v) for t, o, h, lo, c, v in rows if t not in gaps]
+            return [(t, o + (t // bar_ms) % 7, h + (t // bar_ms) % 7, lo, c + (t // bar_ms) % 5, v, buy) for t, o, h, lo, c, v, buy in rows if t not in gaps]
 
         def metrics(symbol, start_ms, end_ms):
             return [row for row in _metrics(start_ms, end_ms) if row[0] not in gaps]
@@ -469,11 +472,159 @@ def test_zip_member_limit_prevents_inflating_oversized_archive(monkeypatch):
 
 def test_cached_archive_size_limit_applies_before_reading(monkeypatch,tmp_path):
     import pytest
-    monkeypatch.setattr(data,'MAX_RESPONSE_BYTES',40,raising=False)
+    allowed = _zip('fixture.csv', 'x')
+    monkeypatch.setattr(data,'MAX_RESPONSE_BYTES',len(allowed),raising=False)
     monkeypatch.setattr(data,'_cache_root',lambda:tmp_path)
-    (tmp_path/'fixture.zip').write_bytes(b'PK'+b'x'*100)
+    (tmp_path/'fixture.zip').write_bytes(b'PK'+b'x'*len(allowed))
     with pytest.raises(data.DataError,match='size limit'):
         data._cached_zip('http://127.0.0.1/fixture.zip','fixture.zip')
-    allowed = b'PK'+b'x'*38
     (tmp_path/'fixture.zip').write_bytes(allowed)
     assert data._cached_zip('http://127.0.0.1/fixture.zip','fixture.zip') == allowed
+
+
+def _zip(name, text):
+    import io
+    import zipfile
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(name, text)
+    return buf.getvalue()
+
+
+class _Body:
+    """A streamed requests response stand-in."""
+
+    headers = {}
+
+    def __init__(self, status, body=b''):
+        self.status_code = status
+        self.body = body
+
+    def iter_content(self, chunk_size):
+        yield self.body
+
+    def close(self):
+        pass
+
+
+def test_damaged_cached_zip_is_downloaded_again_and_never_cached(monkeypatch, tmp_path):
+    import pytest
+    good = _zip('fixture.csv', 'open_time,open\n' + '1,2\n' * 50)
+    truncated = good[:len(good) // 2]
+    monkeypatch.setattr(data, '_cache_root', lambda: tmp_path)
+    monkeypatch.setattr(data, '_NEG_ZIP', {})
+    (tmp_path / 'fixture.zip').write_bytes(truncated)  # e.g. a disk filled up mid-write
+    served = [truncated, good]
+    monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: _Body(200, served.pop(0)))
+    # A truncated download is refused and does not replace the cache.
+    with pytest.raises(data.DataError, match='fixture.zip'):
+        data._cached_zip('http://127.0.0.1/fixture.zip', 'fixture.zip')
+    assert (tmp_path / 'fixture.zip').read_bytes() == truncated
+    assert data._cached_zip('http://127.0.0.1/fixture.zip', 'fixture.zip') == good
+    assert (tmp_path / 'fixture.zip').read_bytes() == good
+    assert sorted(path.name for path in tmp_path.iterdir()) == ['fixture.zip']
+
+
+def test_archive_part_file_is_private_to_this_process(monkeypatch, tmp_path):
+    good = _zip('fixture.csv', 'open_time,open\n1,2\n')
+    monkeypatch.setattr(data, '_cache_root', lambda: tmp_path)
+    monkeypatch.setattr(data, '_NEG_ZIP', {})
+    monkeypatch.setattr(data._SESSION, 'get', lambda *args, **kwargs: _Body(200, good))
+    written = []
+    real_write = data.Path.write_bytes
+    monkeypatch.setattr(data.Path, 'write_bytes', lambda path, blob: written.append(path.name) or real_write(path, blob))
+    assert data._cached_zip('http://127.0.0.1/fixture.zip', 'fixture.zip') == good
+    assert written == [f'fixture.zip.{os.getpid()}.part']
+
+
+@pytest.mark.parametrize('failure', ['connection', 'http500'])
+def test_failing_call_pauses_only_before_another_attempt(monkeypatch, failure):
+    import requests
+    pauses = []
+    monkeypatch.setattr(data, '_retry_pause', pauses.append)
+
+    def get(*args, **kwargs):
+        if failure == 'connection':
+            raise requests.ConnectionError('fixture outage')
+        return _Body(500, b'{}')
+
+    monkeypatch.setattr(data._SESSION, 'get', get)
+    with pytest.raises(data.DataError, match='after 3 tries'):
+        data._get_json('http://127.0.0.1', retries=3)
+    assert pauses == [0.35, 0.7]
+
+
+def test_cold_archive_downloads_run_32_at_once_on_pooled_connections(monkeypatch):
+    workers = []
+    real = data.ThreadPoolExecutor
+    monkeypatch.setattr(data, 'ThreadPoolExecutor', lambda max_workers: workers.append(max_workers) or real(max_workers=max_workers))
+    monkeypatch.setattr(data, '_cached_zip', lambda url, rel: None)
+    data._load_vision_metrics('BTCUSDT', 0, 40 * 86_400_000)
+    assert workers == [32]
+    for prefix in ('https://data.binance.vision/', 'https://www.okx.com/'):
+        assert data._SESSION.get_adapter(prefix)._pool_maxsize == 32
+
+
+def test_archive_klines_fall_back_to_daily_files_across_a_month_boundary(monkeypatch):
+    from datetime import datetime, timezone
+    header = 'open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore\n'
+    requested = []
+
+    def cached(url, rel):
+        requested.append(rel)
+        name = rel.rsplit('/', 1)[-1]
+        if len(name) == len('BTCUSDT-12h-2025-09.zip'):
+            return None  # The monthly file is not published yet.
+        day = datetime.strptime(name[-14:-4], '%Y-%m-%d').replace(tzinfo=timezone.utc)
+        rows = ''.join(f'{int(day.timestamp() * 1000) + h * 3_600_000},1,2,0.5,1.5,10,0,15,3,4,6,0\n' for h in (0, 12))
+        return _zip(name[:-4] + '.csv', header + rows)
+
+    monkeypatch.setattr(data, '_cached_zip', cached)
+    start = int(datetime(2025, 9, 30, tzinfo=timezone.utc).timestamp() * 1000)
+    end = int(datetime(2025, 10, 2, tzinfo=timezone.utc).timestamp() * 1000)
+    rows = data._load_vision_klines('BTCUSDT', '12h', start, end)
+    days = [name.rsplit('/', 1)[-1] for name in requested if name.count('-') == 4]
+    assert days == ['BTCUSDT-12h-2025-09-29.zip', 'BTCUSDT-12h-2025-09-30.zip', 'BTCUSDT-12h-2025-10-01.zip', 'BTCUSDT-12h-2025-10-02.zip']
+    # One day of lead before the window, nothing from its end on.
+    assert [row[0] for row in rows] == [start + k * 43_200_000 for k in range(-2, 4)]
+    assert rows[0][1:] == (1.0, 2.0, 0.5, 1.5, 15.0, 6.0)
+
+
+# Real rows from data.binance.vision: BTCUSDT-1h-2025-09-10.zip and BTCUSDT-metrics-2025-09-10.zip.
+REAL_KLINES_1H = (
+    'open_time,open,high,low,close,volume,close_time,quote_volume,count,taker_buy_volume,taker_buy_quote_volume,ignore\n'
+    '1757494800000,112333.00,112395.00,112060.00,112240.30,3928.535,1757498399999,440885577.19230,81368,1935.149,217180366.67010,0\n'
+    '1757498400000,112240.30,112394.00,112163.80,112234.10,2436.028,1757501999999,273543390.39590,59772,1179.485,132445734.38020,0\n'
+)
+REAL_METRICS = (
+    'create_time,symbol,sum_open_interest,sum_open_interest_value,count_toptrader_long_short_ratio,sum_toptrader_long_short_ratio,count_long_short_ratio,sum_taker_long_short_vol_ratio\n'
+    '2025-09-10 09:00:00,BTCUSDT,90029.5810000000000000,10107804546.6582430000000000,1.73173443,2.04948200,1.49491424,0.40939300\n'
+    '2025-09-10 09:05:00,BTCUSDT,89922.1640000000000000,10082539325.2516630000000000,1.73383143,2.05498600,1.48939265,0.62051000\n'
+    '2025-09-10 09:55:00,BTCUSDT,89882.6250000000000000,10088452794.7875000000000000,1.73678325,2.06510800,1.48724470,1.10554400\n'
+    '2025-09-10 10:00:00,BTCUSDT,89914.7610000000000000,10092490270.1539360000000000,1.73754153,2.06128000,1.48747887,0.69308300\n'
+)
+
+
+def test_binance_flow_share_covers_the_whole_bar_in_archive_and_live(monkeypatch):
+    import numpy as np
+    grid = np.array([1_757_494_800_000, 1_757_498_400_000])
+    whole_bar = [217180366.6701 / 440885577.1923, 132445734.3802 / 273543390.3959]
+    monkeypatch.setattr(data, '_load_vision_klines', lambda *args: data._parse_kline_csv(REAL_KLINES_1H))
+    monkeypatch.setattr(data, '_load_vision_metrics', lambda *args: data._parse_metrics_csv(REAL_METRICS))
+    archive = data._fold_binance_archive('BTCUSDT', '1h', grid)
+    # The 09:00 metrics row covers only 09:00-09:05, when takers bought 0.29.
+    np.testing.assert_allclose(archive.share, whole_bar)
+    assert archive.oi[0] == 10107804546.658243  # Open interest still comes from the metrics row at the bar open.
+
+    live_rows = [[int(r[0]), *r[1:6], int(r[6]), r[7], int(r[8]), *r[9:]] for r in (line.split(',') for line in REAL_KLINES_1H.splitlines()[1:])]
+
+    def get_json(url, params, **kwargs):
+        if url.endswith('/fapi/v1/klines'):
+            return 200, live_rows
+        if url.endswith('/openInterestHist'):
+            return 200, [{'timestamp': int(t), 'sumOpenInterestValue': '1e10', 'sumOpenInterest': '9e4'} for t in grid if t >= params['startTime']]
+        pytest.fail(f'unexpected request {url}')
+
+    monkeypatch.setattr(data, '_get_json', get_json)
+    live = data._fold_binance_live('BTCUSDT', '1h', grid)
+    np.testing.assert_allclose(live.share, archive.share)

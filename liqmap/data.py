@@ -86,9 +86,14 @@ LIVE_OI_DAYS = 29
 # First day of Binance's public 5-minute metrics archive (2020-09-01 UTC).
 METRICS_START_S = 1_598_918_400
 STALE_AFTER_S = 18 * 3600
+# Parallel archive downloads; the session keeps as many connections open for reuse.
+ARCHIVE_WORKERS = 32
 _SYMBOL_COIN = re.compile(r"^[A-Z0-9]{1,16}$")
 _SESSION = requests.Session()
 _SESSION.headers.update({"User-Agent": USER_AGENT})
+_ADAPTER = requests.adapters.HTTPAdapter(pool_maxsize=ARCHIVE_WORKERS)
+_SESSION.mount("https://", _ADAPTER)
+_SESSION.mount("http://", _ADAPTER)
 _HEAD_CACHE: dict[str, tuple[float, bool]] = {}
 _NEG_ZIP: dict[str, float] = {}
 _HEAD_LOCK = threading.Lock()
@@ -325,12 +330,15 @@ def _read_cached_zip(path: Path) -> bytes | None:
     if len(blob) > MAX_RESPONSE_BYTES:
         raise DataError("Cached archive exceeds the size limit.")
     check_deadline()
-    return blob if blob[:2] == b"PK" else None
+    # A truncated file (full disk, killed writer) is downloaded again.
+    return blob if zipfile.is_zipfile(io.BytesIO(blob)) else None
 
 
 def _get_json(url: str, params: dict | None = None, timeout: tuple[float, float] = (5, 25), retries: int = 3):
     last: Exception | None = None
     for attempt in range(retries):
+        if attempt:
+            _retry_pause(0.35 * (2 ** (attempt - 1)))
         check_deadline()
         try:
             response = _SESSION.get(url, params=params, timeout=_request_timeout(timeout), stream=True)
@@ -338,11 +346,9 @@ def _get_json(url: str, params: dict | None = None, timeout: tuple[float, float]
             body = _response_bytes(response)
         except requests.RequestException as exc:
             last = exc
-            _retry_pause(0.35 * (2 ** attempt))
             continue
         if status == 429 or status >= 500:
             last = DataError(f"{_host(url)} returned HTTP {status}")
-            _retry_pause(0.35 * (2 ** attempt))
             continue
         try:
             payload = json.loads(body)
@@ -404,10 +410,11 @@ def _cached_zip(url: str, rel: str) -> bytes | None:
             with _HEAD_LOCK:
                 _put_metadata(_NEG_ZIP, url, time.time())
             return None
-        if response.status_code != 200 or content[:2] != b"PK":
+        if response.status_code != 200 or not zipfile.is_zipfile(io.BytesIO(content)):
             raise DataError(f"Binance archive returned HTTP {response.status_code} for {path.name}.")
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = path.with_suffix(path.suffix + ".part")
+        # Per process: servers sharing the cache never write the same part file.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.part")
         tmp.write_bytes(content)
         tmp.replace(path)
         return content
@@ -431,7 +438,7 @@ def _zip_text(blob: bytes) -> str:
 
 
 def fold_candles(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tuple[np.ndarray, ...]:
-    """Aggregate (open_ms, o, h, l, c, volume) rows into the grid. Empty bins stay NaN."""
+    """Aggregate (open_ms, o, h, l, c, volume, ...) rows into the grid. Empty bins stay NaN."""
     n = len(grid_ms)
     open_ = np.full(n, np.nan)
     high = np.full(n, np.nan)
@@ -442,7 +449,7 @@ def fold_candles(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tupl
     if n == 0:
         return open_, high, low, close, volume
     starts = np.asarray(grid_ms, dtype=np.int64)
-    for open_ms, o, h, l, c, vol in records:
+    for open_ms, o, h, l, c, vol, *_ in records:
         ts = int(open_ms)
         index = int(np.searchsorted(starts, ts, side="right") - 1)
         if index < 0 or index >= n or ts >= int(starts[index]) + bar_ms:
@@ -461,6 +468,24 @@ def fold_candles(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tupl
         if math.isfinite(vol) and vol > 0:
             volume[index] += vol
     return open_, high, low, close, volume
+
+
+def _fold_taker_share(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> np.ndarray:
+    """Long share of each bar: taker-buy quote volume over quote volume, both summed over the bar.
+
+    Rows are Binance klines (open_ms, o, h, l, c, quote_volume, taker_buy_quote_volume).
+    A row without a valid taker volume counts on neither side; a bar with none stays NaN.
+    """
+    starts = np.asarray(grid_ms, dtype=np.int64)
+    quote = np.zeros(len(starts))
+    bought = np.zeros(len(starts))
+    for row in records:
+        index = int(np.searchsorted(starts, int(row[0]), side="right") - 1)
+        if 0 <= index < len(starts) and int(row[0]) < int(starts[index]) + bar_ms and 0 <= row[6] <= row[5]:
+            quote[index] += row[5]
+            bought[index] += row[6]
+    with np.errstate(invalid="ignore"):
+        return np.where(quote > 0, bought / quote, np.nan)
 
 
 def fold_oi(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tuple[np.ndarray, np.ndarray]:
@@ -783,6 +808,7 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
     bar_ms = int(spec["bar_seconds"]) * 1000
     # Only exact source intervals represented by this UTC grid may contribute.
     closed_opens = {int(t) for t in grid if int(t) + bar_ms <= cutoff_ms}
+    # shortcut: /market/candles serves the latest 1,440 bars, covering every built-in range (max 731); page /market/history-candles if a longer range is added.
     candles = _okx_pages(
         "/api/v5/market/candles",
         {"instId": inst, "bar": bar},
@@ -790,24 +816,6 @@ def fetch_okx(coin: str, pair: str, spec: dict) -> LoadedSeries:
         300,
         "after",
     )
-    if not candles or int(candles[0][0]) > start_ms:
-        try:
-            older = _okx_pages(
-                "/api/v5/market/history-candles",
-                {"instId": inst, "bar": bar},
-                start_ms,
-                300,
-                "after",
-            )
-        except RequestDeadlineExceeded:
-            raise
-        except DataError as exc:
-            log.info("okx history candles unavailable: %s", exc)
-            older = []
-        merged = {int(row[0]): row for row in older}
-        for row in candles:
-            merged[int(row[0])] = row
-        candles = [merged[key] for key in sorted(merged)]
     oi_rows = _okx_pages(
         "/api/v5/rubik/stat/contracts/open-interest-history",
         {"instId": inst, "period": period},
@@ -1062,7 +1070,8 @@ def _parse_kline_csv(text: str) -> list[tuple]:
         try:
             open_ms = int(float(parts[0]))
             rows.append(
-                (open_ms, float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4]), float(parts[7]))
+                (open_ms, float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4]), float(parts[7]),
+                 _native_number(parts[10] if len(parts) > 10 else None))
             )
         except ValueError:
             continue
@@ -1090,10 +1099,9 @@ def _parse_metrics_csv(text: str) -> list[tuple]:
                 parsed = datetime.strptime(stamp[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
                 open_ms = int(parsed.timestamp() * 1000)
             oi_usd = float(parts[index["sum_open_interest_value"]])
-            taker = parts[index["sum_taker_long_short_vol_ratio"]] if "sum_taker_long_short_vol_ratio" in index else ""
-            share = ratio_to_share(taker)
             native = _native_number(parts[index["sum_open_interest"]]) if "sum_open_interest" in index else math.nan
-            rows.append((open_ms, oi_usd, share, native))
+            # Flow comes from the klines: a row's taker ratio covers only its own 5 minutes.
+            rows.append((open_ms, oi_usd, math.nan, native))
         except (ValueError, IndexError, KeyError):
             continue
     return rows
@@ -1170,7 +1178,7 @@ def _load_vision_metrics(symbol: str, start_ms: int, end_ms: int) -> list[tuple]
     if len(days) <= 2:
         groups = [one(day) for day in days]
     else:
-        workers = min(8, len(days))
+        workers = min(ARCHIVE_WORKERS, len(days))
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(copy_context().run, one, day) for day in days]
             groups = [future.result() for future in futures]
@@ -1291,67 +1299,40 @@ def _fold_binance_live(pair: str, bar: str, grid: np.ndarray) -> RawSeries | Non
         cursor = last + 1
     if len(oi_rows) < 2:
         return None
-    taker_at: dict[int, float] = {}
-    cursor = start_ms
-    for _ in range(20):
-        check_deadline()
-        try:
-            status, batch = _get_json(
-                f"{base}/futures/data/takerlongshortRatio",
-                {"symbol": pair, "period": bar, "startTime": cursor, "endTime": end_ms, "limit": 500},
-                timeout=(4, 8),
-                retries=1,
-            )
-        except RequestDeadlineExceeded:
-            raise
-        except DataError:
-            break
-        if status >= 400 or not isinstance(batch, list) or not batch:
-            break
-        for row in batch:
-            try:
-                buy = float(row.get("buyVol"))
-                sell = float(row.get("sellVol"))
-            except (TypeError, ValueError):
-                continue
-            total = buy + sell
-            ts = int(row.get("timestamp") or 0)
-            if total > 0 and ts:
-                taker_at[ts] = buy / total
-        last = int(batch[-1].get("timestamp") or 0)
-        if last <= cursor or last >= end_ms:
-            break
-        cursor = last + 1
     candle_records = []
     for row in klines:
         try:
             candle_records.append(
-                (int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[7]))
+                (int(row[0]), float(row[1]), float(row[2]), float(row[3]), float(row[4]), float(row[7]),
+                 _native_number(row[10] if len(row) > 10 else None))
             )
         except (TypeError, ValueError, IndexError):
             continue
     oi_records = []
     for row in oi_rows:
         try:
-            ts = int(row["timestamp"])
-            oi_records.append((ts, float(row["sumOpenInterestValue"]), taker_at.get(ts, math.nan), _native_number(row.get("sumOpenInterest"))))
+            oi_records.append((int(row["timestamp"]), float(row["sumOpenInterestValue"]), math.nan, _native_number(row.get("sumOpenInterest"))))
         except (KeyError, TypeError, ValueError):
             continue
     candles = fold_candles(candle_records, grid, bar_ms)
-    oi, share = fold_oi(oi_records, grid, bar_ms)
+    oi = fold_oi(oi_records, grid, bar_ms)[0]
+    share = _fold_taker_share(candle_records, grid, bar_ms)
     return RawSeries("binance-live", np.asarray(grid, dtype=np.int64), *candles, oi, share, _fold_native_oi(oi_records, grid, bar_ms), int(time.time() * 1000))
 
 
 def _fold_binance_archive(pair: str, bar: str, grid: np.ndarray) -> RawSeries:
-    """Archive candles and open interest on ``grid``. Bars the archive lacks stay NaN."""
+    """Archive candles, open interest and taker share on ``grid``. Bars the archive lacks stay NaN."""
     bar_ms = BAR_SECONDS[bar] * 1000
     start_ms = int(grid[0])
     end_ms = int(grid[-1]) + bar_ms
     candles = _load_vision_klines(pair, bar, start_ms, end_ms)
-    # Keep the print at each bar open, so archive and live open interest mean the same thing.
+    # Keep the metrics row stamped at each bar open. create_time starts that row's 5-minute period
+    # and its OI is the snapshot at the period's end (its value matches that 5m kline's close), so
+    # a bar uses OI from 5 minutes after its open: its close for 5m bars, never later.
     metrics = [row for row in _load_vision_metrics(pair, start_ms, end_ms) if int(row[0]) % bar_ms == 0]
     folded = fold_candles(candles, grid, bar_ms)
-    oi, share = fold_oi(metrics, grid, bar_ms)
+    oi = fold_oi(metrics, grid, bar_ms)[0]
+    share = _fold_taker_share(candles, grid, bar_ms)
     return RawSeries("binance-vision", np.asarray(grid, dtype=np.int64), *folded, oi, share, _fold_native_oi(metrics, grid, bar_ms))
 
 
@@ -1643,7 +1624,12 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
     errors: list[str] = []
     loaded_parts: list[LoadedSeries] = []
 
+    remaining = check_deadline()
+    # Each venue stops a little before the request, so a slow venue is reported, not fatal.
+    venue_deadline = None if remaining is None else request_deadline.get() - min(10.0, remaining / 2)
+
     def run(name: str):
+        request_deadline.set(venue_deadline)  # This venue's copied context only.
         if name == "okx":
             return fetch_okx(coin, pair, spec)
         if name == "bybit":
@@ -1655,9 +1641,8 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
         for name, future in futures.items():
             try:
                 loaded_parts.append(future.result())
-            except RequestDeadlineExceeded:
-                raise
             except DataError as exc:
+                check_deadline()  # Out of the request's own time: stop. A venue's own budget is just its error.
                 text = str(exc)
                 errors.append(text if text.startswith(exchange_name(name)) else f"{exchange_name(name)}: {text}")
             except Exception as exc:  # noqa: BLE001 — one venue must not sink the aggregate
