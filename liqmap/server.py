@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from liqmap import __version__
 from liqmap.data import DataError, RequestDeadlineExceeded, check_deadline, request_deadline
+from liqmap.market import context_payload, liquidations_payload, watchlist_payload
 from liqmap.service import ReplayExpired, SourceUnavailable, features_payload, levels_payload, load_heatmap, readiness_payload, replay_payload, status_payload, symbols_payload
 
 log = logging.getLogger("liqmap.server")
@@ -130,7 +131,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(payload, status=200 if payload["ok"] else 503)
                 return
             route = parsed.path.replace("/api/v1/", "/api/", 1) if parsed.path.startswith("/api/v1/") else parsed.path
-            expensive_routes = {"/api/heatmap": self._heatmap, "/api/features": self._features, "/api/levels": self._levels, "/api/replay": self._replay}
+            expensive_routes = {
+                "/api/heatmap": self._heatmap, "/api/features": self._features, "/api/levels": self._levels,
+                "/api/replay": self._replay, "/api/context": self._context, "/api/liquidations": self._liquidations,
+                "/api/watchlist": self._watchlist,
+            }
             if route in expensive_routes:
                 if not _expensive.acquire(blocking=False):
                     self._send_json({"error": "The server is busy. Retry shortly.", "code": "busy"}, status=429)
@@ -210,6 +215,22 @@ class Handler(BaseHTTPRequestHandler):
     def _replay(self, query: str) -> None:
         one = self._params(query)
         self._send_json(replay_payload(one("symbol", "BTC"), one("range", "24h"), one("bar"), one("from"), one("to")))
+
+    @staticmethod
+    def _live_args(one) -> dict:
+        return {"asof": one("asof"), "bar": one("bar"), "replay": one("replay") == "1"}
+
+    def _context(self, query: str) -> None:
+        one = self._params(query)
+        self._send_json(context_payload(one("exchange", "okx"), one("symbol", "BTC"), one("mode", "pair"), **self._live_args(one)))
+
+    def _liquidations(self, query: str) -> None:
+        one = self._params(query)
+        self._send_json(liquidations_payload(one("exchange", "okx"), one("symbol", "BTC"), one("mode", "pair"), one("range", "24h"), **self._live_args(one)))
+
+    def _watchlist(self, query: str) -> None:
+        one = self._params(query)
+        self._send_json(watchlist_payload(one("exchange", "okx"), one("range", "24h"), one("model", "1"), one("mode", "pair"), one("symbols"), **self._live_args(one)))
 
     def _static(self, url_path: str) -> None:
         if url_path in {"", "/"}:
