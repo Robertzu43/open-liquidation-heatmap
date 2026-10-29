@@ -13,3 +13,4 @@ dist/
 *.egg-info/
 !web/assets/*.png
 !docs/assets/*.png
+.claude/worktrees/
