@@ -596,6 +596,10 @@ function applyPayload(data) {
   if (!state.priceDirty && !keepView) {
     state.view.lo = data.price_view[0];
     state.view.hi = data.price_view[1];
+  } else if (!state.priceDirty) {
+    // Replay frames only widen the price range, so new candles stay in view without the axis jumping back.
+    state.view.lo = Math.min(state.view.lo, data.price_view[0]);
+    state.view.hi = Math.max(state.view.hi, data.price_view[1]);
   }
   clampView();
   $("title").textContent = data.title;

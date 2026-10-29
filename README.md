@@ -72,7 +72,7 @@ On Windows, create the environment with `py -3 -m venv .venv`, then activate it 
 
 ![Open Liq desktop interface with live OKX BTC/USDT market data](docs/assets/desktop.png)
 
-*Screenshot captured from live OKX BTC/USDT on October 28, 2026. Market prices are real observations; the liquidation exposure is modeled.*
+*Screenshot captured from live OKX BTC/USDT on October 29, 2026. Prices, open interest, funding and the liquidation dots are exchange observations; the bands are modeled. The dashed line marks where the published OKX liquidation feed begins; earlier dots were not available, not absent.*
 
 1. **Pick a market.** Choose the coin, the venue (OKX, Binance, Bybit or All venues) and the time range.
 2. **Read the bands.** A brighter band means more estimated liquidation exposure at that price, relative to the rest of this window.
@@ -96,7 +96,7 @@ The **Model**, **Display** and **Research** panels hold advanced controls. Hover
 
 <p align="center"><img src="docs/assets/mobile.png" width="320" alt="Open Liq mobile chart and analysis with live OKX BTC/USDT market data"></p>
 
-[View a historical replay screenshot](docs/assets/replay.png). It was captured from the Binance archive using the 58-day BTC/USDT replay interval reported by a user. Price and exposure appear as each historical bar arrives; the empty area is future time. Earlier modeled exposure can change as the lookback window moves.
+[View a historical replay screenshot](docs/assets/replay.png). It was captured from the Binance archive: a BTC/USDT replay from October 20 to 23, 2026 on 15-minute bars, paused at frame 180 of 289. Price and exposure appear as each historical bar arrives; the empty area is future time. Earlier modeled exposure can change as the lookback window moves.
 
 The sidebar and reading line summarize display bins. For research that must not depend on chart resolution, use the API's exact economic features.
 
