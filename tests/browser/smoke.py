@@ -316,6 +316,8 @@ def trader_ux_checks(browser, url: str, output: Path) -> None:
         ratio = next(row for row in analysis["imbalance"] if row["window_pct"] == 5)["short_to_long"]
         assert f"{ratio:.2f}×" in page.locator("#read-ratio").inner_text()
         assert page.evaluate("fmtPx(0.0000054242)") == "0.000005424", "Tiny prices keep four significant digits"
+        usd = page.evaluate("[500, 999.6, 999960, 12345678, 999960000].map(fmtUsd)")
+        assert usd == ["$500", "$1.0K", "$1.0M", "$12.3M", "$1.0B"], f"USD units follow the rounded value: {usd}"
         page.locator("#read-long").click()
         assert page.evaluate(f"state.priceDirty && state.view.lo < {analysis['below']['price']} && state.view.hi > {analysis['below']['price']}"), "Reading line focuses its price"
         page.locator("#reset").click()

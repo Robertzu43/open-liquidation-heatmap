@@ -191,9 +191,10 @@ function decodeF32(b64) {
 function fmtUsd(value) {
   const abs = Math.abs(Number(value) || 0);
   const sign = value < 0 ? "-" : "";
-  if (abs >= 1e9) return sign + "$" + (abs / 1e9).toFixed(1) + "B";
-  if (abs >= 1e6) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
-  if (abs >= 1e3) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
+  // Pick the unit after rounding: 999,960 is $1.0M, not $1000.0K.
+  if (abs >= 999.95e6) return sign + "$" + (abs / 1e9).toFixed(1) + "B";
+  if (abs >= 999.95e3) return sign + "$" + (abs / 1e6).toFixed(1) + "M";
+  if (abs >= 999.5) return sign + "$" + (abs / 1e3).toFixed(1) + "K";
   return sign + "$" + abs.toFixed(0);
 }
 
