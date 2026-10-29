@@ -719,48 +719,6 @@ input[type=range] {
   line-height:1.7;
 }
 
-.cards {
-  display:grid;
-  gap:10px;
-}
-
-.cards article {
-  background:linear-gradient(110deg,#1c271f,#151c17);
-  border:1px solid #344232;
-  border-radius:9px;
-  padding:13px;
-}
-
-.cards article:first-child {
-  border-left:2px solid var(--up);
-}
-
-.cards article:nth-child(2) {
-  border-left:2px solid var(--down);
-}
-
-.cards h3 {
-  font-size:10px;
-  letter-spacing:.3px;
-  color:var(--muted);
-  margin:0;
-  font-weight:500;
-}
-
-.stat {
-  margin:6px 0 0;
-  font:11px var(--mono);
-  color:var(--muted);
-}
-
-.stat b {
-  display:block;
-  color:var(--text);
-  font-size:23px;
-  font-weight:500;
-  margin-bottom:5px;
-}
-
 .table-details {
   border-top:1px solid var(--line);
   margin-top:16px;
@@ -1060,22 +1018,6 @@ footer span:first-child {
   .stage {
     grid-template-columns:1fr;
   }
-  .panel {
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    column-gap:20px;
-  }
-  .panel h2,.panel .summary {
-    grid-column:1;
-  }
-  .cards {
-    grid-column:2;
-    grid-row:1/4;
-    grid-template-columns:1fr 1fr;
-  }
-  .panel .table-details,.panel #how,.panel .resting {
-    grid-column:1/-1;
-  }
   .top .status {
     margin-left:auto;
   }
@@ -1327,23 +1269,6 @@ footer span:first-child {
   .summary {
     font-size:11px;
     margin-bottom:12px;
-  }
-  .cards {
-    display:grid;
-    grid-template-columns:1fr 1fr;
-    gap:8px;
-  }
-  .cards article {
-    padding:10px;
-  }
-  .cards h3 {
-    font-size:9px;
-  }
-  .stat b {
-    font-size:21px;
-  }
-  .stat span {
-    font-size:9px;
   }
   .table-details {
     margin-top:10px;
@@ -1906,14 +1831,16 @@ footer span:first-child {
   }
   .mk {
     flex:none;
+    flex-wrap:wrap;
+    max-width:100%;
     padding:4px 8px;
     font-size:11px;
-    gap:5px;
+    gap:2px 5px;
   }
+  /* Two equal chips, each on two short lines, so nothing scrolls out of view. */
   .reading {
-    flex-wrap:nowrap;
-    overflow-x:auto;
-    scrollbar-width:none;
+    display:grid;
+    grid-template-columns:repeat(2,minmax(0,1fr)) auto;
     gap:5px;
     margin:4px 0 6px;
   }
@@ -1927,11 +1854,19 @@ footer span:first-child {
     margin-bottom:8px;
   }
   .read-btn {
-    flex:none;
+    display:grid;
+    grid-template-columns:auto auto minmax(0,1fr);
+    text-align:left;
     min-height:44px;
-    padding:6px 8px 6px 7px;
-    gap:5px;
+    padding:4px 8px 4px 7px;
+    gap:0 5px;
     font-size:11px;
+  }
+  .read-btn:before {
+    grid-row:span 2;
+  }
+  .read-btn .rl-px {
+    grid-column:2 / -1;
   }
   .read-btn .rl-k {
     display:none;
@@ -1946,9 +1881,12 @@ footer span:first-child {
     content:none;
   }
   .read-ratio {
-    flex:none;
     margin-left:2px;
     font-size:11px;
+  }
+  .read-ratio b {
+    display:block;
+    margin:0;
   }
   .replay-bar {
     margin:6px 0 2px;
@@ -1964,5 +1902,15 @@ footer span:first-child {
   }
   footer {
     font-size:10px;
+  }
+}
+
+/* Too narrow for the ±5% ratio beside both chips; the sidebar table still has it. */
+@media(max-width:350px) {
+  .reading {
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+  .read-ratio {
+    display:none;
   }
 }

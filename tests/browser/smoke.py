@@ -9,6 +9,8 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import tempfile
+import time
 from urllib.parse import parse_qs, urlparse
 from pathlib import Path
 from playwright.sync_api import sync_playwright
@@ -391,7 +393,7 @@ def trader_ux_checks(browser, url: str, output: Path) -> None:
         assert "Above price: short liquidation clusters" in page.locator(".caption").inner_text()
         assert page.locator("#source-note").evaluate("e => e.tagName === 'DETAILS' && !e.open")
         assert "Synthetic" in page.locator("#provenance").text_content()
-        assert "Short liqs above" in page.locator(".cards").inner_text() and "Long liqs below" in page.locator(".cards").inner_text()
+        assert page.locator(".cards, #above, #below").count() == 0, "Nearest clusters show once, in the reading line"
         assert page.locator("#data-status").inner_text() == "Synthetic demo"
         page.locator("#how-link").click()
         assert page.locator("#how").evaluate("e => e.open"), "Footer link opens the model notes"
@@ -500,6 +502,138 @@ def auto_refresh_guard(context, url: str, demo: dict) -> None:
         page.close()
 
 
+def background_refresh_checks(browser, url: str) -> None:
+    """Hidden tabs refresh only while alerts are on; a stale tab refreshes on return; quiet refreshes stay quiet."""
+    context = offline_context(browser, viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    page.add_init_script("Object.defineProperty(document, 'hidden', {configurable: true, get: () => Boolean(window.fakeHidden)})")
+    show = "() => { window.fakeHidden = false; document.dispatchEvent(new Event('visibilitychange')); return state.seq; }"
+    try:
+        page.goto(url + "/?exchange=demo&coin=BTC&range=24h&model=1")
+        page.wait_for_function("state.data !== null && document.getElementById('loading').hidden")
+        seq = page.evaluate("() => { window.fakeHidden = true; setAuto(0.1); return state.seq; }")
+        page.wait_for_timeout(400)
+        assert page.evaluate("state.seq") == seq, "A hidden tab without alerts must not auto-refresh"
+        page.evaluate("state.alertOn = true")
+        page.wait_for_function(f"state.seq > {seq}", timeout=3000)
+        seq = page.evaluate("() => { state.alertOn = false; return state.seq; }")
+        page.wait_for_timeout(400)
+        assert page.evaluate(show) == seq + 1, "Returning to a view older than the auto interval refreshes at once"
+        page.evaluate("setAuto(60)")
+        page.wait_for_function("document.getElementById('loading').hidden")
+        seq = page.evaluate("state.seq")
+        assert page.evaluate(show) == seq, "A fresh view does not reload on return"
+        page.evaluate("setAuto(0)")
+        # Screen readers hear user loads and status changes, not every quiet auto refresh.
+        assert page.locator("#data-status").get_attribute("aria-live") is None and page.locator("#data-status").get_attribute("role") is None
+        live = {"stale": False}
+        page.route("**/api/heatmap?*", lambda route: route.fulfill(json={**route.fetch().json(), "source": "okx", "stale": live["stale"]}))
+        said = "() => document.getElementById('announcement').textContent"
+        page.evaluate("load('refresh')")
+        assert page.evaluate(said).startswith("Loaded"), page.evaluate(said)
+        page.evaluate("document.getElementById('announcement').textContent = 'quiet'")
+        page.evaluate("load('auto')")
+        assert page.evaluate(said) == "quiet", "Quiet auto refresh announced: " + page.evaluate(said)
+        live["stale"] = True
+        page.evaluate("load('auto')")
+        assert "Stale source" in page.evaluate(said), "Becoming stale must be announced"
+        # A failed quiet refresh keeps the map on screen and warns instead.
+        page.unroute("**/api/heatmap?*")
+        page.route("**/api/heatmap?*", lambda route: route.fulfill(status=503, json={"error": "Fixture source is down."}))
+        page.evaluate("load('auto')")
+        assert page.evaluate("state.data !== null && state.heatCanvas !== null"), "A failed auto refresh wiped the map"
+        banner = page.locator("#banner")
+        assert "warn" in banner.get_attribute("class") and "Refresh failed: Fixture source is down" in banner.inner_text(), banner.inner_text()
+    finally:
+        context.close()
+
+
+def coin_input_checks(browser, url: str) -> None:
+    """The asset box reads tickers like the server; + Add only offers a loaded, valid coin."""
+    context = offline_context(browser, viewport={"width": 1440, "height": 1000})
+    page = context.new_page()
+    try:
+        page.goto(url + "/?exchange=demo&coin=solusdt&range=24h&model=1")
+        page.wait_for_function("state.data !== null")
+        assert page.evaluate("state.coin === 'SOL' && state.data.coin === 'SOL'"), "URL coin is normalized"
+        page.locator("#coin").fill("xrp-usdt")
+        page.locator("#coin").press("Enter")
+        page.wait_for_function("state.data && state.data.coin === 'XRP' && document.getElementById('loading').hidden")
+        assert page.evaluate("state.coin === 'XRP' && document.getElementById('coin').value === 'XRP'"), page.evaluate("state.coin")
+        assert page.locator("#watch-add").inner_text() == "+ Add XRP"
+        assert "coin=XRP" in page.url
+        page.locator("#coin").fill("ethusdt")
+        page.locator("#coin").press("Enter")
+        page.wait_for_function("state.data && state.data.coin === 'ETH' && document.getElementById('loading').hidden")
+        assert page.locator(".chip.on .chip-main").get_attribute("data-coin") == "ETH", "ETHUSDT highlights the ETH chip"
+        assert page.locator("#watch-add").is_hidden(), "ETH is already watched: no + Add"
+        page.locator("#coin").fill("ABCDEFGHIJKLMNOPQ")
+        page.locator("#coin").press("Enter")
+        page.wait_for_function("document.getElementById('loading').hidden")
+        assert page.evaluate("state.coin === 'ETH' && state.data && state.data.coin === 'ETH'"), "An invalid ticker is rejected in the browser"
+        assert page.locator("#watch-add").is_hidden() and page.locator("#coin").input_value() == "ETH"
+        assert "1–16 letters or digits" in page.locator("#banner").inner_text()
+        page.route("**/api/heatmap?*", lambda route: route.fulfill(status=503, json={"error": "Held coin failed deterministically"}))
+        page.locator("#coin").fill("DOGE")
+        page.locator("#coin").press("Enter")
+        page.wait_for_function("state.data === null && document.getElementById('loading').hidden")
+        assert page.locator("#watch-add").is_hidden(), "A failed coin is not offered for the watchlist"
+        page.unroute("**/api/heatmap?*")
+        page.evaluate("localStorage.setItem(STORE, JSON.stringify({coin: 'BTC', watchlist: ['BTC', 'ethusdt', 'ABCDEFGHIJKLMNOPQ', 'USDT', 'B@D', 'ETH', 'sol/usdt']}))")
+        page.goto(url + "/?exchange=demo&range=24h&model=1")
+        page.wait_for_function("state.data !== null")
+        assert chip_coins(page) == ["BTC", "ETH", "SOL"], chip_coins(page)
+    finally:
+        context.close()
+
+
+def venue_side_checks(browser, url: str, demo: dict) -> None:
+    """No liquidation request where the server has none; funding names its venue coverage."""
+    context = offline_context(browser, viewport={"width": 1440, "height": 1000}, timezone_id="UTC")
+    page = context.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    liq_requests: list[str] = []
+    page.on("request", lambda request: liq_requests.append(parse_qs(urlparse(request.url).query)["exchange"][0]) if "/api/v1/liquidations" in request.url else None)
+    sources = {"okx": "okx", "binance": "binance-live", "bybit": "bybit", "aggregate": "aggregate"}
+    def heatmap(route):
+        params = parse_qs(urlparse(route.request.url).query)
+        exchange = params["exchange"][0]
+        route.fulfill(json={**demo, "exchange": exchange, "mode": params["mode"][0], "source": sources[exchange], "title": f"{exchange} fixture"})
+    now = int(time.time() * 1000)
+    page.route("**/api/heatmap?*", heatmap)
+    page.route("**/api/v1/context?*", lambda route: route.fulfill(json={
+        "venues": [
+            {"exchange": "okx", "ok": True, "funding_rate": 0.0001, "funding_interval_hours": 8, "next_funding_time": now + 3600000},
+            {"exchange": "binance", "ok": False, "error": "Offline fixture"},
+            {"exchange": "bybit", "ok": True, "funding_rate": None},
+        ],
+        "funding_rate_oi_weighted": 0.0001, "funding_basis_hours": 8}))
+    note = "document.getElementById('liq-note').textContent.includes('come from OKX')"
+    try:
+        page.goto(url + "/?exchange=bybit&coin=BTC&range=24h&model=1")
+        page.wait_for_function(f"state.data && state.data.exchange === 'bybit' && {note}")
+        assert page.locator("#asof").inner_text().startswith("Bybit live ·"), page.locator("#asof").inner_text()
+        page.locator("#exchange").select_option("binance")
+        page.wait_for_function(f"state.data && state.data.exchange === 'binance' && {note}")
+        page.route("**/api/v1/liquidations?*", lambda route: route.fulfill(status=404, json={"error": "Not found."}))
+        page.locator("#exchange").select_option("okx")
+        page.wait_for_function("state.data && state.data.exchange === 'okx' && document.getElementById('liq-note').textContent.includes('unavailable right now')")
+        page.locator("#exchange").select_option("aggregate")
+        page.wait_for_function("state.data && state.data.mode === 'symbol' && !document.getElementById('mk-fund').hidden")
+        assert page.locator("#mk-fund-k").inner_text().lower() == "funding · oi-wtd · 1/3 venues", page.locator("#mk-fund-k").inner_text()
+        page.set_viewport_size({"width": 320, "height": 700})
+        page.wait_for_timeout(150)
+        assert page.evaluate("document.getElementById('mk-fund').getBoundingClientRect().right <= document.getElementById('market').getBoundingClientRect().right + .5"), "The longer funding pill fits a phone"
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        page.wait_for_function("document.getElementById('loading').hidden")
+        assert liq_requests == ["okx", "aggregate"], liq_requests
+        assert page.evaluate("() => { state.fundingNext = Date.now() - 1000; tickFunding(); return document.getElementById('mk-fund-t').textContent; }") == "settling"
+        assert not errors, errors
+    finally:
+        context.close()
+
+
 def run(url: str, output: Path, chromium: str | None = None) -> None:
     output.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as p:
@@ -570,12 +704,18 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
         page.locator("#refresh").click()
         page.wait_for_function("state.data !== null")
         assert not errors, errors
-        for width, height, name in ((1440, 1000, "desktop"), (1280, 900, "desktop-1280"), (1920, 1080, "desktop-1920"), (768, 1024, "tablet"), (390, 844, "mobile-390"), (360, 800, "mobile-360")):
+        for width, height, name in ((1440, 1000, "desktop"), (1280, 900, "desktop-1280"), (1920, 1080, "desktop-1920"), (768, 1024, "tablet"), (390, 844, "mobile-390"), (360, 800, "mobile-360"), (320, 700, "mobile-320")):
             page.set_viewport_size({"width": width, "height": height})
             page.wait_for_timeout(150)
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth"), f"Horizontal overflow at {width}"
             if width < 400:
                 assert page.locator("#chart").bounding_box()["y"] <= 300
+                # Both cluster chips show in full; the ±5% ratio is either whole or hidden.
+                clipped = page.evaluate("""() => { const host = document.getElementById('reading').getBoundingClientRect();
+                    const parts = ['#read-short', '#read-short .rl-u', '#read-long', '#read-long .rl-u', '#read-ratio'].map(s => document.querySelector(s));
+                    return parts.filter(e => e.getClientRects().length).filter(e => { const b = e.getBoundingClientRect(); const box = e.closest('.read-btn') && e.closest('.read-btn') !== e ? e.closest('.read-btn').getBoundingClientRect() : host;
+                        return b.left < box.left - .5 || b.right > box.right + .5; }).map(e => e.id || e.className); }""")
+                assert not clipped, (width, clipped)
                 for selector in ("#coin", "#exchange", "#range", "#refresh", "#zoom-in", "#zoom-out", "#reset"):
                     box = page.locator(selector).bounding_box()
                     assert box["height"] >= 44, (selector, box)
@@ -601,6 +741,9 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
         replay_preset_regression(context, url, demo)
         auto_refresh_guard(context, url, demo)
         trader_ux_checks(browser, url, output)
+        background_refresh_checks(browser, url)
+        coin_input_checks(browser, url)
+        venue_side_checks(browser, url, demo)
         replay_page = context.new_page()
         replay_page.on("pageerror", lambda error: errors.append(str(error)))
         first = int(demo["as_of"] / 1000)
@@ -658,7 +801,7 @@ def run(url: str, output: Path, chromium: str | None = None) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:8767")
-    parser.add_argument("--output", type=Path, default=Path(".superpowers/sdd/2026-10-28-product-excellence/screenshots"))
+    parser.add_argument("--output", type=Path, default=None, help="Capture folder (default: a new temporary directory)")
     parser.add_argument("--chromium", default=None, help="Optional Chromium executable path")
     args = parser.parse_args()
-    run(args.url.rstrip("/"), args.output, args.chromium)
+    run(args.url.rstrip("/"), args.output or Path(tempfile.mkdtemp(prefix="open-liq-smoke-")), args.chromium)

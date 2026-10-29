@@ -15,7 +15,7 @@
     <header class="top">
       <a class="brand" href="/" aria-label="Open Liq home"><img src="/assets/logo.png" alt="" width="40" height="40"><div><strong>Open Liq<span class="brand-dot">.</span></strong><em>LIQUIDATION RESEARCH</em></div></a>
       <div class="heading"><h1 id="title">Estimated liquidation clusters</h1><p id="asof" class="asof">Waiting for market data…</p></div>
-      <span class="status" id="data-status" role="status" aria-live="polite">Connecting</span>
+      <span class="status" id="data-status">Connecting</span>
     </header>
     <section class="toolbar" aria-label="Market controls">
       <label class="field">Asset
@@ -172,16 +172,6 @@
       <aside class="panel" id="panel">
         <h2>Around the current price</h2>
         <p id="summary" class="summary">The estimate appears here after the first book is built.</p>
-        <div class="cards">
-          <article>
-            <h3>Short liqs above</h3>
-            <p id="above" class="stat">—</p>
-          </article>
-          <article>
-            <h3>Long liqs below</h3>
-            <p id="below" class="stat">—</p>
-          </article>
-        </div>
         <details class="table-details"><summary>Liq exposure by distance</summary>
         <table class="grid" id="imbalance" aria-label="Modeled liquidation exposure by distance">
           <thead><tr><th scope="col">Window</th><th scope="col">Long</th><th scope="col">Short</th><th scope="col">S/L</th></tr></thead>

@@ -54,6 +54,7 @@ const state = {
   seq: 0,
   controller: null,
   timer: 0,
+  requestedAt: 0,
   frame: 0,
   dpr: 1,
   cssW: 800,
@@ -70,6 +71,7 @@ const state = {
   sideController: null,
   context: null,
   liqs: null,
+  liqSources: ["okx"],
   watchSeq: 0,
   watchBusy: false,
   watchQueued: null,
@@ -94,6 +96,13 @@ const AUTO_CHOICES = [0, 30, 60, 300];
 const WATCH_MAX = 6;
 const WATCH_MIN_MS = 20000;
 const COIN_RE = /^[A-Z0-9]{1,16}$/;
+const COIN_HINT = "Use 1–16 letters or digits, like BTC or ETHUSDT.";
+
+// The server's rule: BTC, eth-usdt and SOL/USDT name a coin; anything else is "".
+function normalizeCoin(raw) {
+  const coin = String(raw || "").trim().toUpperCase().replace(/[-_/]/g, "").replace(/USDT$/, "");
+  return COIN_RE.test(coin) && coin !== "USDT" ? coin : "";
+}
 
 
 function barFits(range, bar) {
@@ -210,7 +219,7 @@ function fmtRate(rate) {
 }
 
 function fmtCountdown(ms) {
-  if (!(ms > 0)) return "now";
+  if (!(ms > 0)) return "settling";
   const total = Math.floor(ms / 1000);
   const h = Math.floor(total / 3600);
   const m = Math.floor((total % 3600) / 60);
@@ -328,7 +337,7 @@ function restore() {
     const saved = JSON.parse(raw);
     const ranges = ["12h", "24h", "3d", "7d", "30d", "90d", "180d", "1y", "2y"];
     if (VENUES.includes(saved.exchange)) state.exchange = saved.exchange;
-    if (saved.coin) state.coin = String(saved.coin).toUpperCase();
+    state.coin = normalizeCoin(saved.coin) || state.coin;
     if (ranges.includes(saved.range)) state.range = saved.range;
     if ([1, 2, 3].includes(Number(saved.model))) state.model = Number(saved.model);
     if (saved.mode === "pair" || saved.mode === "symbol") state.mode = saved.mode;
@@ -348,8 +357,8 @@ function restore() {
     if (Array.isArray(saved.watchlist)) {
       const list = [];
       saved.watchlist.forEach((coin) => {
-        const id = String(coin || "").toUpperCase();
-        if (COIN_RE.test(id) && !list.includes(id) && list.length < WATCH_MAX) list.push(id);
+        const id = normalizeCoin(coin);
+        if (id && !list.includes(id) && list.length < WATCH_MAX) list.push(id);
       });
       state.watchlist = list;
     }
@@ -362,7 +371,7 @@ function restore() {
 function restoreUrl() {
   const params = new URLSearchParams(location.search);
   if (VENUES.includes(params.get("exchange"))) setVenue(params.get("exchange"));
-  if (/^[A-Za-z0-9]{1,16}$/.test(params.get("coin") || "")) state.coin = params.get("coin").toUpperCase();
+  state.coin = normalizeCoin(params.get("coin")) || state.coin;
   if (params.get("range") in RANGE_S) state.range = params.get("range");
   if ([1, 2, 3].includes(Number(params.get("model")))) state.model = Number(params.get("model"));
   // Older links used ?mode=symbol for the aggregate; it still means All venues.
@@ -501,8 +510,9 @@ function mapParams(extra) {
 async function load(reason) {
   stopReplay();
   const seq = ++state.seq;
+  state.requestedAt = Date.now();
   if (state.controller) state.controller.abort();
-  // The map goes first: side requests in flight give their server slots back.
+  // The map goes first. Aborting side requests only drops their responses; the server still finishes them.
   cancelSide();
   const controller = new AbortController();
   state.controller = controller;
@@ -517,11 +527,14 @@ async function load(reason) {
     const body = await response.json();
     if (seq !== state.seq) return;
     if (!response.ok) throw new Error(body.error || "Request failed");
-    applyPayload(body);
+    applyPayload(body, quiet);
     afterLoad(body, reason);
   } catch (err) {
     if (err.name === "AbortError" || seq !== state.seq) return;
-    fail(err.message || "Could not load this map.");
+    const message = err.message || "Could not load this map.";
+    // A failed quiet refresh keeps the map on screen; only a chosen load clears it.
+    if (quiet && state.data) showBanner("warn", [`Refresh failed: ${message.replace(/\.$/, "")}. Showing the map from ${fmtClock(state.data.generated_at)}.`]);
+    else fail(message);
   } finally {
     if (seq === state.seq) setLoading(false);
   }
@@ -534,8 +547,6 @@ function fail(message) {
   state.heatCanvas = null;
   showBanner("error", [message]);
   $("summary").textContent = message;
-  $("above").textContent = "—";
-  $("below").textContent = "—";
   $("imbalance").querySelector("tbody").innerHTML = "";
   $("levels").querySelector("tbody").innerHTML = "";
   $("resting").textContent = "";
@@ -557,8 +568,9 @@ function fail(message) {
   drawMessage(message);
 }
 
-function applyPayload(data) {
+function applyPayload(data, quiet) {
   const prev = state.data;
+  const status = $("data-status").className;
   const keepView = Boolean(data.replay && prev && prev.replay);
   const identityChanged = !prev || prev.coin !== data.coin || prev.range !== data.range || prev.exchange !== data.exchange || prev.mode !== data.mode || prev.bar !== data.bar || (!keepView && prev.asof !== data.asof);
   data.openA = decodeF32(data.open);
@@ -608,6 +620,7 @@ function applyPayload(data) {
     okx: "OKX live",
     "binance-live": "Binance live",
     "binance-vision": "Binance archive",
+    bybit: "Bybit live",
     demo: "Synthetic demo",
     aggregate: "Venue aggregate",
   };
@@ -632,7 +645,8 @@ function applyPayload(data) {
   syncReplayBar();
   renderHow(data.model);
   canvas.setAttribute("aria-label", (data.analysis || {}).summary || data.title);
-  announce("Loaded " + data.title + ". " + $("data-status").textContent);
+  // Quiet auto refreshes speak only when the status changes, e.g. to stale.
+  if (!quiet || $("data-status").className !== status) announce("Loaded " + data.title + ". " + $("data-status").textContent);
   requestDraw();
 }
 
@@ -682,8 +696,6 @@ function renderAnalysis(data) {
   $("chart-price").textContent = analysis.price == null ? "" : "$" + fmtPx(analysis.price);
   const modelName = (data.model || {}).name || MODEL_NAMES[(data.model || {}).id] || "";
   $("chart-context").textContent = [rangeLabel(data.range || state.range), data.bar || "", modelName, state.timezone === "local" ? "Local" : "UTC"].filter(Boolean).join(" · ");
-  $("above").innerHTML = levelHtml(analysis.above);
-  $("below").innerHTML = levelHtml(analysis.below);
   const imb = $("imbalance").querySelector("tbody");
   imb.innerHTML = (analysis.imbalance || []).map((row) => {
     const ratio = row.short_to_long == null ? "—" : Number(row.short_to_long).toFixed(2) + "×";
@@ -707,12 +719,6 @@ function renderAnalysis(data) {
   });
 }
 
-function levelHtml(level) {
-  if (!level) return "None in this window.";
-  const dist = (level.distance_pct >= 0 ? "+" : "") + Number(level.distance_pct).toFixed(2) + "%";
-  return `<b>${fmtPx(level.price)}</b><span>${dist} · ${fmtUsd(level.usd)}</span>`;
-}
-
 function renderHow(model) {
   if (!model) return;
   const weights = (model.weights || []).map((row) => `<li>${row.leverage}× · ${(row.weight * 100).toFixed(0)}%</li>`).join("");
@@ -724,7 +730,7 @@ function renderHow(model) {
     <p>Maintenance margin rate (MMR) is ${(model.mmr * 100).toFixed(1)}%. Entry for a bar is <span class="formula">${escapeHtml(model.entry)}</span>.</p>
     <p>Long liquidation = <span class="formula">${escapeHtml(model.long_formula)}</span></p>
     <p>Short liquidation = <span class="formula">${escapeHtml(model.short_formula)}</span></p>
-    <p>${flow} A later candle removes a shelf when price trades through it.</p>
+    <p>${flow} A later candle removes a cluster when price trades through it.</p>
     <p>Leverage mix</p>
     <ul>${weights}</ul>
     <p>Decay coefficient ${model.decay} per ${escapeHtml(String(((state.data || {}).model_metadata || {}).decay_reference_seconds || "reference"))} seconds of elapsed time. Volume churn ${model.churn}. Kernel ${(model.kernel || []).map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
@@ -1356,8 +1362,8 @@ function exportResearch() {
 }
 
 /* Trader context: reading line, market strip, observed liquidations, watchlist
-   and alerts. These read side endpoints that may be missing on an older server;
-   every one of them degrades to "—" or a hidden strip and never touches the map. */
+   and alerts. A failed side request degrades to "—" or a hidden strip and never
+   touches the map. */
 
 function isLive(data) {
   return Boolean(data) && data.asof == null && !data.replay;
@@ -1412,9 +1418,7 @@ async function getJson(url, signal) {
     body = null;
   }
   if (!response.ok || !body || typeof body !== "object") {
-    const error = new Error((body && body.error) || `HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
+    throw new Error((body && body.error) || `HTTP ${response.status}`);
   }
   return body;
 }
@@ -1466,11 +1470,15 @@ function loadSide(data, forceWatch) {
   }, (err) => {
     if (err.name === "AbortError" || !current()) return;
     // Keep this market's last good value through a busy or failed refresh.
-    if (!state.context || state.context.key !== key || !state.context.body) state.context = { key, body: null, status: err.status || 0 };
+    if (!state.context || state.context.key !== key || !state.context.body) state.context = { key, body: null };
     renderMarket();
   });
   let liqs = Promise.resolve();
-  if (state.showLiqs) {
+  if (state.showLiqs && !liqsServed(data)) {
+    // The server would only answer available:false here.
+    state.liqs = { key, body: { available: false } };
+    renderLiqNote();
+  } else if (state.showLiqs) {
     params.set("range", data.range);
     liqs = getJson("/api/v1/liquidations?" + params.toString(), controller.signal).then((body) => {
       if (!current()) return;
@@ -1479,7 +1487,7 @@ function loadSide(data, forceWatch) {
       requestDraw();
     }, (err) => {
       if (err.name === "AbortError" || !current()) return;
-      if (!state.liqs || state.liqs.key !== key || !state.liqs.body) state.liqs = { key, body: null, status: err.status || 0 };
+      if (!state.liqs || state.liqs.key !== key || !state.liqs.body) state.liqs = { key, body: null };
       renderLiqNote();
       requestDraw();
     });
@@ -1489,6 +1497,11 @@ function loadSide(data, forceWatch) {
     if (state.sideController === controller) state.sideController = null;
     loadWatchlist(forceWatch);
   });
+}
+
+// Observed liquidations exist for the venues /api/status lists (OKX), All venues and the demo.
+function liqsServed(data) {
+  return data.exchange === "demo" || data.mode === "symbol" || state.liqSources.includes(data.exchange);
 }
 
 function loadWatchlist(force) {
@@ -1618,7 +1631,8 @@ function fundingOf(body, data) {
   if (body.synthetic) lines.push("Synthetic demo values.");
   if (body.note) lines.push(String(body.note));
   lines.push("Positive funding: longs pay shorts.");
-  return { rate, next, hours, label: aggregate ? "Funding · OI-wtd" : "Funding", detail: lines.join("\n") };
+  const label = aggregate ? `Funding · OI-wtd · ${ok.length}/${venues.length} venues` : "Funding";
+  return { rate, next, hours, label, detail: lines.join("\n") };
 }
 
 function tickFunding() {
@@ -1799,7 +1813,7 @@ function renderLiqNote() {
         ? `Synthetic demo liquidations${since} (${orders}); not exchange data.`
         : `Observed OKX liquidations${since} (${orders})${data.mode === "symbol" ? "; OKX only, Binance and Bybit not included" : ""}. Dots sit at bankruptcy price, sized by USD.${gap}`;
       drawn = events.length > 0;
-    } else if (!body && l.status && l.status !== 404) {
+    } else if (!body) {
       text = "Observed liquidations are unavailable right now.";
     }
   }
@@ -1813,7 +1827,6 @@ function mainItem(data) {
   const analysis = data.analysis || {};
   const mc = data.market_context || {};
   const pick = (cluster) => (cluster && num(cluster.price) ? { price: cluster.price, distance_pct: cluster.distance_pct, usd: cluster.usd } : null);
-  const row = ratio5(analysis);
   return {
     coin: data.coin,
     ok: num(analysis.price),
@@ -1821,10 +1834,7 @@ function mainItem(data) {
     price_change_pct: num(mc.price_change_pct) ? mc.price_change_pct : null,
     above: pick(analysis.above),
     below: pick(analysis.below),
-    short_to_long_5pct: row && num(row.short_to_long) ? row.short_to_long : null,
-    quality: (data.quality || {}).status,
     stale: Boolean(data.stale),
-    as_of: data.as_of,
   };
 }
 
@@ -1896,7 +1906,7 @@ function renderWatch() {
     host.appendChild(li);
   });
   const add = $("watch-add");
-  add.hidden = !COIN_RE.test(state.coin) || state.watchlist.includes(state.coin) || state.watchlist.length >= WATCH_MAX;
+  add.hidden = !addable();
   add.textContent = "+ Add " + state.coin;
   add.setAttribute("aria-label", `Add ${state.coin} to watchlist`);
   if (focusCoin) {
@@ -1918,9 +1928,15 @@ function switchCoin(next) {
   load("coin");
 }
 
+// Only the coin of the map on screen, as the server named it, and never a failed one.
+function addable() {
+  const coin = state.data ? state.data.coin : "";
+  return Boolean(coin) && coin === state.coin && !state.watchlist.includes(coin) && state.watchlist.length < WATCH_MAX;
+}
+
 function addWatch() {
   const coin = state.coin;
-  if (!COIN_RE.test(coin) || state.watchlist.includes(coin) || state.watchlist.length >= WATCH_MAX) return;
+  if (!addable()) return;
   state.watchlist.push(coin);
   persist();
   renderWatch();
@@ -2088,17 +2104,18 @@ async function replayPreset(span, label) {
   if (!state.replay.playing && !reducedMotion()) togglePlay();
 }
 
+function autoRefresh() {
+  // Live views only: never while a replay span loads, plays or is paused.
+  // Hidden tabs keep refreshing only so price alerts can fire.
+  if ((document.hidden && !state.alertOn) || pastView() || state.replay || state.replayController) return;
+  load("auto");
+}
+
 function setAuto(seconds) {
   if (state.timer) clearInterval(state.timer);
   state.timer = 0;
   state.auto = seconds;
-  if (seconds > 0) {
-    state.timer = setInterval(() => {
-      // Live views only: never while a replay span loads, plays or is paused.
-      if (document.hidden || pastView() || state.replay || state.replayController) return;
-      load("auto");
-    }, seconds * 1000);
-  }
+  if (seconds > 0) state.timer = setInterval(autoRefresh, seconds * 1000);
   persist();
 }
 
@@ -2397,8 +2414,12 @@ function wire() {
   });
   const coin = $("coin");
   const commitCoin = () => {
-    const next = coin.value.trim().toUpperCase();
-    if (!next || next === state.coin) return;
+    const next = normalizeCoin(coin.value);
+    if (!next && coin.value.trim()) showBanner("error", [`${coin.value.trim()} is not a ticker. ${COIN_HINT}`]);
+    if (!next || next === state.coin) {
+      coin.value = state.coin;
+      return;
+    }
     stopReplay();
     state.coin = next;
     coin.value = next;
@@ -2551,6 +2572,10 @@ function wire() {
   });
   $("watch-add").addEventListener("click", addWatch);
   $("auto").addEventListener("change", () => setAuto(Number($("auto").value) || 0));
+  // A tab coming back catches up at once instead of waiting out the interval.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && state.auto > 0 && Date.now() - state.requestedAt >= state.auto * 1000) autoRefresh();
+  });
   wireReplay();
   $("fit").addEventListener("click", () => {
     if (!state.data) return;
@@ -2632,6 +2657,8 @@ async function bootStatus() {
     const response = await fetch("/api/status");
     const body = await response.json();
     state.models = body.models || [];
+    const sources = (body.capabilities || {}).observed_liquidations;
+    if (Array.isArray(sources)) state.liqSources = sources;
     (body.models || []).forEach((model) => {
       const button = document.querySelector(`.tab[data-model="${model.id}"]`);
       if (button) button.title = model.name + " — " + model.blurb;
