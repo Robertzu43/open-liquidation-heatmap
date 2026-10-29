@@ -632,9 +632,8 @@ def finalize_series(
     )
 
 
-def _fmt_cot(ms: int) -> str:
-    stamp = datetime.fromtimestamp(ms / 1000.0, tz=timezone(timedelta(hours=-5)))
-    return stamp.strftime("%d %b %Y, %H:%M COT")
+def _fmt_utc(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000.0, tz=timezone.utc).strftime("%d %b %Y, %H:%M UTC")
 
 
 def _records_from_series(series: MarketSeries) -> tuple[list[tuple], list[tuple]]:
@@ -1399,7 +1398,7 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
     day_last = int(latest.timestamp()) + 86400 - bar_s
     end_open = min(end_open_now, day_last)
     if not allow_stale and is_stale(end_open * 1000, bar_s, limit_s=2 * bar_s):
-        when = _fmt_cot((end_open + bar_s) * 1000)
+        when = _fmt_utc((end_open + bar_s) * 1000)
         raise DataError(
             f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when})."
         )
@@ -1429,7 +1428,7 @@ def fetch_binance_vision(coin: str, pair: str, spec: dict, *, allow_stale: bool)
     )
     loaded.stale = live_component_stale(loaded.series)
     if loaded.stale:
-        when = _fmt_cot(loaded.as_of + bar_s * 1000)
+        when = _fmt_utc(loaded.as_of + bar_s * 1000)
         loaded.series.warnings.append(
             f"Binance live futures data was unavailable, so this is the public archive. Last bar ends {when}."
         )
@@ -1479,7 +1478,7 @@ def finish_history(raw: RawSeries, end_open_s: int, spec: dict, coin: str, pair:
     )
     loaded.stale = loaded.as_of < end_ms
     if loaded.stale:
-        when = _fmt_cot(loaded.as_of + bar_s * 1000)
+        when = _fmt_utc(loaded.as_of + bar_s * 1000)
         loaded.series.warnings.append(f"The Binance {'live API' if live else 'archive'} ends at {when}, before the requested time.")
     return loaded
 
@@ -1576,7 +1575,7 @@ def load_span(coin: str, pair: str, spec: dict, from_s: int, to_s: int | None) -
     first_frame = int(grid[start]) // 1000
     note = ""
     if first_frame > first:
-        note = f"Data for {pair} starts later; replay begins at {_fmt_cot((first_frame + bar_s) * 1000)}."
+        note = f"Data for {pair} starts later; replay begins at {_fmt_utc((first_frame + bar_s) * 1000)}."
     days = len(_dates_between(int(grid[0]), int(grid[-1]) + bar_s * 1000))
     log.info("replay span %s %s bar=%s frames=%s days=%s live=%s", pair, spec["key"], spec["bar"], (last - first_frame) // bar_s + 1, days, live is not None)
     return Span(coin, pair, spec, archive, live, first_frame, last, days, note)
@@ -1661,7 +1660,7 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
     fresh = []
     for part in loaded_parts:
         if live_component_stale(part.series):
-            when = _fmt_cot(part.as_of + part.series.bar_seconds * 1000)
+            when = _fmt_utc(part.as_of + part.series.bar_seconds * 1000)
             errors.append(f"{exchange_name(part.series.exchange)} was left out of this aggregate because its data lags the live market (last bar ends {when}).")
             continue
         fresh.append(part)

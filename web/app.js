@@ -129,13 +129,13 @@ function reducedMotion() {
   return Boolean(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
 }
 
-function cotInputValue(seconds) {
+function toInputValue(seconds) {
   const date = new Date(seconds * 1000);
   if (state.timezone !== "local") return date.toISOString().slice(0, 16);
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
 
-function parseCotInput(text) {
+function parseInputValue(text) {
   const ms = Date.parse(text + (state.timezone === "local" ? "" : "Z"));
   return Number.isFinite(ms) ? Math.floor(ms / 1000) : null;
 }
@@ -421,7 +421,7 @@ function syncControls() {
   $("bar").value = state.bar;
   $("bar").disabled = !canTravel;
   $("bar-field").classList.toggle("disabled", !canTravel);
-  $("asof-input").value = state.asof == null ? "" : cotInputValue(state.asof);
+  $("asof-input").value = state.asof == null ? "" : toInputValue(state.asof);
   $("asof-input").disabled = !canTravel;
   $("asof-field").classList.toggle("disabled", !canTravel);
   $("live").disabled = !canTravel || state.asof == null;
@@ -678,10 +678,7 @@ function renderProvenance(data) {
 
 function renderAnalysis(data) {
   const analysis = data.analysis || {};
-  $("summary").textContent = (analysis.summary || "")
-    .replace(/liquidity/gi, "exposure")
-    .replace(/\bshelves\b/g, "liq clusters")
-    .replace(/\bshelf\b/g, "liq cluster");
+  $("summary").textContent = analysis.summary || "";
   $("chart-price").textContent = analysis.price == null ? "" : "$" + fmtPx(analysis.price);
   const modelName = (data.model || {}).name || MODEL_NAMES[(data.model || {}).id] || "";
   $("chart-context").textContent = [rangeLabel(data.range || state.range), data.bar || "", modelName, state.timezone === "local" ? "Local" : "UTC"].filter(Boolean).join(" · ");
@@ -730,7 +727,7 @@ function renderHow(model) {
     <p>${flow} A later candle removes a shelf when price trades through it.</p>
     <p>Leverage mix</p>
     <ul>${weights}</ul>
-    <p>Elapsed-time decay basis ${escapeHtml(model.decay_basis || "see model metadata")}, coefficient ${model.decay}. Volume churn ${model.churn}. Kernel ${(model.kernel || []).map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
+    <p>Decay coefficient ${model.decay} per ${escapeHtml(String(((state.data || {}).model_metadata || {}).decay_reference_seconds || "reference"))} seconds of elapsed time. Volume churn ${model.churn}. Kernel ${(model.kernel || []).map((v) => Number(v).toFixed(2)).join(" · ")}.</p>
     <p>The color scale is relative to this window. It is not a count of real liquidations.</p>
     ${(state.data && Array.isArray(state.data.assumptions) ? state.data.assumptions : []).map(item => `<p>${escapeHtml(item)}</p>`).join("")}`;
 }
@@ -1193,6 +1190,8 @@ function hoverLevels(index, bin) {
   const data = state.data;
   clearTimeout(state.hoverTimer);
   if (state.replay && state.replay.playing) return;
+  // Each breakdown rebuilds the whole model server-side; on long fine-bar views that costs seconds per hover.
+  if (data.times.length > 1000) return;
   const key = `${state.model}|${data.asof || "live"}|${data.generated_at}|${index}|${bin}`;
   state.hoverKey = key;
   if (levelCache.has(key)) {
@@ -2163,7 +2162,7 @@ async function startReplay(keepIdx, span) {
   if (span) params.set("span", String(span));
   else params.set("from", String(state.asof));
   if (state.bar) params.set("bar", state.bar);
-  if (toText && !span) params.set("to", String(parseCotInput(toText)));
+  if (toText && !span) params.set("to", String(parseInputValue(toText)));
   setLoading(true, "Loading replay… uncached history can take a while. If the request times out, choose a shorter interval and retry.");
   try {
     const response = await fetch("/api/replay?" + params.toString(), {signal: controller.signal});
@@ -2174,7 +2173,7 @@ async function startReplay(keepIdx, span) {
       // Show the span the server chose, so a reload replays the same bars.
       state.asof = Math.floor(body.first_asof / 1000);
       syncControls();
-      $("to-input").value = cotInputValue(Math.floor(body.last_asof / 1000));
+      $("to-input").value = toInputValue(Math.floor(body.last_asof / 1000));
       persist();
     }
     state.replay = {
@@ -2385,7 +2384,7 @@ function wire() {
   $("asof-input").addEventListener("change", () => {
     stopReplay();
     const text = $("asof-input").value;
-    state.asof = text ? parseCotInput(text) : null;
+    state.asof = text ? parseInputValue(text) : null;
     syncControls();
     persist();
     load("asof");
@@ -2431,9 +2430,9 @@ function wire() {
     }
   });
   $("timezone").addEventListener("change", () => {
-    const to = $("to-input").value ? parseCotInput($("to-input").value) : null;
+    const to = $("to-input").value ? parseInputValue($("to-input").value) : null;
     state.timezone = $("timezone").value;
-    if (to != null) $("to-input").value = cotInputValue(to);
+    if (to != null) $("to-input").value = toInputValue(to);
     syncControls();
     persist();
     if (state.data) applyPayload(state.data);

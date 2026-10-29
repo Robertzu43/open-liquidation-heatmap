@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 import matplotlib
 
@@ -96,15 +96,14 @@ def plot_heatmap(heat, centers, times_ms, open_, high, low, close, title: str, o
         ax.plot([xs[i], xs[i]], [body_low, body_high], color=color, linewidth=2.2, solid_capstyle="butt")
     ticks = np.linspace(0, n - 1, num=min(8, n), dtype=int)
     labels = []
-    cot = timezone(timedelta(hours=-5))
     for index in ticks:
-        # Axis labels are America/Bogota (COT, UTC−5).
-        local = datetime.fromtimestamp(int(times_ms[index]) / 1000, tz=cot)
-        labels.append(local.strftime("%m-%d %H:%M"))
+        stamp = datetime.fromtimestamp(int(times_ms[index]) / 1000, tz=timezone.utc)
+        labels.append(stamp.strftime("%m-%d %H:%M"))
     ax.set_xticks(ticks)
     ax.set_xticklabels(labels, rotation=0, color="#c5cbb8")
     ax.tick_params(colors="#c5cbb8")
     ax.set_ylabel("Price", color="#e7ecdf")
+    ax.set_xlabel("UTC", color="#c5cbb8")
     ax.set_title(title, color="#e7ecdf", pad=12)
     for spine in ax.spines.values():
         spine.set_color("#2c3126")

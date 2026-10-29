@@ -296,7 +296,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     server = BoundedThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"Open liquidation heatmap at http://127.0.0.1:{args.port}", flush=True)
+    print(f"Open liquidation heatmap at http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
