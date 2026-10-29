@@ -898,7 +898,8 @@ def _bybit_payload(path: str, params: dict, *, timeout: tuple[float, float] = (4
     status, payload = _get_json(f"{BYBIT_BASE}{path}", params, timeout=timeout, retries=retries)
     if not isinstance(payload, dict):
         if status in (401, 403, 451):
-            raise DataError(f"Bybit is not reachable from this network (HTTP {status}). Its public API blocks some regions.")
+            # Bybit documents 403 for US addresses and for a breached IP rate limit.
+            raise DataError(f"Bybit is not reachable from this network (HTTP {status}). Its public API blocks some regions and rate-limited IPs.")
         raise DataError(f"Bybit returned an unexpected response (HTTP {status}).")
     if payload.get("retCode") != 0:
         message = str(payload.get("retMsg") or f"HTTP {status}")
@@ -913,6 +914,17 @@ def _bybit_payload(path: str, params: dict, *, timeout: tuple[float, float] = (4
 def _bybit_result(path: str, params: dict) -> dict:
     """The ``result`` object of a Bybit v5 public response, or a DataError."""
     return _bybit_payload(path, params)["result"]
+
+
+def _bybit_single_side(item: dict, single: str, both: str) -> float:
+    """Open interest counted once, as Binance and OKX count it.
+
+    Bybit v5 ``openInterest``/``openInterestValue`` sum both sides of every
+    position; ``singleOpenInterest``/``singleOpenInterestValue`` (added
+    2026-06-11) are one side. A row without the single-side field is halved.
+    """
+    value = _native_number(item.get(single))
+    return value if math.isfinite(value) else _native_number(item.get(both)) / 2.0
 
 
 def _bybit_klines(pair: str, interval: str, start_ms: int, end_ms: int) -> list:
@@ -966,7 +978,7 @@ def _bybit_open_interest(pair: str, interval: str, start_ms: int, end_ms: int) -
 
 
 def fetch_bybit(coin: str, pair: str, spec: dict) -> LoadedSeries:
-    """Bybit USDT perpetual candles and native base-asset open interest.
+    """Bybit USDT perpetual candles and native base-asset open interest, counted once.
 
     Bybit publishes no historical taker buy/sell volume, so the flow prior is
     unavailable and Flow skew uses its neutral fallback for this venue. Account
@@ -1003,7 +1015,7 @@ def fetch_bybit(coin: str, pair: str, spec: dict) -> LoadedSeries:
         # Only a snapshot inside a closed bar of this grid may describe that bar.
         if ts - ts % bar_ms not in closed_opens:
             continue
-        oi_records.append((ts, math.nan, math.nan, _native_number(item.get("openInterest"))))
+        oi_records.append((ts, math.nan, math.nan, _bybit_single_side(item, "singleOpenInterest", "openInterest")))
     open_, high, low, close, volume = fold_candles(candle_records, grid, bar_ms)
     oi_base = _fold_native_oi(oi_records, grid, bar_ms)
     # Bybit history is native quantity only; value it at the bar close.

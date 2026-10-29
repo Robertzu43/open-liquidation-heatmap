@@ -30,7 +30,8 @@ BINANCE_PREMIUM = {'symbol': 'BTCUSDT', 'markPrice': '81600.10000000', 'indexPri
 BINANCE_OI = {'openInterest': '80000.500', 'symbol': 'BTCUSDT', 'time': 1793288980000}
 BYBIT_TICKERS = {'retCode': 0, 'retMsg': 'OK', 'result': {'category': 'linear', 'list': [{
     'symbol': 'BTCUSDT', 'lastPrice': '81610.00', 'indexPrice': '81620.50', 'markPrice': '81611.20',
-    'openInterest': '52000.123', 'openInterestValue': '4243810000.55', 'fundingRate': '-0.00005',
+    'openInterest': '104000.246', 'openInterestValue': '8487620001.10', 'singleOpenInterest': '52000.123',
+    'singleOpenInterestValue': '4243810000.55', 'fundingRate': '-0.00005',
     'nextFundingTime': '1793289600000', 'fundingIntervalHour': '8', 'fundingCap': '0.005'}]}, 'retExtInfo': {}, 'time': 1793288995000}
 
 

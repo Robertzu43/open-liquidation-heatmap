@@ -214,7 +214,8 @@ def _okx_context(coin: str) -> dict:
 def _binance_get(path: str, params: dict | None, pair: str):
     status, payload = data._get_json(f"{BINANCE_BASE}{path}", params, timeout=FAST_TIMEOUT, retries=FAST_RETRIES)
     if status in (401, 403, 451):
-        raise DataError(f"Binance is not reachable from this network (HTTP {status}). Its futures API blocks some regions.")
+        # 451 is the regional block; Binance documents 403 for a violated firewall (WAF) limit.
+        raise DataError(f"Binance is not reachable from this network (HTTP {status}). Its futures API blocks some regions and rate-limited IPs.")
     if status != 200 or payload is None:
         if isinstance(payload, dict) and payload.get("code") == -1121:
             raise DataError(f"Binance has no {pair} perpetual.")
@@ -278,8 +279,8 @@ def _bybit_context(coin: str) -> dict:
         funding_rate=rate,
         next_funding_time=_ms(item.get("nextFundingTime")),
         funding_interval_hours=_hours(item.get("fundingIntervalHour")),
-        open_interest_base=_num(item.get("openInterest")),
-        open_interest_usd=_num(item.get("openInterestValue")),
+        open_interest_base=_num(data._bybit_single_side(item, "singleOpenInterest", "openInterest")),
+        open_interest_usd=_num(data._bybit_single_side(item, "singleOpenInterestValue", "openInterestValue")),
         mark_price=_num(item.get("markPrice")),
         observed_at=_ms(payload.get("time")),
     )
