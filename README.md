@@ -21,8 +21,6 @@ Save a still image from the command line (matplotlib Agg backend, no window requ
 python heatmap.py --exchange okx --symbol BTCUSDT --range 24h --model 1 --outfile heatmap.png
 ```
 
-`--lookback` still works for older commands (`1d` maps to `24h`). `--range` wins if both are set. `--interval` is accepted and ignored, because each range picks its own bar size.
-
 Offline, with no exchange calls:
 
 ```bash
