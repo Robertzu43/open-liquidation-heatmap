@@ -17,6 +17,7 @@ import re
 import threading
 import time
 import zipfile
+import zlib
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -199,11 +200,7 @@ def _cache_root() -> Path:
 
 def _file_lock(rel: str) -> threading.Lock:
     with _FILE_LOCKS_GUARD:
-        lock = _FILE_LOCKS.get(rel)
-        if lock is None:
-            lock = threading.Lock()
-            _FILE_LOCKS[rel] = lock
-        return lock
+        return _FILE_LOCKS.setdefault(rel, threading.Lock())
 
 
 def _get_json(url: str, params: dict | None = None, timeout: tuple[float, float] = (5, 25), retries: int = 3):
@@ -252,21 +249,13 @@ def _cached_zip(url: str, rel: str) -> bytes | None:
         if missed is not None and now - missed < 900:
             return None
     path = _cache_root() / rel
-    if path.is_file() and path.stat().st_size > 32:
-        blob = path.read_bytes()
-        if blob[:2] == b"PK":
-            return blob
     with _file_lock(rel):
         if path.is_file() and path.stat().st_size > 32:
             blob = path.read_bytes()
             if blob[:2] == b"PK":
                 return blob
         try:
-            response = _SESSION.get(
-                url,
-                timeout=(5, 90),
-                headers={"User-Agent": USER_AGENT, "Accept": "*/*"},
-            )
+            response = _SESSION.get(url, timeout=(5, 90))
         except requests.RequestException as exc:
             raise DataError(f"Could not download the Binance archive ({exc.__class__.__name__}).") from exc
         if response.status_code == 404:
@@ -354,18 +343,10 @@ def fold_oi(records: list[tuple], grid_ms: np.ndarray, bar_ms: int) -> tuple[np.
         index = _nearest_open_index(starts, ts)
         if abs(int(starts[index]) - ts) > half:
             continue
-        try:
-            oi_value = float(oi_usd)
-        except (TypeError, ValueError):
-            oi_value = math.nan
-        if math.isfinite(oi_value) and oi_value >= 0:
-            oi[index] = oi_value
-        try:
-            share_value = float(long_share)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            share_value = math.nan
-        if math.isfinite(share_value):
-            share[index] = share_value
+        if math.isfinite(oi_usd) and oi_usd >= 0:
+            oi[index] = oi_usd
+        if math.isfinite(long_share):
+            share[index] = long_share
     return oi, share
 
 
@@ -485,8 +466,8 @@ def _fmt_utc(ms: int) -> str:
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%d %b %Y, %H:%M UTC")
 
 
-def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: int, coin: str) -> MarketSeries:
-    """Sum open interest onto one grid. Candles come from the freshest, busiest venue."""
+def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray) -> tuple[RawSeries, str]:
+    """Sum open interest onto one grid. Candles come from the freshest, busiest venue, whose name is returned."""
     if not parts:
         raise DataError("No exchange series were available to combine.")
     grid_ms = np.asarray(grid_ms, dtype=np.int64)
@@ -536,22 +517,7 @@ def combine_series(parts: list[MarketSeries], grid_ms: np.ndarray, bar_seconds: 
     share_out = np.full(n, np.nan)
     good = share_w > 0
     share_out[good] = share_acc[good] / share_w[good]
-    return MarketSeries(
-        times=grid_ms,
-        open=open_,
-        high=high,
-        low=low,
-        close=close,
-        volume_usd=volume,
-        oi_usd=oi_out,
-        long_share=share_out,
-        exchange="aggregate",
-        symbol=f"{coin}USDT",
-        coin=coin,
-        bar_seconds=int(bar_seconds),
-        note=f"Price candles are {exchange_name(donor.exchange)}; open interest is the sum.",
-        warnings=[],
-    )
+    return RawSeries("aggregate", grid_ms, open_, high, low, close, volume, oi_out, share_out), donor.exchange
 
 
 def _window(spec: dict, end_open_s: int | None = None) -> np.ndarray:
@@ -832,31 +798,20 @@ def _dates_between(start_ms: int, end_ms: int) -> list[datetime]:
 
 def _load_vision_klines(symbol: str, interval: str, start_ms: int, end_ms: int) -> list[tuple]:
     rows: list[tuple] = []
-
-    def daily_month(year: int, month: int) -> list[tuple]:
-        found = []
-        for day in _dates_between(
-            int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp() * 1000),
-            int((datetime(year + (month == 12), (month % 12) + 1, 1, tzinfo=timezone.utc) - timedelta(seconds=1)).timestamp() * 1000),
-        ):
-            if day.year != year or day.month != month:
-                continue
-            if int(day.timestamp() * 1000) > end_ms or int((day + timedelta(days=1)).timestamp() * 1000) < start_ms:
-                continue
-            url, rel = _binance_kline_url(symbol, interval, year, month, day.day)
-            blob = _cached_zip(url, rel)
-            if blob is None:
-                continue
-            found.extend(_parse_kline_csv(_zip_text(blob)))
-        return found
-
     for year, month in _months_between(start_ms, end_ms):
-        url, rel = _binance_kline_url(symbol, interval, year, month, None)
+        url, rel = _binance_kline_url(symbol, interval, year, month)
         blob = _cached_zip(url, rel)
-        if blob is None:
-            rows.extend(daily_month(year, month))
-        else:
+        if blob is not None:
             rows.extend(_parse_kline_csv(_zip_text(blob)))
+            continue
+        # The month file is not published yet, so read that month's days inside the window.
+        month_start = int(datetime(year, month, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        month_end = int(datetime(year + month // 12, month % 12 + 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
+        for day in _dates_between(max(start_ms, month_start), min(end_ms, month_end)):
+            url, rel = _binance_kline_url(symbol, interval, day.year, day.month, day.day)
+            blob = _cached_zip(url, rel)
+            if blob is not None:
+                rows.extend(_parse_kline_csv(_zip_text(blob)))
     dedup = {row[0]: row for row in rows if start_ms - 86_400_000 <= row[0] < end_ms}
     return [dedup[key] for key in sorted(dedup)]
 
@@ -1072,7 +1027,7 @@ def fetch_binance(coin: str, pair: str, spec: dict, *, allow_stale: bool = True)
     live = _try_binance_live(coin, pair, spec)
     if live is not None and (allow_stale or not live.stale):
         return live
-    if live is not None and live.stale and not allow_stale:
+    if live is not None:
         raise DataError("Binance data is behind the live market.")
     return fetch_binance_vision(coin, pair, spec, allow_stale=allow_stale)
 
@@ -1203,7 +1158,7 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
     bar_s = int(spec["bar_seconds"])
     grid = _window(spec)
     n = len(grid)
-    seed = zlib_crc(f"{coin}:{spec['key']}")
+    seed = zlib.crc32(f"{coin}:{spec['key']}".encode())
     rng = np.random.default_rng(seed)
     base = {"BTC": 82000.0, "ETH": 3200.0, "SOL": 175.0, "XRP": 0.62, "DOGE": 0.19, "BNB": 600.0}.get(coin, 25.0)
     t = np.linspace(0, 4 * math.pi, n)
@@ -1236,68 +1191,39 @@ def fetch_demo(coin: str, pair: str, spec: dict) -> LoadedSeries:
     return loaded
 
 
-def zlib_crc(text: str) -> int:
-    import zlib
-
-    return zlib.crc32(text.encode()) & 0xFFFFFFFF
-
-
 def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
     errors: list[str] = []
-    loaded_parts: list[LoadedSeries] = []
-
-    def run(name: str):
-        if name == "okx":
-            return fetch_okx(coin, pair, spec)
-        return fetch_binance(coin, pair, spec, allow_stale=False)
-
+    fresh: list[LoadedSeries] = []
+    # Binance is fetched with allow_stale=False, so a lagging archive raises and is reported, not summed.
     with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {name: pool.submit(run, name) for name in ("okx", "binance")}
+        futures = {
+            "okx": pool.submit(fetch_okx, coin, pair, spec),
+            "binance": pool.submit(fetch_binance, coin, pair, spec, allow_stale=False),
+        }
         for name, future in futures.items():
             try:
-                loaded_parts.append(future.result())
+                fresh.append(future.result())
             except DataError as exc:
                 text = str(exc)
                 errors.append(text if text.startswith(exchange_name(name)) else f"{exchange_name(name)}: {text}")
             except Exception as exc:  # noqa: BLE001 — one venue must not sink the aggregate
                 log.exception("aggregate %s failed", name)
                 errors.append(f"{exchange_name(name)}: {exc.__class__.__name__}")
-    fresh = []
-    for part in loaded_parts:
-        if part.source == "binance-vision" and part.stale:
-            when = _fmt_utc(part.as_of + part.series.bar_seconds * 1000)
-            errors.append(f"Binance was left out of this aggregate because the public archive lags the live market (last bar ends {when}).")
-            continue
-        fresh.append(part)
     if not fresh:
         detail = " ".join(errors) or "every venue failed"
         raise DataError(f"No fresh open interest was available for {coin}. {detail}")
-    # Common grid is the freshest venue's own timestamps when they share a bar size.
+    # The grid is the freshest venue's own timestamps, even when it is shorter than the requested window.
     freshest = max(fresh, key=lambda item: int(item.series.times[-1]))
-    grid = np.asarray(freshest.series.times, dtype=np.int64)
-    # If the freshest venue is shorter than the requested window, still use its real timestamps.
-    combined = combine_series([item.series for item in fresh], grid, int(spec["bar_seconds"]), coin)
-    warnings = list(combined.warnings)
-    for part in fresh:
-        warnings.extend(part.series.warnings)
+    raw, donor = combine_series([item.series for item in fresh], freshest.series.times)
+    warnings = [line for part in fresh for line in part.series.warnings]
     for message in errors:
         if message not in warnings:
             warnings.append(message)
     venues = [item.series.exchange for item in fresh]
     names = ", ".join(exchange_name(item) for item in venues)
-    note = f"Symbol aggregate of {names}. {combined.note}"
-    loaded = finalize_series(
-        RawSeries(
-            "aggregate",
-            combined.times,
-            combined.open,
-            combined.high,
-            combined.low,
-            combined.close,
-            combined.volume_usd,
-            combined.oi_usd,
-            combined.long_share,
-        ),
+    note = f"Symbol aggregate of {names}. Price candles are {exchange_name(donor)}; open interest is the sum."
+    return finalize_series(
+        raw,
         exchange="aggregate",
         symbol=pair,
         coin=coin,
@@ -1306,7 +1232,6 @@ def fetch_aggregate(coin: str, pair: str, spec: dict) -> LoadedSeries:
         warnings=warnings,
         venues=venues,
     )
-    return loaded
 
 
 def load_market(
@@ -1321,8 +1246,6 @@ def load_market(
     exchange_key = (exchange or "okx").strip().lower()
     if mode_key not in {"pair", "symbol"}:
         raise DataError("Mode must be pair or symbol.")
-    if not re.fullmatch(r"[a-z0-9_-]{2,20}", exchange_key):
-        raise DataError("Unknown exchange. Use okx, binance, or demo.")
     spec, end_open = resolve_view(exchange_key, mode_key, range_key, asof, bar)
     coin, pair = normalize_symbol(symbol)
     if end_open is not None:
