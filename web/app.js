@@ -55,7 +55,6 @@ const state = {
   layout: null,
   hover: null,
   drag: null,
-  models: [],
 };
 
 const $ = (id) => document.getElementById(id);
@@ -131,14 +130,9 @@ function colorAt(amount, theme) {
   ];
 }
 
+// Float32Array reads the host's byte order; every browser in use is little-endian, like the server's grids.
 function decodeF32(b64) {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  const view = new DataView(bytes.buffer);
-  const out = new Float32Array(binary.length >> 2);
-  for (let i = 0; i < out.length; i++) out[i] = view.getFloat32(i * 4, true);
-  return out;
+  return new Float32Array(Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0)).buffer);
 }
 
 function fmtUsd(value) {
@@ -1487,7 +1481,6 @@ async function bootStatus() {
   try {
     const response = await fetch("/api/status");
     const body = await response.json();
-    state.models = body.models || [];
     (body.models || []).forEach((model) => {
       const button = document.querySelector(`.tab[data-model="${model.id}"]`);
       if (button) button.title = model.name + " — " + model.blurb;
