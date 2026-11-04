@@ -116,8 +116,7 @@ Series for the short ranges are cached briefly. Longer ranges are cached longer.
   - `bar` (Binance pair only): `5m`, `15m`, `1h`, `4h`, `12h`, or `1d`. Empty keeps the range's default.
 - `GET /api/replay?symbol&range&bar&from&to` — load a replay span once (Binance pair). Frames are `/api/heatmap` with `asof` and `replay=1`. They never call an exchange, and a frame whose span has expired answers 409.
 - `GET /api/levels?<map query>&t&price` — long and short USD per leverage tier at one bar open and price.
-- `GET /api/status` — models, ranges, default view.
-- `GET /api/symbols` — the coin list and venues.
+- `GET /api/status` — the models and the coin list.
 
 The server is the Python standard library `ThreadingHTTPServer` on `127.0.0.1:8765` by default; `--host 0.0.0.0` shares it on your network. JSON responses are gzip-compressed when the client asks.
 

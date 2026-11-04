@@ -16,7 +16,6 @@ MMR = 0.005
 # Relative weight of each leverage tier. Weights in a model sum to 1.
 MODELS: dict[int, dict] = {
     1: {
-        "id": 1,
         "name": "Wide clusters",
         "blurb": "Most weight on 50x–60x, with a far 5x tier. Shelves sit about 1–2% from price and stay until price trades through them.",
         "weights": ((5, 0.12), (20, 0.10), (50, 0.25), (60, 0.53)),
@@ -26,7 +25,6 @@ MODELS: dict[int, dict] = {
         "flow": False,
     },
     2: {
-        "id": 2,
         "name": "Tight magnets",
         "blurb": "Two tiers, 20x and 60x, a little turnover from volume, and a slow fade. Shelves hug price.",
         "weights": ((20, 0.30), (60, 0.70)),
@@ -36,7 +34,6 @@ MODELS: dict[int, dict] = {
         "flow": False,
     },
     3: {
-        "id": 3,
         "name": "Flow skew",
         "blurb": "Same family of tiers, but new positions follow taker buy/sell when that data exists.",
         "weights": ((10, 0.15), (20, 0.20), (25, 0.20), (50, 0.25), (100, 0.20)),
@@ -99,7 +96,6 @@ class MarketSeries:
 
 @dataclass
 class Heatmap:
-    series: MarketSeries
     model_id: int
     centers: np.ndarray
     long_heat: np.ndarray
@@ -359,7 +355,6 @@ def build_heatmap(series: MarketSeries, model_id: int, n_bins: int = 360, tier_c
     profile_long = long_book.sum(axis=0)
     profile_short = short_book.sum(axis=0)
     return Heatmap(
-        series=series,
         model_id=int(model_id),
         centers=centers,
         long_heat=long_heat,
