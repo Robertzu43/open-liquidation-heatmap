@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from liqmap.data import DataError
-from liqmap.service import ReplayExpired, levels_payload, load_heatmap, replay_payload, status_payload, symbols_payload
+from liqmap.service import ReplayExpired, levels_payload, load_heatmap, replay_payload, status_payload
 
 log = logging.getLogger("liqmap.server")
 WEB_ROOT = Path(__file__).resolve().parent.parent / "web"
@@ -19,9 +19,6 @@ MIME = {
     ".html": "text/html; charset=utf-8",
     ".css": "text/css; charset=utf-8",
     ".js": "text/javascript; charset=utf-8",
-    ".svg": "image/svg+xml",
-    ".png": "image/png",
-    ".json": "application/json; charset=utf-8",
 }
 
 
@@ -51,9 +48,6 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if parsed.path == "/api/status":
                 self._send_json(status_payload())
-                return
-            if parsed.path == "/api/symbols":
-                self._send_json(symbols_payload())
                 return
             self._static(parsed.path)
         except ReplayExpired as exc:
@@ -167,7 +161,3 @@ def main(argv: list[str] | None = None) -> None:
         print("\nStopping.")
     finally:
         server.server_close()
-
-
-if __name__ == "__main__":
-    main()

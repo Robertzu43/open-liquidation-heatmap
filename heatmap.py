@@ -2,7 +2,7 @@
 """Draw an estimated liquidation heatmap from public exchange data.
 
 The picture is produced by liqmap.model. This script only fetches a series and
-renders it. ``--lookback`` is accepted so older commands keep working.
+renders it.
 """
 
 from __future__ import annotations
@@ -22,38 +22,10 @@ from matplotlib.colors import LinearSegmentedColormap
 from liqmap.data import DataError, exchange_name, load_market
 from liqmap.model import build_heatmap
 
-LOOKBACK_TO_RANGE = {
-    "12h": "12h",
-    "24h": "24h",
-    "1d": "24h",
-    "2d": "3d",
-    "3d": "3d",
-    "7d": "7d",
-    "14d": "30d",
-    "30d": "30d",
-    "90d": "90d",
-    "180d": "180d",
-    "1y": "1y",
-    "2y": "2y",
-}
-
 CMAP = LinearSegmentedColormap.from_list(
     "openliq",
     ["#160e22", "#5c2478", "#c45a48", "#f0b429", "#fff1a8"],
 )
-
-
-def _resolve_range(args: argparse.Namespace) -> str:
-    if args.range:
-        return args.range
-    if args.lookback:
-        key = args.lookback.strip().lower()
-        mapped = LOOKBACK_TO_RANGE.get(key)
-        if mapped is None:
-            known = ", ".join(LOOKBACK_TO_RANGE)
-            raise DataError(f"Unknown --lookback '{args.lookback}'. Use one of: {known}.")
-        return mapped
-    return "24h"
 
 
 def plot_heatmap(heat, centers, times_ms, open_, high, low, close, title: str, outfile: str) -> None:
@@ -119,21 +91,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Open liquidation heatmap from public exchange data")
     parser.add_argument("--exchange", default="okx", help="okx, binance, demo, or aggregate")
     parser.add_argument("--symbol", default="BTCUSDT")
-    parser.add_argument("--range", default=None, help="12h, 24h, 3d, 7d, 30d, 90d, 180d, 1y, 2y")
-    parser.add_argument("--lookback", default=None, help="Older alias for --range (1d maps to 24h)")
+    parser.add_argument("--range", default="24h", help="12h, 24h, 3d, 7d, 30d, 90d, 180d, 1y, 2y")
     parser.add_argument("--model", type=int, default=1, choices=(1, 2, 3))
     parser.add_argument("--mode", default="pair", choices=("pair", "symbol"))
     parser.add_argument("--outfile", default="heatmap.png")
-    parser.add_argument("--interval", default=None, help="Ignored. Bar size follows --range.")
-    parser.add_argument("--oi-period", default=None, help="Ignored. Open interest uses the range bar size.")
     args = parser.parse_args(argv)
     try:
-        range_key = _resolve_range(args)
-        if args.interval or args.oi_period:
-            print("Bar size follows the selected range; --interval and --oi-period are ignored.", file=sys.stderr)
-        if args.range and args.lookback:
-            print("--range wins over --lookback.", file=sys.stderr)
-        loaded = load_market(args.exchange, args.symbol, range_key, args.mode)
+        loaded = load_market(args.exchange, args.symbol, args.range, args.mode)
         heatmap = build_heatmap(loaded.series, args.model)
         series = loaded.series
         title = f"{exchange_name(series.exchange)} {series.coin}/USDT liquidation heatmap · model {args.model}"

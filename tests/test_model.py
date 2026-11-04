@@ -281,13 +281,14 @@ class ParserTests(unittest.TestCase):
 
         quiet = part([10, 11, 12], [100, 110, 120], [1, 1, 1], [0.2, 0.2, 0.2], "okx")
         busy = part([20, 21, 22], [300, 330, 360], [5, 5, 5], [0.8, 0.8, 0.8], "binance")
-        combined = combine_series([quiet, busy], grid, 3600, "BTC")
-        self.assertEqual(combined.exchange, "aggregate")
+        combined, donor = combine_series([quiet, busy], grid)
+        self.assertEqual(combined.source, "aggregate")
+        self.assertEqual(donor, "binance")
         self.assertAlmostEqual(float(combined.close[-1]), 22.0)
-        self.assertAlmostEqual(float(combined.oi_usd[-1]), 480.0)
+        self.assertAlmostEqual(float(combined.oi[-1]), 480.0)
         # (120 * 0.2 + 360 * 0.8) / 480 = 0.65
-        self.assertAlmostEqual(float(combined.long_share[-1]), 0.65)
-        self.assertAlmostEqual(float(combined.volume_usd[-1]), 6.0)
+        self.assertAlmostEqual(float(combined.share[-1]), 0.65)
+        self.assertAlmostEqual(float(combined.volume[-1]), 6.0)
 
     def test_aggregate_note_names_the_busier_venue_on_a_tie(self):
         from unittest import mock

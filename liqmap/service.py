@@ -11,8 +11,6 @@ import numpy as np
 
 from liqmap.data import (
     COINS,
-    EXCHANGE_NAMES,
-    RANGES,
     DataError,
     exchange_name,
     load_market,
@@ -49,11 +47,7 @@ _guard = threading.Lock()
 
 def _key_lock(key: tuple) -> threading.Lock:
     with _guard:
-        lock = _locks.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _locks[key] = lock
-        return lock
+        return _locks.setdefault(key, threading.Lock())
 
 
 def _canonical(exchange: str, symbol: str, range_key: str, mode: str) -> tuple[str, str, str, str]:
@@ -160,7 +154,7 @@ def public_model(model_id: int) -> dict:
     if spec is None:
         raise DataError("Model must be 1, 2, or 3.")
     return {
-        "id": spec["id"],
+        "id": int(model_id),
         "name": spec["name"],
         "blurb": spec["blurb"],
         "weights": [{"leverage": int(lev), "weight": float(weight)} for lev, weight in spec["weights"]],
@@ -192,13 +186,11 @@ def _scrub(value):
     if isinstance(value, (np.floating, float)):
         number = float(value)
         return number if math.isfinite(number) else None
-    if isinstance(value, int):
-        return value
     return value
 
 
-def _title(exchange: str, coin: str, mode: str) -> str:
-    if mode == "symbol" or exchange == "aggregate":
+def _title(exchange: str, coin: str) -> str:
+    if exchange == "aggregate":
         return f"{coin}/USDT Liquidation Heatmap"
     return f"{exchange_name(exchange)} {coin}/USDT Liquidation Heatmap"
 
@@ -221,17 +213,16 @@ def load_heatmap(
     loaded, spec, end_open = get_series(exchange, symbol, range_key, mode, asof, bar, replay)
     heat = build_heatmap(loaded.series, model_id)
     series = loaded.series
-    _exchange, _coin, range_name, mode_key = _canonical(exchange, symbol, range_key, mode)
     view_lo, view_hi = suggest_view(series)
     grid = np.ascontiguousarray(heat.long_heat + heat.short_heat, dtype=np.float64)
     return {
-        "title": _title(series.exchange, series.coin, mode_key),
+        "title": _title(series.exchange, series.coin),
         "exchange": series.exchange,
         "exchange_name": exchange_name(series.exchange),
         "symbol": series.symbol,
         "coin": series.coin,
-        "mode": mode_key,
-        "range": range_name,
+        "mode": "symbol" if series.exchange == "aggregate" else "pair",
+        "range": spec["key"],
         "bar": spec["bar"],
         "bar_seconds": int(series.bar_seconds),
         "asof": None if end_open is None else (end_open + int(spec["bar_seconds"])) * 1000,
@@ -311,29 +302,6 @@ def status_payload() -> dict:
     return {
         "ok": True,
         "version": __version__,
-        "default": {"exchange": "okx", "symbol": "BTC", "range": "24h", "model": 1, "mode": "pair"},
-        "exchanges": [
-            {"id": "okx", "name": EXCHANGE_NAMES["okx"], "live": True},
-            {"id": "binance", "name": EXCHANGE_NAMES["binance"], "live": True},
-            {"id": "demo", "name": EXCHANGE_NAMES["demo"], "live": False},
-        ],
-        "ranges": [
-            {"id": key, "bar": spec["bar"], "seconds": spec["seconds"]}
-            for key, spec in RANGES.items()
-        ],
-        "models": [public_model(model_id) for model_id in (1, 2, 3)],
-        "mmr": MMR,
+        "models": [public_model(model_id) for model_id in MODELS],
         "coins": list(COINS),
-    }
-
-
-def symbols_payload() -> dict:
-    return {
-        "coins": list(COINS),
-        "exchanges": [
-            {"id": key, "name": value}
-            for key, value in EXCHANGE_NAMES.items()
-            if key != "aggregate"
-        ],
-        "quote": "USDT",
     }
